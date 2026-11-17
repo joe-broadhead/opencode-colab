@@ -5,7 +5,8 @@
  *
  * External ports (the network): ColabApi, VertexApi, DriveApi, GcsApi, RuntimeProtocol; and Auth for credentials.
  * Local ports: Ledger, PlanStorePort, RunEvents, Clock.
- * Seams between packages: AgentOnlyCheck (B), Release (F), EnterpriseRuns (E), DriveSync (C).
+ * Seams between packages: AgentOnlyCheck (B), Release (F), Budget (F), EnterpriseRuns (E), Prices (E), DriveSync (C),
+ * NotebookStore (C).
  *
  * Every method takes an AbortSignal and honours it. Every failure is a ColabError (src/domain/errors.ts) with a code
  * from the table; a port never puts a token, the runtime URL, notebook text or Google's raw text in a message.
@@ -244,6 +245,12 @@ export interface EnterpriseJob {
   readonly gcsOutputUri?: string
   readonly schedule?: string
   readonly error?: string
+  /** The job's compute, as [V1] carries it, so reads show compute and worst case. */
+  readonly machineType?: string
+  readonly acceleratorType?: string
+  readonly acceleratorCount?: number
+  readonly executionTimeoutSeconds?: number
+  readonly template?: string
 }
 
 export interface EnterpriseSchedule {
@@ -254,6 +261,9 @@ export interface EnterpriseSchedule {
   readonly maxRunCount?: number
   readonly endTime?: string
   readonly startedRunCount?: number
+  /** The job request the schedule creates each run from: its compute, timeout and labels. */
+  readonly jobRequest?: Readonly<Record<string, unknown>>
+  readonly nextRunTime?: string
 }
 
 export interface EnterpriseRuntime {
@@ -266,14 +276,30 @@ export interface EnterpriseRuntime {
   readonly euc?: boolean
 }
 
+/**
+ * A list read across pages: the client follows `nextPageToken` up to 10 pages, and `truncated` is true when that bound
+ * cut the list. A plain array is a complete list.
+ */
+export type Listed<T> = readonly T[] & { readonly truncated?: boolean }
+
 export interface VertexApi {
-  listJobs(account: string, input: { readonly filter?: string; readonly pageSize?: number }, signal: AbortSignal): Promise<readonly EnterpriseJob[]>
+  /** `orderBy` such as `createTime desc`, so `colab_jobs` reads the newest first. */
+  listJobs(account: string, input: { readonly filter?: string; readonly pageSize?: number; readonly orderBy?: string }, signal: AbortSignal): Promise<Listed<EnterpriseJob>>
   getJob(account: string, name: string, signal: AbortSignal): Promise<EnterpriseJob | undefined>
-  /** Client-chosen `notebookExecutionJobId`; ALREADY_EXISTS joins the first create. Returns the create LRO's name. */
-  createJob(account: string, input: { readonly jobId: string; readonly body: Readonly<Record<string, unknown>> }, signal: AbortSignal): Promise<{ readonly job: EnterpriseJob; readonly operation: string }>
+  /**
+   * Client-chosen `notebookExecutionJobId`; ALREADY_EXISTS joins the first create. `operation` is the create LRO's
+   * name, absent when the create joined an existing job.
+   */
+  createJob(account: string, input: { readonly jobId: string; readonly body: Readonly<Record<string, unknown>> }, signal: AbortSignal): Promise<{ readonly job: EnterpriseJob; readonly operation?: string }>
   deleteJob(account: string, name: string, signal: AbortSignal): Promise<void>
+  /**
+   * `notebookExecutionJobs.operations.list` (`v1/{+name}/operations` [V1]): finds a job's create LRO when the ledger has
+   * none (scheduled and older jobs), so they can be cancelled. L11 confirms the create operation is listed there.
+   */
+  listJobOperations(account: string, job: string, signal: AbortSignal): Promise<readonly { readonly name: string; readonly done: boolean }[]>
   cancelOperation(account: string, operation: string, signal: AbortSignal): Promise<void>
-  listSchedules(account: string, signal: AbortSignal): Promise<readonly EnterpriseSchedule[]>
+  /** `filter` is Google's server-side filter, such as `display_name="<exact name>"` for the reconcile. */
+  listSchedules(account: string, input: { readonly filter?: string }, signal: AbortSignal): Promise<Listed<EnterpriseSchedule>>
   getSchedule(account: string, name: string, signal: AbortSignal): Promise<EnterpriseSchedule | undefined>
   /** Never retried automatically: an uncertain answer is reconciled by listing on the plan's unique displayName. */
   createSchedule(account: string, body: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<EnterpriseSchedule>
@@ -281,7 +307,7 @@ export interface VertexApi {
   pauseSchedule(account: string, name: string, signal: AbortSignal): Promise<void>
   resumeSchedule(account: string, name: string, signal: AbortSignal): Promise<void>
   deleteSchedule(account: string, name: string, signal: AbortSignal): Promise<void>
-  listRuntimes(account: string, signal: AbortSignal): Promise<readonly EnterpriseRuntime[]>
+  listRuntimes(account: string, signal: AbortSignal): Promise<Listed<EnterpriseRuntime>>
   stopRuntime(account: string, name: string, signal: AbortSignal): Promise<void>
   deleteRuntime(account: string, name: string, signal: AbortSignal): Promise<void>
   listTemplates(account: string, signal: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>
@@ -304,10 +330,20 @@ export interface DriveApi {
   get(account: string, fileId: string, signal: AbortSignal): Promise<DriveFile | undefined>
   /** `alt=media`. */
   download(account: string, fileId: string, signal: AbortSignal): Promise<Uint8Array>
-  create(account: string, input: { readonly name: string; readonly folder?: string; readonly bytes: Uint8Array; readonly mimeType: string }, signal: AbortSignal): Promise<DriveFile>
+  /** `files.generateIds?count=1&space=drive&type=files` [D8]: an id to create with, so a retried create can join. */
+  generateId(account: string, signal: AbortSignal): Promise<string>
+  /** `id` is a pre-generated id from `generateId`; Google assigns one when absent. */
+  create(account: string, input: { readonly id?: string; readonly name: string; readonly folder?: string; readonly bytes: Uint8Array; readonly mimeType: string }, signal: AbortSignal): Promise<DriveFile>
   update(account: string, fileId: string, input: { readonly bytes?: Uint8Array; readonly trashed?: boolean }, signal: AbortSignal): Promise<DriveFile>
   /** `revisions.update` with keepForever; false when the file already has 200 kept revisions (REVISION_PIN_SKIPPED). */
   keepRevision(account: string, fileId: string, revisionId: string, signal: AbortSignal): Promise<boolean>
+  /**
+   * How many of the file's revisions are kept forever, over `revisions.list`
+   * (`GET drive/v3/files/{id}/revisions?fields=revisions(id,keepForever),nextPageToken&pageSize=1000`, `drive.file`
+   * allowed [D7]), following pages up to 10; `truncated` when that bound cut the count. A preview says "not pinned"
+   * before the commit when `kept` is at Drive's cap of 200 (design §7.2).
+   */
+  keptRevisions(account: string, fileId: string, signal: AbortSignal): Promise<{ readonly kept: number; readonly truncated: boolean }>
 }
 
 export interface GcsApi {
@@ -358,6 +394,8 @@ export interface RunRecord {
   readonly state: "running" | "ok" | "error" | "cancelled" | "timeout" | "detached" | "failed"
   readonly outputPaths: readonly string[]
   readonly errorCode?: ErrorCode
+  /** An Enterprise job's create LRO name; not a credential. */
+  readonly operation?: string
   /** For the colab.runs title: plugin words only, never notebook text. */
   readonly summary?: string
 }
@@ -450,16 +488,71 @@ export interface Release {
   release(runtime: RuntimeRecord, input: { readonly reason: "plan" | "idle" | "lifetime"; readonly force: boolean }, signal: AbortSignal): Promise<{ readonly harvested: readonly string[]; readonly released: boolean; readonly warnings: readonly WarningCode[] }>
 }
 
-/** Package E: the Enterprise branches of tools package D owns (colab_execution, colab_cancel, colab_download). */
+/** A tool's `ctx.providerRead`: asserts `colab.read` on `<account>:<operation>` before a provider read. */
+export type ProviderRead = (operation: Operation) => Promise<void>
+
+/**
+ * Package E: the Enterprise branches of tools package D owns (colab_execution, colab_cancel, colab_download). D passes
+ * its `ctx.providerRead` as `read`; E calls it before each provider read (`jobsGet`, `storageObjectsList`,
+ * `storageObjectsGet`, `jobOperationsList`), so a person's deny rule fences them (design §10). `operations.cancel` is a
+ * change, already asserted by colab_cancel's own action.
+ */
 export interface EnterpriseRuns {
-  execution(account: string, input: { readonly job: string; readonly wait?: number; readonly cell?: string; readonly full?: boolean }, signal: AbortSignal): Promise<Readonly<Record<string, unknown>>>
-  cancel(account: string, job: string, signal: AbortSignal): Promise<Readonly<Record<string, unknown>>>
-  downloadGcs(account: string, input: { readonly gcs: string; readonly to?: string; readonly overwrite?: boolean }, signal: AbortSignal): Promise<Readonly<Record<string, unknown>>>
+  execution(account: string, input: { readonly job: string; readonly wait?: number; readonly cell?: string; readonly full?: boolean }, signal: AbortSignal, read: ProviderRead): Promise<Readonly<Record<string, unknown>>>
+  cancel(account: string, job: string, signal: AbortSignal, read: ProviderRead): Promise<Readonly<Record<string, unknown>>>
+  downloadGcs(account: string, input: { readonly gcs: string; readonly to?: string; readonly overwrite?: boolean }, signal: AbortSignal, read: ProviderRead): Promise<Readonly<Record<string, unknown>>>
 }
 
-/** Package C: the Drive branch of colab_download (pull, with the sync record and LOCAL_CHANGED). */
+/**
+ * Package F: the opt-in budgets (design §8.5). E calls it at preview and commit of `job.create`, `schedule.create` and
+ * `schedule.resume`, D at `runtime.create`: `refuse` → BUDGET_REACHED, `warn` → the BUDGET_WARN warning. Until F
+ * lands, Day 0's stub answers `ok` (src/stub.ts).
+ */
+export interface Budget {
+  check(
+    account: string,
+    input: { readonly action: "runtime.create" | "job.create" | "schedule.create" | "schedule.resume"; readonly usd?: number; readonly runtimeHours?: number },
+    signal: AbortSignal,
+  ): Promise<{ readonly verdict: "ok" | "warn" | "refuse"; readonly spentUsd?: number; readonly limitUsd?: number }>
+}
+
+/**
+ * Package E: the dated Enterprise price table, so D (`colab_specs`, `colab_runtimes`) and F (the cost block) show
+ * $/h without importing E. `undefined` means not priced: the caller answers ESTIMATE_UNKNOWN or shows no figure.
+ * `region` is the table's region; a price for another region is undefined unless the table or `rates` holds it.
+ */
+export interface Prices {
+  readonly asOf: string
+  readonly source: string
+  readonly region: string
+  usdPerHour(input: { readonly machine: string; readonly accelerator?: string; readonly acceleratorCount?: number; readonly diskGb?: number; readonly region?: string }): number | undefined
+}
+
+/**
+ * Package C: the Drive branch of colab_download (pull, with the sync record and LOCAL_CHANGED). D passes its
+ * `ctx.providerRead` as `read`; C calls `read(OPERATIONS.driveFilesGet)` before `get` and `alt=media`. The host's
+ * `external_directory` for a `to` outside the project, and `edit` on the destination, are D's, through `hostAssert`.
+ */
 export interface DriveSync {
-  pull(account: string, input: { readonly drive: string; readonly to?: string; readonly overwrite?: boolean }, signal: AbortSignal): Promise<Readonly<Record<string, unknown>>>
+  pull(account: string, input: { readonly drive: string; readonly to?: string; readonly overwrite?: boolean }, signal: AbortSignal, read: ProviderRead): Promise<Readonly<Record<string, unknown>>>
+}
+
+/**
+ * Package C: the notebook model, for package D's run and write-back. Cell ids are as `colab_notebook` shows them,
+ * derived ids included. `mergeRun` holds the per-path lock `colab_edit` holds, merges outputs and execution counts by
+ * id into the file as it is now, and refuses NOTEBOOK_CHANGED and writes nothing otherwise; the caller has asserted
+ * `edit` (through `hostAssert`).
+ */
+export interface NotebookStore {
+  read(path: string, signal: AbortSignal): Promise<{ readonly hash: string; readonly cells: readonly { readonly id: string; readonly type: "code" | "markdown" | "raw"; readonly source: string }[] }>
+  mergeRun(
+    path: string,
+    input: {
+      readonly cells: readonly { readonly id: string; readonly source: string; readonly outputs: readonly Readonly<Record<string, unknown>>[]; readonly executionCount: number | null }[]
+      readonly outputDir: string
+    },
+    signal: AbortSignal,
+  ): Promise<{ readonly hash: string }>
 }
 
 // ── The permission bridge (Day 0) ───────────────────────────────────────

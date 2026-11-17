@@ -1,6 +1,7 @@
 // Day 0's placeholders: a port or handler whose package has not landed answers NOT_IMPLEMENTED, never a guess. Each
 // package replaces its own stubs; nothing outside src/<package>/ imports this file except the registry's tests.
 import { ColabError } from "./domain/errors.js"
+import type { Budget, NotebookStore, Prices } from "./ports.js"
 
 export function notImplemented(what: string): never {
   throw new ColabError("NOT_IMPLEMENTED", `${what} is declared but not built in this pre-release.`)
@@ -22,3 +23,12 @@ export function stubPort<T extends object>(name: string): T {
     },
   })
 }
+
+/** Day 0's Budget until package F exports `createBudget`: no budget is set, so every check is `ok`. */
+export const OK_BUDGET: Budget = { check: async () => ({ verdict: "ok" }) }
+
+/** Day 0's NotebookStore until package C's factory returns `notebooks`: every call answers NOT_IMPLEMENTED. */
+export const NO_NOTEBOOKS: NotebookStore = stubPort<NotebookStore>("NotebookStore")
+
+/** Day 0's Prices until package E's `createEnterprisePorts` returns `prices`: nothing is priced. */
+export const NO_PRICES: Prices = { asOf: "", source: "", region: "us-central1", usdPerHour: () => undefined }

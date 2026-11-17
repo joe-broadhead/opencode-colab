@@ -6,14 +6,15 @@
  */
 import { createAuth } from "./auth/index.js"
 import { createEnterprisePorts } from "./enterprise/index.js"
-import { createRelease } from "./cost/index.js"
+import * as cost from "./cost/index.js"
 import { PlanStore } from "./domain/plans.js"
 import { createRunEvents } from "./events.js"
 import { FileLedger, ledgerDir } from "./ledger/store.js"
-import { createDrivePorts } from "./notebooks/index.js"
+import * as notebookPackage from "./notebooks/index.js"
 import type { Options } from "./options.js"
-import type { AgentOnlyCheck, Auth, Clock, ColabApi, DriveApi, DriveSync, EnterpriseRuns, GcsApi, Ledger, PlanStorePort, Release, RunEvents, RuntimeProtocol, VertexApi } from "./ports.js"
+import type { AgentOnlyCheck, Auth, Budget, Clock, ColabApi, DriveApi, DriveSync, EnterpriseRuns, GcsApi, Ledger, NotebookStore, PlanStorePort, Prices, Release, RunEvents, RuntimeProtocol, VertexApi } from "./ports.js"
 import { createRuntimePorts } from "./runtime/index.js"
+import { NO_NOTEBOOKS, NO_PRICES, OK_BUDGET } from "./stub.js"
 
 export interface Deps {
   readonly options: Options
@@ -31,8 +32,11 @@ export interface Deps {
   readonly plans: PlanStorePort
   readonly events: RunEvents
   readonly release: Release
+  readonly budget: Budget
   readonly enterprise: EnterpriseRuns
+  readonly prices: Prices
   readonly driveSync: DriveSync
+  readonly notebooks: NotebookStore
 }
 
 /** What a package's port factory may use: the options, the clock, credentials, the ledger and the network. */
@@ -52,7 +56,11 @@ export function createDeps(input: { readonly options: Options; readonly director
   const env: PortEnv = { options: input.options, directory: input.directory, clock, auth, ledger, fetch: input.fetch ?? globalThis.fetch }
   const runtimePorts = createRuntimePorts(env)
   const enterprisePorts = createEnterprisePorts(env)
-  const drivePorts = createDrivePorts(env)
+  // C may rename its factory createDrivePorts → createNotebookPorts and add `notebooks` to what it returns.
+  const notebookFactory =
+    optionalMember<(env: PortEnv) => { readonly drive: DriveApi; readonly driveSync: DriveSync; readonly notebooks?: NotebookStore }>(notebookPackage, "createNotebookPorts") ??
+    optionalMember<(env: PortEnv) => { readonly drive: DriveApi; readonly driveSync: DriveSync; readonly notebooks?: NotebookStore }>(notebookPackage, "createDrivePorts")!
+  const { notebooks, ...drivePorts } = notebookFactory(env)
   return {
     options: input.options,
     directory: input.directory,
@@ -64,6 +72,17 @@ export function createDeps(input: { readonly options: Options; readonly director
     ...runtimePorts,
     ...enterprisePorts,
     ...drivePorts,
-    release: createRelease(env, runtimePorts),
+    release: cost.createRelease(env, runtimePorts),
+    // Optional factories, so F, E and C add them in their own files without a Day 0 change: F exports `createBudget`
+    // from src/cost/index.ts, E's `createEnterprisePorts` returns `prices`, and C's factory returns `notebooks`.
+    // Until then, Day 0's stubs.
+    budget: optionalMember<(env: PortEnv) => Budget>(cost, "createBudget")?.(env) ?? OK_BUDGET,
+    prices: optionalMember<Prices>(enterprisePorts, "prices") ?? NO_PRICES,
+    notebooks: notebooks ?? NO_NOTEBOOKS,
   }
+}
+
+/** A member a package may or may not export yet. */
+function optionalMember<T>(source: object, key: string): T | undefined {
+  return (source as Record<string, unknown>)[key] as T | undefined
 }

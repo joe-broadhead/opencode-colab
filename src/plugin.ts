@@ -56,7 +56,10 @@ export function createColabPlugin(seam: ColabSeam = {}) {
       try {
         keep(await registerPermissionDefaults(ctx, options.access, report("rules")))
         keep(await registerTools(ctx, { access: options.access, runner: getRunner, report: report("tools") }))
-        keep(await registerAuth(ctx, { options, clock: deps.clock }))
+        // The doctor's print(1) needs the ledger, the agent-only check and the runtime protocol: A reaches them only
+        // through Deps (AuthEnv.deps, A's own field). Passed as a value, so the call compiles before A adds the field.
+        const authEnv = { options, clock: deps.clock, deps }
+        keep(await registerAuth(ctx, authEnv))
         keep(
           await registerStatus(ctx, {
             access: options.access,

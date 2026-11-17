@@ -106,6 +106,7 @@ export const OPERATIONS = {
   jobsCreate: "aiplatform.projects.locations.notebookExecutionJobs.create",
   jobsDelete: "aiplatform.projects.locations.notebookExecutionJobs.delete",
   jobOperationsCancel: "aiplatform.projects.locations.notebookExecutionJobs.operations.cancel",
+  jobOperationsList: "aiplatform.projects.locations.notebookExecutionJobs.operations.list",
   schedulesList: "aiplatform.projects.locations.schedules.list",
   schedulesGet: "aiplatform.projects.locations.schedules.get",
   schedulesCreate: "aiplatform.projects.locations.schedules.create",
@@ -124,6 +125,8 @@ export const OPERATIONS = {
   driveFilesCreate: "drive.files.create",
   driveFilesUpdate: "drive.files.update",
   driveRevisionsUpdate: "drive.revisions.update",
+  driveRevisionsList: "drive.revisions.list",
+  driveFilesGenerateIds: "drive.files.generateIds",
   storageObjectsList: "storage.objects.list",
   storageObjectsGet: "storage.objects.get",
   // The runtime's Jupyter server.

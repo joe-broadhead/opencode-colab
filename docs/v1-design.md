@@ -9,13 +9,14 @@ reviewed design document; this page restates only what a package needs to build 
 
 | Piece | File | What it fixes |
 | --- | --- | --- |
-| Ports | `src/ports.ts` | Every boundary: Colab API, the runtime protocol (`openSession`, `execute`, `interrupt`, `files`, `kernels`, `sessions`), the agent-only check, Vertex, Drive, GCS, auth `token(account, scopes)`, the ledger, the plan store, `RunEvents` subscribe, the clock; and the seams between packages (`Release`, `EnterpriseRuns`, `DriveSync`). |
-| Deps | `src/deps.ts` | One object with every port, built from each package's factory. Tools receive it; nothing imports another package's module. |
+| Ports | `src/ports.ts` | Every boundary: Colab API, the runtime protocol (`openSession`, `execute`, `interrupt`, `watchdog`, `files`, `kernels`, `sessions`), the agent-only check, Vertex (lists across pages, `Listed`), Drive, GCS, auth `token(account, scopes)`, the ledger, the plan store, `RunEvents` subscribe, the clock; and the seams between packages (`Release`, `Budget`, `EnterpriseRuns`, `Prices`, `DriveSync`, `NotebookStore`). |
+| Deps | `src/deps.ts` | One object with every port, built from each package's factory. Tools receive it; nothing imports another package's module. Two factories are optional, so a package adds them in its own files: F's `createBudget` (until then every budget check is `ok`), the `prices` E's `createEnterprisePorts` returns (until then nothing is priced), and the `notebooks` C's factory returns (until then NOT_IMPLEMENTED); C may rename `createDrivePorts` to `createNotebookPorts`. |
 | Contract | `src/domain/contract.ts` | The 20 tools' input schemas and result shapes; every result is `{ state, …, error?, message?, next?, warnings? }`; `PLAN_PARAMS` per plan action. |
 | Errors | `src/domain/errors.ts` | The one error table (design §12, plus the Day 0 additions below), the warnings, the source-code mapping, `ColabError`, and `docs/errors.md` generated from it. |
 | Actions | `src/domain/actions.ts` | The 20 tools with class, owner and exposure; the `colab.*` action names; `colab.read` and `colab.probe` as permission-only reads; `colab.cleanup`; the operation ids; the §7.1 change table; the §7.2 plan actions with category, backend, owner and operation. |
 | Plan store and routing | `src/domain/plans.ts`, `src/plans/route.ts` | Single-use plans, 300 s, bound to session, agent and account; `colab_plan` → `colab_write` / `colab_delete`, refusals, category checks, the commit's one assert. |
 | Ledger | `src/ledger/store.ts` | `$XDG_STATE_HOME/opencode-colab/ledger/`: copy-on-write JSON per runtime and run, `events.jsonl`, a cross-process lock, pruning after `ledgerDays`. |
+| Secret screen | `src/redact.ts` | `screenSecrets(text)` → `{ text, matches, found, kinds }` and `WITHHELD`: the one screen for package C (sources, outputs, Drive previews) and package E (job sources). No hex exemption beyond a 64-hex run after `sha256:`. |
 | Default rules | `src/permissions.ts` | The `access` → rules block: `colab.*` gets the change effect; the 12 read tools, `colab.read` and `colab.probe` allow; the 8 change tools get the change effect; `colab.cleanup` asks, and is denied at `read-only`. |
 | Registry | `src/tools/registry.ts`, `src/tools/spec.ts`, `src/tools/resources.ts`, `src/tools/types.ts` | Each tool's handler from its owner; the one wrapper that parses, resolves the account, asserts `colab.<tool>` once and maps errors to results. |
 | Declarations | `package.json` `jelly`, `sources` | 22 jelly entries (20 tools and 2 permission-only reads); the `colab.runs` and `colab.runtimes` sources. |
@@ -34,7 +35,7 @@ richer double (a loopback Colab API, the proxy in front of a real Jupyter server
 
 | Owner | Files |
 | --- | --- |
-| **Day 0** | `src/ports.ts`, `src/deps.ts`, `src/events.ts`, `src/stub.ts`, `src/domain/*`, `src/plans/*`, `src/ledger/*`, `src/permissions.ts`, `src/tools.ts`, `src/tools/*`, `src/tools-rpc.ts`, `src/plugin.ts`, `src/index.ts`, `src/options.ts`, `src/constants.ts`, `src/host-version.ts`, `src/redact.ts`, `src/skills.ts`, `src/version.ts`; `test/fakes/index.ts`; `test/unit/{actions,contract,docs,errors,host-version,jelly,ledger,options,permissions,plans,registry,skills,source-contract}.test.ts`; `test/conformance/declaration.test.ts`; `test/host/harness.ts`, `test/host/isolate.ts`, `test/host/route-fetch.ts`, `test/host/scratch.ts`, `test/host/plugin.test.ts`; `test/pack/pack.test.ts`; `test/fixtures/tool-registry.json`; `package.json` (the `jelly`, `sources` and `opencode` keys); `scripts/errors-doc.mjs`; `docs/v1-design.md`, `docs/errors.md` (generated); `AGENTS.md`. |
+| **Day 0** | `src/ports.ts`, `src/deps.ts`, `src/events.ts`, `src/stub.ts`, `src/domain/*`, `src/plans/*`, `src/ledger/*`, `src/permissions.ts`, `src/tools.ts`, `src/tools/*`, `src/tools-rpc.ts`, `src/plugin.ts`, `src/index.ts`, `src/options.ts`, `src/constants.ts`, `src/host-version.ts`, `src/redact.ts`, `src/skills.ts`, `src/version.ts`; `test/fakes/index.ts`; `test/unit/{actions,contract,docs,errors,host-version,jelly,ledger,options,permissions,plans,redact,registry,skills,source-contract}.test.ts`; `test/conformance/declaration.test.ts`; `test/host/harness.ts`, `test/host/isolate.ts`, `test/host/route-fetch.ts`, `test/host/scratch.ts`, `test/host/plugin.test.ts`; `test/pack/pack.test.ts`; `test/fixtures/tool-registry.json`; `package.json` (the `jelly`, `sources` and `opencode` keys); `scripts/errors-doc.mjs`; `docs/v1-design.md`, `docs/errors.md` (generated); `AGENTS.md`. |
 | **Family kit** | `test/support/jelly-kit.ts`, `test/support/jelly-settings.ts`, and the kit files in `scripts/` pinned by `scripts/check-copies.mjs`: copies, changed in every plugin at once. |
 | **A. Auth** | `src/auth/*`; `test/fakes/auth-*.ts`, `test/unit/auth*.test.ts`, `test/host/auth*.test.ts`; `docs/auth.md`. |
 | **B. Runtime transport** | `src/runtime/*` (the Colab API client, the runtime protocol, the agent-only check and its probe snippet); `test/fakes/runtime-*.ts` (the loopback Colab API, the proxy-in-front-of-jupyter harness), `test/unit/runtime*.test.ts`, `test/host/runtime*.test.ts`; the drift job's workflow file. |
@@ -51,16 +52,20 @@ and call `deps.enterprise` (E) for a job or a GCS object and `deps.driveSync` (C
 ## How a tool runs
 
 1. `src/tools/spec.ts` parses the input against the contract (`INPUT_INVALID`), resolves the account
-   (`ACCOUNT_UNKNOWN`, `ACCOUNT_REQUIRED`), and asks the handler for its ask metadata.
+   (`ACCOUNT_UNKNOWN`, `ACCOUNT_REQUIRED`), refuses a change tool or `colab_plan` on an account with `access: "read"`
+   (`ACCOUNT_READ_ONLY`, before any assert or network call; design §4), and asks the handler for its ask metadata.
 2. It asserts `colab.<tool>` **once**, on the resources `src/tools/resources.ts` gives: `<account>` for a read;
    `<account>:<operation>` for a change, plus `<account>:runtime:<id>` for a runtime-scoped call. Every assert except
    `colab.delete`'s offers Always for exactly those resources.
 3. The handler runs. Before each provider read it calls `ctx.providerRead(operation)`, which asserts `colab.read` on
-   `<account>:<operation>` once per operation and call.
+   `<account>:<operation>` once per operation and call. Before writing a workspace file, writing outside the project,
+   or reading a file to upload, it calls `ctx.hostAssert` with OpenCode's own `edit`, `external_directory` or `read`
+   (never a `colab.*` action).
 4. A `ColabError` becomes `{ state, error, message, next }`; an abort becomes `CANCELLED`; a host permission denial
    propagates unchanged.
 
-`colab_write` and `colab_delete` skip step 2: the plan route asserts `colab.write` / `colab.delete` on the plan's
+`colab_write` and `colab_delete` skip steps 1's account and 2: the plan route refuses a plan whose account is now read
+(`ACCOUNT_READ_ONLY`), then asserts `colab.write` / `colab.delete` on the plan's
 `<account>:<operation>` after checking the binding and before taking the plan.
 
 **`colab_run` asks once** (review LOW 4). The wrapper's one `colab.run` assert covers the execute operation and the
@@ -100,6 +105,24 @@ all three. The `colab.run` note in `jelly.tools` is its one-line summary ("… (
 
 What each package proves beyond design §16's must-prove column, from the Day 0 review:
 
+- **A.** `registerAuth` receives `Deps` (`AuthEnv.deps`, A's field) for the doctor's `print(1)`: the ledger's
+  untainted runtimes of ours, `deps.check.probe(…, { fresh: true })` before the print, the runtime protocol with
+  `allowStdin: false` in an `oc-<nonce>-doctor` session, and `deps.auth` for its token. The sign-in form answers
+  `AUTH_CLIENT_INVALID`, `AUTH_REDIRECT_INVALID`, `AUTH_REDIRECT_MISMATCH` and `AUTH_WRITE_UNCONFIRMED`, not
+  `INPUT_INVALID`.
+- **B.** Proxy-token refresh and the runtime URL's host allow-list (design §15.1's auth bullet) are B's to prove, with
+  H6: the proxy token and `connectionInfo.url` come from B's `runtimes.get`; A supplies only the OAuth token.
+- **C.** Calls `ctx.hostAssert` unconditionally for `edit` (and `external_directory` outside the project) in
+  `colab_edit`, with the H8 host test on all six hosts; returns `notebooks` (`NotebookStore`, sharing `colab_edit`'s
+  per-path lock) from its factory; calls `read` before its Drive reads in `DriveSync.pull`; counts kept revisions
+  with `keptRevisions` at preview; uses `generateId` for a create that can be retried; screens with `screenSecrets`.
+- **D.** Write-back goes through `deps.notebooks.mergeRun` after `hostAssert({ action: "edit" })`; `colab_download`
+  and `colab_upload` assert `edit`/`external_directory` and `read` through `hostAssert`; passes `ctx.providerRead`
+  to `DriveSync.pull` and `EnterpriseRuns`.
+- **E.** Calls `deps.budget.check` at the preview and the commit of `job.create`, `schedule.create` and
+  `schedule.resume` (`refuse` → `BUDGET_REACHED`, `warn` → `BUDGET_WARN`); returns `prices` from
+  `createEnterprisePorts`; records a job's create LRO on `RunRecord.operation` and falls back to `listJobOperations`;
+  calls `read` before each provider read inside `EnterpriseRuns`; screens job sources with `screenSecrets`.
 - **F.** `colab.cleanup` at `read-only`: the default rule denies it (`src/permissions.ts`, as Jelly's namespace rule
   does), and `/colab-cleanup` at `read-only` lists what costs money and takes no action, asserting nothing (design
   §8.5). At `all` and `ask-changes` each action is a person-only ask.
@@ -109,7 +132,9 @@ What each package proves beyond design §16's must-prove column, from the Day 0 
 
 ## Open points the design did not settle
 
-- **Codes Day 0 added** (not in design §12): `INPUT_INVALID`, `ACCOUNT_UNKNOWN`, `ACCOUNT_REQUIRED` (accounts need
+- **Codes Day 0 added** (not in design §12): `AUTH_CLIENT_INVALID`, `AUTH_REDIRECT_INVALID`,
+  `AUTH_REDIRECT_MISMATCH`, `AUTH_WRITE_UNCONFIRMED` (gws's sign-in form codes, for package A), `ACCOUNT_READ_ONLY`
+  (an account with `access: "read"` changes nothing), `INPUT_INVALID`, `ACCOUNT_UNKNOWN`, `ACCOUNT_REQUIRED` (accounts need
   them), `NOT_IMPLEMENTED` (the stubs; gone by v0.1.0), `RULES_NOT_ADDED`, `TOOLS_NOT_REGISTERED`, `STATUS_UNAVAILABLE`
   (registration and status, as the family has) and `LEDGER_UNAVAILABLE` (the ledger's lock and files).
 - **`colab_plan`'s input shape.** The design writes `colab_plan({ action, account?, … })`. Day 0 puts the action's own

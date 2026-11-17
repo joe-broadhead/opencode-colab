@@ -11,7 +11,7 @@ import { CommitInput, PLAN_PARAMS, PlanInput } from "../domain/contract.js"
 import { ColabError, type ErrorCode } from "../domain/errors.js"
 import type * as z from "zod"
 import { resolveAccount } from "../options.js"
-import { handlerContext, parse, request, type Runner } from "../tools/spec.js"
+import { assertWritable, handlerContext, parse, request, type Runner } from "../tools/spec.js"
 import type { CallContext, HandlerContext, PlanHandler, PlanHandlers, ToolCall, ToolHandler } from "../tools/types.js"
 
 const isPlanAction = (action: string): action is PlanAction => Object.hasOwn(PLAN_ACTIONS, action)
@@ -78,6 +78,8 @@ export function commitTool(category: PlanCategory, handlers: PlanHandlers, runne
       const store = base.deps.plans
       const plan = store.check(input.planId, binding)
       const account = resolveAccount(base.deps.options, plan.account)
+      // A plan made before the account was set to read commits nothing (design §4).
+      assertWritable(account)
       const ctx = handlerContext(runner(), call, account)
       const handler = planHandler(handlers, plan.action, plan.backend)
       const resource = `${plan.account}:${plan.operation}`

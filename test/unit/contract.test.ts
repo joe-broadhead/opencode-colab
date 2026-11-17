@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest"
 import * as z from "zod"
 import { PLAN_ACTION_NAMES } from "../../src/domain/actions.js"
 import { CONTRACTS, Failure, PLAN_PARAMS } from "../../src/domain/contract.js"
-import type { KernelSession, RuntimeProtocol } from "../../src/ports.js"
-import { FakeRuntimeProtocol } from "../fakes/index.js"
+import { OPERATIONS } from "../../src/domain/actions.js"
+import type { DriveApi, EnterpriseSchedule, KernelSession, Listed, NotebookStore, RunRecord, RuntimeProtocol, VertexApi } from "../../src/ports.js"
+import { NO_NOTEBOOKS, NO_PRICES, OK_BUDGET } from "../../src/stub.js"
+import { FakeDrive, FakeDriveSync, FakeEnterpriseRuns, FakeNotebookStore, FakePrices, FakeRuntimeProtocol, FakeVertex } from "../fakes/index.js"
 
 const ok = (schema: z.ZodType, value: unknown) => schema.safeParse(value).success
 const HASH = `sha256:${"a".repeat(64)}`
@@ -108,5 +110,89 @@ describe("the runtime protocol port, as its fake implements it", () => {
     expect(await text(await read(target, "/content/outputs/x.csv", signal, { range: { start: 2, end: 4 } }))).toBe("234")
     expect(await text(await read(target, "/content/outputs/x.csv", signal, { range: { start: 7 } }))).toBe("789")
     expect(protocol.files.reads.map((entry) => entry.range)).toEqual([undefined, { start: 2, end: 4 }, { start: 7 }])
+  })
+})
+
+describe("the Enterprise and seam ports, as their fakes and Day 0's stubs implement them", () => {
+  const signal = new AbortController().signal
+
+  it("colab_pause's result keeps state for the call and scheduleState for the schedule", () => {
+    expect(ok(CONTRACTS.pause.output, { state: "ok", schedule: "schedules/1", scheduleState: "PAUSED" })).toBe(true)
+    expect(ok(CONTRACTS.pause.output, { state: "PAUSED", schedule: "schedules/1" })).toBe(false)
+  })
+
+  it("a joined job create has no operation; the operations list finds a job's create LRO", async () => {
+    const fake = new FakeVertex()
+    const vertex: VertexApi = fake
+    const first = await vertex.createJob("work", { jobId: "oc-job-1", body: {} }, signal)
+    expect(first.operation).toBe("jobs/oc-job-1/operations/op-1")
+    const joined = await vertex.createJob("work", { jobId: "oc-job-1", body: {} }, signal)
+    expect(joined.operation).toBeUndefined()
+    expect(await vertex.listJobOperations("work", "jobs/oc-job-1", signal)).toEqual([{ name: "jobs/oc-job-1/operations/op-1", done: false }])
+  })
+
+  it("schedules list with Google's exact display-name filter, and a list may say it was cut", async () => {
+    const vertex: VertexApi = new FakeVertex()
+    await vertex.createSchedule("work", { displayName: "nightly [oc-abcdefgh]", cron: "0 9 * * *" }, signal)
+    await vertex.createSchedule("work", { displayName: "other", cron: "0 9 * * *" }, signal)
+    expect((await vertex.listSchedules("work", { filter: 'display_name="nightly [oc-abcdefgh]"' }, signal)).map((item) => item.displayName)).toEqual(["nightly [oc-abcdefgh]"])
+    const cut: Listed<EnterpriseSchedule> = Object.assign([] as EnterpriseSchedule[], { truncated: true })
+    expect(cut.truncated).toBe(true)
+  })
+
+  it("EnterpriseRuns calls the tool's providerRead before its provider reads", async () => {
+    const reads: string[] = []
+    const read = async (operation: string) => void reads.push(operation)
+    const runs = new FakeEnterpriseRuns()
+    await runs.execution("work", { job: "jobs/1" }, signal, read)
+    await runs.cancel("work", "jobs/1", signal, read)
+    await runs.downloadGcs("work", { gcs: "gs://b/x" }, signal, read)
+    expect(reads).toEqual([OPERATIONS.jobsGet, OPERATIONS.jobOperationsList, OPERATIONS.storageObjectsGet])
+  })
+
+  it("until F and E land, the budget answers ok and nothing is priced", async () => {
+    expect(await OK_BUDGET.check("work", { action: "job.create", usd: 3 }, signal)).toEqual({ verdict: "ok" })
+    expect(NO_PRICES.usdPerHour({ machine: "e2-standard-4" })).toBeUndefined()
+    const prices = new FakePrices()
+    expect(prices.usdPerHour({ machine: "e2-standard-4", accelerator: "T4" })).toBeCloseTo(0.59)
+    expect(prices.usdPerHour({ machine: "e2-standard-4", region: "europe-west4" })).toBeUndefined()
+    const run: RunRecord = { runId: "oc-job-1", account: "work", backend: "enterprise", job: "jobs/oc-job-1", operation: "jobs/oc-job-1/operations/op-1", cellIds: [], startedAt: "2026-11-17T09:00:00.000Z", state: "running", outputPaths: [] }
+    expect(run.operation).toMatch(/operations/)
+  })
+})
+
+describe("package C's ports, as their fakes implement them", () => {
+  const signal = new AbortController().signal
+
+  it("Drive: a pre-generated id to create with, and the kept-revision count", async () => {
+    const fake = new FakeDrive()
+    const drive: DriveApi = fake
+    const id = await drive.generateId("home", signal)
+    const file = await drive.create("home", { id, name: "a.ipynb", bytes: new Uint8Array(), mimeType: "application/vnd.google.colaboratory" }, signal)
+    expect(file.id).toBe(id)
+    await drive.keepRevision("home", id, "rev-1", signal)
+    expect(await drive.keptRevisions("home", id, signal)).toEqual({ kept: 1, truncated: false })
+  })
+
+  it("DriveSync.pull calls the tool's providerRead before its Drive reads", async () => {
+    const reads: string[] = []
+    await new FakeDriveSync().pull("home", { drive: "file-1" }, signal, async (operation) => void reads.push(operation))
+    expect(reads).toEqual([OPERATIONS.driveFilesGet])
+  })
+
+  it("NotebookStore merges a run by cell id, one merge per path at a time, and refuses a changed cell", async () => {
+    const fake = new FakeNotebookStore()
+    const store: NotebookStore = fake
+    fake.set("a.ipynb", [{ id: "c1", source: "x = 1" }, { id: "c2", source: "print(x)" }])
+    const read = await store.read("a.ipynb", signal)
+    expect(read.cells.map((cell) => cell.id)).toEqual(["c1", "c2"])
+    const [first, second] = await Promise.all([
+      store.mergeRun("a.ipynb", { cells: [{ id: "c1", source: "x = 1", outputs: [], executionCount: 1 }], outputDir: ".colab/runs/r1" }, signal),
+      store.mergeRun("a.ipynb", { cells: [{ id: "c2", source: "print(x)", outputs: [{ output_type: "stream" }], executionCount: 2 }], outputDir: ".colab/runs/r2" }, signal),
+    ])
+    expect(first.hash).not.toBe(second.hash)
+    expect(fake.merges.map((merge) => merge.cells)).toEqual([["c1"], ["c2"]])
+    await expect(store.mergeRun("a.ipynb", { cells: [{ id: "c1", source: "x = 2", outputs: [], executionCount: 3 }], outputDir: ".colab/runs/r3" }, signal)).rejects.toThrow(/^NOTEBOOK_CHANGED: /)
+    expect(NO_NOTEBOOKS).toBeDefined()
   })
 })

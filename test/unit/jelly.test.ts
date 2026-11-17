@@ -19,7 +19,7 @@ import { defaultRules, effectOf } from "../../src/permissions.js"
 import { SKILL_IDS } from "../../src/skills.js"
 import { sourceMethods } from "../../src/sources/index.js"
 import { toolHandlers } from "../../src/tools/registry.js"
-import { runTool, type Runner } from "../../src/tools/spec.js"
+import { HOST_ACTIONS, runTool, type Runner } from "../../src/tools/spec.js"
 import { fakeDeps, RecordingPermission } from "../fakes/index.js"
 import { type Declaration, type DeclaredTool, declarationProblems, docProblems, effectFromRules, lineProblems, readPackage } from "../support/jelly-kit.js"
 import { ACCESS_CHOICES, type PluginSetting, settingsProblems } from "../support/jelly-settings.js"
@@ -51,7 +51,8 @@ async function assertedActions(): Promise<Map<ToolName, string[]>> {
     plan: { action: "runtime.create", params: { spec: { variant: "VARIANT_CPU", shape: "SHAPE_STANDARD", accelerator: "NONE" } } },
     events_list: { source: "colab.runs" },
     runtimes_read: {},
-    edit: { path: "a.ipynb", ops: [{ op: "create" }] },
+    // A failing second op, so an all-or-nothing edit that creates writes no file.
+    edit: { path: "a.ipynb", ops: [{ op: "create" }, { op: "delete", cell: 99 }] },
     run: { runtime: "oc-01", code: "print(1)" },
     cancel: { runId: "run-1" },
     upload: { runtime: "oc-01", path: "data.csv" },
@@ -81,8 +82,7 @@ async function assertedActions(): Promise<Map<ToolName, string[]>> {
       input = { planId: plan.id }
     }
     const before = permission.requests.length
-    const result = (await runTool(name, input, call(`call_${name}`), runner)) as { error?: string }
-    expect(result.error, `colab_${name} ran its stub`).toBe("NOT_IMPLEMENTED")
+    await runTool(name, input, call(`call_${name}`), runner)
     out.set(name, permission.requests.slice(before).map((request) => request.action))
   }
   return out
@@ -112,8 +112,14 @@ describe("the jelly declaration", () => {
 
   it("asserted equals declared: each tool asserts exactly its own action, once, before anything runs", async () => {
     const asserted = await assertedActions()
-    for (const tool of TOOLS) expect(asserted.get(tool.name as ToolName), tool.name).toEqual([actionOf(tool.name)])
-    const all = new Set([...[...asserted.values()].flat(), READ_ACTION, ...sourceMethods().map((method) => method.action)])
+    // Package-neutral: a built tool also asserts colab.read for its provider reads, and OpenCode's own host actions
+    // (edit, external_directory, read) through hostAssert; its own action comes first, once.
+    for (const tool of TOOLS) {
+      const actions = (asserted.get(tool.name as ToolName) ?? []).filter((action) => !HOST_ACTIONS.has(action))
+      expect(actions[0], tool.name).toBe(actionOf(tool.name))
+      expect(actions.filter((action) => action !== READ_ACTION), tool.name).toEqual([actionOf(tool.name)])
+    }
+    const all = new Set([...[...asserted.values()].flat().filter((action) => !HOST_ACTIONS.has(action)), READ_ACTION, ...sourceMethods().map((method) => method.action)])
     expect([...all].sort()).toEqual([...DECLARED_ACTIONS].sort())
   })
 

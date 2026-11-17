@@ -6,15 +6,17 @@
  *
  * Each fake keeps its state in plain fields a test can set and read, and records its calls.
  */
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { PlanStore } from "../../src/domain/plans.js"
 import { ColabError } from "../../src/domain/errors.js"
 import type { Deps } from "../../src/deps.js"
 import { createRunEvents } from "../../src/events.js"
 import { loadOptions, type Options } from "../../src/options.js"
+import { OPERATIONS } from "../../src/domain/actions.js"
 import type {
   AgentOnlyCheck,
   Auth,
+  Budget,
   Calibration,
   Clock,
   ColabApi,
@@ -33,8 +35,11 @@ import type {
   KernelSession,
   Ledger,
   LedgerEvent,
+  NotebookStore,
   PermissionRequest,
+  Prices,
   ProbeVerdict,
+  ProviderRead,
   Release,
   RunRecord,
   RuntimeProtocol,
@@ -288,12 +293,23 @@ export class FakeVertex implements VertexApi {
     this.record("getJob", [account, name])
     return this.jobs.get(name)
   }
+  /** Create LROs by job name, as `listJobOperations` lists them. */
+  operations = new Map<string, { name: string; done: boolean }[]>()
   async createJob(account: string, input: { jobId: string; body: Record<string, unknown> }) {
     this.record("createJob", [account, input])
     const name = `jobs/${input.jobId}`
-    const job = this.jobs.get(name) ?? { name, displayName: String(input.body.displayName ?? input.jobId), state: "JOB_STATE_PENDING" }
+    const existing = this.jobs.get(name)
+    // A create that joins an existing job has no LRO of its own.
+    if (existing) return { job: existing }
+    const job: EnterpriseJob = { name, displayName: String(input.body.displayName ?? input.jobId), state: "JOB_STATE_PENDING" }
     this.jobs.set(name, job)
-    return { job, operation: `${name}/operations/op-1` }
+    const operation = `${name}/operations/op-1`
+    this.operations.set(name, [{ name: operation, done: false }])
+    return { job, operation }
+  }
+  async listJobOperations(account: string, job: string) {
+    this.record("listJobOperations", [account, job])
+    return this.operations.get(job) ?? []
   }
   async deleteJob(account: string, name: string) {
     this.record("deleteJob", [account, name])
@@ -302,9 +318,11 @@ export class FakeVertex implements VertexApi {
   async cancelOperation(account: string, operation: string) {
     this.record("cancelOperation", [account, operation])
   }
-  async listSchedules(account: string) {
-    this.record("listSchedules", [account])
-    return [...this.schedules.values()]
+  /** Understands only Google's exact `display_name="…"` filter, as the reconcile sends it. */
+  async listSchedules(account: string, input: { filter?: string } = {}) {
+    this.record("listSchedules", [account, input])
+    const exact = /^display_name="(.*)"$/.exec(input.filter ?? "")?.[1]
+    return [...this.schedules.values()].filter((schedule) => exact === undefined || schedule.displayName === exact)
   }
   async getSchedule(account: string, name: string) {
     this.record("getSchedule", [account, name])
@@ -361,7 +379,9 @@ export class FakeVertex implements VertexApi {
 export class FakeDrive implements DriveApi {
   readonly calls: Call[] = []
   files = new Map<string, { file: DriveFile; bytes: Uint8Array }>()
-  keptRevisions = new Map<string, number>()
+  /** Kept-forever revisions per file id, as `keptRevisions` counts them. */
+  kept = new Map<string, number>()
+  private nextId = 1
   async list(account: string, input: unknown) {
     this.calls.push({ method: "list", args: [account, input] })
     return [...this.files.values()].map((entry) => entry.file)
@@ -376,9 +396,14 @@ export class FakeDrive implements DriveApi {
     if (!entry) throw new ColabError("NOT_FOUND")
     return entry.bytes
   }
-  async create(account: string, input: { name: string; folder?: string; bytes: Uint8Array; mimeType: string }) {
+  async generateId(account: string) {
+    this.calls.push({ method: "generateId", args: [account] })
+    return `generated-${this.nextId++}`
+  }
+  async create(account: string, input: { id?: string; name: string; folder?: string; bytes: Uint8Array; mimeType: string }) {
     this.calls.push({ method: "create", args: [account, input.name] })
-    const file: DriveFile = { id: `file-${this.files.size + 1}`, name: input.name, mimeType: input.mimeType, headRevisionId: "rev-1", ownedByMe: true }
+    if (input.id !== undefined && this.files.has(input.id)) throw new ColabError("UNAVAILABLE", "The id is already taken (Drive answers 409).")
+    const file: DriveFile = { id: input.id ?? `file-${this.files.size + 1}`, name: input.name, mimeType: input.mimeType, headRevisionId: "rev-1", ownedByMe: true }
     this.files.set(file.id, { file, bytes: input.bytes })
     return file
   }
@@ -393,10 +418,14 @@ export class FakeDrive implements DriveApi {
   }
   async keepRevision(account: string, fileId: string, revisionId: string) {
     this.calls.push({ method: "keepRevision", args: [account, fileId, revisionId] })
-    const kept = this.keptRevisions.get(fileId) ?? 0
+    const kept = this.kept.get(fileId) ?? 0
     if (kept >= 200) return false
-    this.keptRevisions.set(fileId, kept + 1)
+    this.kept.set(fileId, kept + 1)
     return true
+  }
+  async keptRevisions(account: string, fileId: string) {
+    this.calls.push({ method: "keptRevisions", args: [account, fileId] })
+    return { kept: this.kept.get(fileId) ?? 0, truncated: false }
   }
 }
 
@@ -425,27 +454,102 @@ export class FakeRelease implements Release {
   }
 }
 
+/** Calls `read` before each provider read, as package E must: jobs.get, then the GCS reads. */
 export class FakeEnterpriseRuns implements EnterpriseRuns {
   readonly calls: Call[] = []
-  async execution(account: string, input: unknown) {
+  async execution(account: string, input: unknown, _signal: AbortSignal, read: ProviderRead) {
     this.calls.push({ method: "execution", args: [account, input] })
+    await read(OPERATIONS.jobsGet)
     return { state: "ok" }
   }
-  async cancel(account: string, job: string) {
+  async cancel(account: string, job: string, _signal: AbortSignal, read: ProviderRead) {
     this.calls.push({ method: "cancel", args: [account, job] })
-    return { state: "ok", action: "cancelled" }
+    await read(OPERATIONS.jobOperationsList)
+    return { state: "ok", action: "cancel-requested" }
   }
-  async downloadGcs(account: string, input: unknown) {
+  async downloadGcs(account: string, input: unknown, _signal: AbortSignal, read: ProviderRead) {
     this.calls.push({ method: "downloadGcs", args: [account, input] })
+    await read(OPERATIONS.storageObjectsGet)
     return { state: "ok" }
   }
 }
 
+/** A budget a test sets: `verdict` for every check, and the checks it saw. */
+export class FakeBudget implements Budget {
+  readonly checks: { account: string; action: string; usd?: number; runtimeHours?: number }[] = []
+  verdict: "ok" | "warn" | "refuse" = "ok"
+  async check(account: string, input: { action: "runtime.create" | "job.create" | "schedule.create" | "schedule.resume"; usd?: number; runtimeHours?: number }) {
+    this.checks.push({ account, ...input })
+    return { verdict: this.verdict, ...(this.verdict === "ok" ? {} : { spentUsd: 10, limitUsd: 10 }) }
+  }
+}
+
+/** A price table a test fills: USD/h per machine, plus per accelerator; one region. */
+export class FakePrices implements Prices {
+  readonly asOf = "2026-11-17"
+  readonly source = "test table"
+  readonly region = "us-central1"
+  machines = new Map<string, number>([["e2-standard-4", 0.19]])
+  accelerators = new Map<string, number>([["T4", 0.4]])
+  usdPerHour(input: { machine: string; accelerator?: string; acceleratorCount?: number; diskGb?: number; region?: string }) {
+    if (input.region !== undefined && input.region !== this.region) return undefined
+    const machine = this.machines.get(input.machine)
+    if (machine === undefined) return undefined
+    if (input.accelerator === undefined || input.accelerator === "NONE") return machine
+    const accelerator = this.accelerators.get(input.accelerator)
+    return accelerator === undefined ? undefined : machine + accelerator * (input.acceleratorCount ?? 1)
+  }
+}
+
+/** Calls `read` before its Drive reads, as package C must. */
 export class FakeDriveSync implements DriveSync {
   readonly calls: Call[] = []
-  async pull(account: string, input: unknown) {
+  async pull(account: string, input: unknown, _signal: AbortSignal, read: ProviderRead) {
     this.calls.push({ method: "pull", args: [account, input] })
+    await read(OPERATIONS.driveFilesGet)
     return { state: "ok" }
+  }
+}
+
+type StoredCell = { id: string; type: "code" | "markdown" | "raw"; source: string; outputs: readonly Readonly<Record<string, unknown>>[]; executionCount: number | null }
+
+/**
+ * Notebooks in memory, by path, with the store's contract: one merge per path at a time, by cell id into the notebook
+ * as it is now, and NOTEBOOK_CHANGED (nothing written) when a run cell is gone or its source changed.
+ */
+export class FakeNotebookStore implements NotebookStore {
+  notebooks = new Map<string, StoredCell[]>()
+  readonly merges: { path: string; cells: string[]; outputDir: string }[] = []
+  private readonly locks = new Map<string, Promise<unknown>>()
+  set(path: string, cells: { id: string; type?: StoredCell["type"]; source: string }[]) {
+    this.notebooks.set(path, cells.map((cell) => ({ type: "code", outputs: [], executionCount: null, ...cell })))
+  }
+  private hash(path: string) {
+    return `sha256:${createHash("sha256").update(JSON.stringify(this.notebooks.get(path) ?? [])).digest("hex")}`
+  }
+  async read(path: string) {
+    const cells = this.notebooks.get(path)
+    if (!cells) throw new ColabError("NOT_FOUND")
+    return { hash: this.hash(path), cells: cells.map(({ id, type, source }) => ({ id, type, source })) }
+  }
+  async mergeRun(path: string, input: { cells: readonly { id: string; source: string; outputs: readonly Readonly<Record<string, unknown>>[]; executionCount: number | null }[]; outputDir: string }) {
+    const previous = this.locks.get(path) ?? Promise.resolve()
+    const run = previous.then(() => {
+      const cells = this.notebooks.get(path)
+      if (!cells) throw new ColabError("NOT_FOUND")
+      for (const ran of input.cells) {
+        const found = cells.find((cell) => cell.id === ran.id)
+        if (!found || found.source !== ran.source) throw new ColabError("NOTEBOOK_CHANGED")
+      }
+      this.notebooks.set(path, cells.map((cell) => {
+        const ran = input.cells.find((item) => item.id === cell.id)
+        return ran ? { ...cell, outputs: ran.outputs, executionCount: ran.executionCount } : cell
+      }))
+      this.merges.push({ path, cells: input.cells.map((cell) => cell.id), outputDir: input.outputDir })
+      return { hash: this.hash(path) }
+    })
+    this.locks.set(path, run.catch(() => undefined))
+    return run
   }
 }
 
@@ -513,7 +617,10 @@ export interface Fakes {
   readonly gcs: FakeGcs
   readonly ledger: MemoryLedger
   readonly release: FakeRelease
+  readonly budget: FakeBudget
   readonly enterprise: FakeEnterpriseRuns
+  readonly prices: FakePrices
+  readonly notebooks: FakeNotebookStore
   readonly driveSync: FakeDriveSync
 }
 
@@ -532,7 +639,10 @@ export function fakeDeps(input: { readonly options?: unknown; readonly directory
     gcs: new FakeGcs(),
     ledger: new MemoryLedger(clock),
     release: new FakeRelease(),
+    budget: new FakeBudget(),
     enterprise: new FakeEnterpriseRuns(),
+    prices: new FakePrices(),
+    notebooks: new FakeNotebookStore(),
     driveSync: new FakeDriveSync(),
   }
   const deps: Deps = {
