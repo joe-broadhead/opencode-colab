@@ -196,3 +196,14 @@ describe("package C's ports, as their fakes implement them", () => {
     expect(NO_NOTEBOOKS).toBeDefined()
   })
 })
+
+describe("colab_cancel's result", () => {
+  it("says cancel-requested when a job's cancel was accepted but the job has not stopped, and cancelled once it has", async () => {
+    for (const action of ["interrupted", "restarted", "cancelled", "cancel-requested"]) expect(ok(CONTRACTS.cancel.output, { state: "ok", job: "jobs/1", action }), action).toBe(true)
+    expect(ok(CONTRACTS.cancel.output, { state: "ok", job: "jobs/1", action: "stopping" })).toBe(false)
+    // The fake reports what E must report for a job that is still running after the cancel.
+    const result = await new FakeEnterpriseRuns().cancel("work", "jobs/1", new AbortController().signal, async () => undefined)
+    expect(ok(CONTRACTS.cancel.output, result)).toBe(true)
+    expect(result).toMatchObject({ action: "cancel-requested" })
+  })
+})

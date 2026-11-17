@@ -316,7 +316,17 @@ export const CancelInput = z
   .strict()
   .refine((input) => (input.runId === undefined) !== (input.job === undefined), { message: "pass exactly one of runId and job" })
   .refine((input) => !(input.restart && input.job), { message: "restart applies to a run's kernel, not to a job" })
-export const CancelOutput = result({ runId: z.string().optional(), job: z.string().optional(), action: z.enum(["interrupted", "restarted", "cancelled"]), remainingSec: z.number().optional() })
+/**
+ * What colab_cancel did: `interrupted` and `restarted` a run's kernel; `cancelled` an Enterprise job that has stopped;
+ * `cancel-requested`: the Enterprise job's create LRO accepted a cancel; the job had not stopped when the call returned
+ * (L11).
+ */
+export const CancelOutput = result({
+  runId: z.string().optional(),
+  job: z.string().optional(),
+  action: z.enum(["interrupted", "restarted", "cancelled", "cancel-requested"]),
+  remainingSec: z.number().optional(),
+})
 
 export const UploadInput = z.object({ account: Account, runtime: RuntimeId, path: LocalPath, to: RuntimePath.optional() }).strict()
 export const UploadOutput = result({ runtime: z.string(), to: z.string(), bytes: z.number().int().nonnegative(), sha256: z.string() })
