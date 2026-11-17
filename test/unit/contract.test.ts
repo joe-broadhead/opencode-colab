@@ -5,9 +5,9 @@ import * as z from "zod"
 import { PLAN_ACTION_NAMES } from "../../src/domain/actions.js"
 import { CONTRACTS, Failure, PLAN_PARAMS } from "../../src/domain/contract.js"
 import { OPERATIONS } from "../../src/domain/actions.js"
-import type { EnterpriseSchedule, KernelSession, Listed, RunRecord, RuntimeProtocol, VertexApi } from "../../src/ports.js"
-import { NO_PRICES, OK_BUDGET } from "../../src/stub.js"
-import { FakeEnterpriseRuns, FakePrices, FakeRuntimeProtocol, FakeVertex } from "../fakes/index.js"
+import type { DriveApi, EnterpriseSchedule, KernelSession, Listed, NotebookStore, RunRecord, RuntimeProtocol, VertexApi } from "../../src/ports.js"
+import { NO_NOTEBOOKS, NO_PRICES, OK_BUDGET } from "../../src/stub.js"
+import { FakeDrive, FakeDriveSync, FakeEnterpriseRuns, FakeNotebookStore, FakePrices, FakeRuntimeProtocol, FakeVertex } from "../fakes/index.js"
 
 const ok = (schema: z.ZodType, value: unknown) => schema.safeParse(value).success
 const HASH = `sha256:${"a".repeat(64)}`
@@ -158,5 +158,41 @@ describe("the Enterprise and seam ports, as their fakes and Day 0's stubs implem
     expect(prices.usdPerHour({ machine: "e2-standard-4", region: "europe-west4" })).toBeUndefined()
     const run: RunRecord = { runId: "oc-job-1", account: "work", backend: "enterprise", job: "jobs/oc-job-1", operation: "jobs/oc-job-1/operations/op-1", cellIds: [], startedAt: "2026-11-17T09:00:00.000Z", state: "running", outputPaths: [] }
     expect(run.operation).toMatch(/operations/)
+  })
+})
+
+describe("package C's ports, as their fakes implement them", () => {
+  const signal = new AbortController().signal
+
+  it("Drive: a pre-generated id to create with, and the kept-revision count", async () => {
+    const fake = new FakeDrive()
+    const drive: DriveApi = fake
+    const id = await drive.generateId("home", signal)
+    const file = await drive.create("home", { id, name: "a.ipynb", bytes: new Uint8Array(), mimeType: "application/vnd.google.colaboratory" }, signal)
+    expect(file.id).toBe(id)
+    await drive.keepRevision("home", id, "rev-1", signal)
+    expect(await drive.keptRevisions("home", id, signal)).toEqual({ kept: 1, truncated: false })
+  })
+
+  it("DriveSync.pull calls the tool's providerRead before its Drive reads", async () => {
+    const reads: string[] = []
+    await new FakeDriveSync().pull("home", { drive: "file-1" }, signal, async (operation) => void reads.push(operation))
+    expect(reads).toEqual([OPERATIONS.driveFilesGet])
+  })
+
+  it("NotebookStore merges a run by cell id, one merge per path at a time, and refuses a changed cell", async () => {
+    const fake = new FakeNotebookStore()
+    const store: NotebookStore = fake
+    fake.set("a.ipynb", [{ id: "c1", source: "x = 1" }, { id: "c2", source: "print(x)" }])
+    const read = await store.read("a.ipynb", signal)
+    expect(read.cells.map((cell) => cell.id)).toEqual(["c1", "c2"])
+    const [first, second] = await Promise.all([
+      store.mergeRun("a.ipynb", { cells: [{ id: "c1", source: "x = 1", outputs: [], executionCount: 1 }], outputDir: ".colab/runs/r1" }, signal),
+      store.mergeRun("a.ipynb", { cells: [{ id: "c2", source: "print(x)", outputs: [{ output_type: "stream" }], executionCount: 2 }], outputDir: ".colab/runs/r2" }, signal),
+    ])
+    expect(first.hash).not.toBe(second.hash)
+    expect(fake.merges.map((merge) => merge.cells)).toEqual([["c1"], ["c2"]])
+    await expect(store.mergeRun("a.ipynb", { cells: [{ id: "c1", source: "x = 2", outputs: [], executionCount: 3 }], outputDir: ".colab/runs/r3" }, signal)).rejects.toThrow(/^NOTEBOOK_CHANGED: /)
+    expect(NO_NOTEBOOKS).toBeDefined()
   })
 })

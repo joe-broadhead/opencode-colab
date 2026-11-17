@@ -64,6 +64,9 @@ export function request(call: ToolCall, action: string, resources: readonly stri
   }
 }
 
+/** OpenCode's own permissions a handler may assert through `hostAssert`. */
+export const HOST_ACTIONS: ReadonlySet<string> = new Set(["edit", "external_directory", "read"])
+
 /** A handler context for one call on one account: `providerRead` asserts `colab.read` once per operation. */
 export function handlerContext(runner: Runner, call: ToolCall, account: HandlerContext["account"]): HandlerContext {
   const asserted = new Set<string>()
@@ -76,6 +79,18 @@ export function handlerContext(runner: Runner, call: ToolCall, account: HandlerC
       if (asserted.has(resource)) return
       await runner.assert(request(call, READ_ACTION, [resource], { account: account.alias, operation }, true))
       asserted.add(resource)
+    },
+    async hostAssert(host) {
+      if (!HOST_ACTIONS.has(host.action)) throw new Error(`hostAssert takes only OpenCode's host actions, not ${String(host.action)}`)
+      await runner.assert({
+        sessionID: call.sessionID,
+        agent: call.agent,
+        action: host.action,
+        resources: [...host.resources],
+        ...(host.save ? { save: [...host.save] } : {}),
+        metadata: host.metadata,
+        source: { type: "tool", messageID: call.messageID, id: call.id },
+      })
     },
   }
 }

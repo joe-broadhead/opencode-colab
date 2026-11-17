@@ -125,6 +125,8 @@ export const OPERATIONS = {
   driveFilesCreate: "drive.files.create",
   driveFilesUpdate: "drive.files.update",
   driveRevisionsUpdate: "drive.revisions.update",
+  driveRevisionsList: "drive.revisions.list",
+  driveFilesGenerateIds: "drive.files.generateIds",
   storageObjectsList: "storage.objects.list",
   storageObjectsGet: "storage.objects.get",
   // The runtime's Jupyter server.

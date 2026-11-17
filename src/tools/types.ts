@@ -32,6 +32,20 @@ export interface HandlerContext extends CallContext {
   readonly account: ResolvedAccount
   /** Asserts `colab.read` on `<account>:<operation>`: call it before each provider read, once per operation and call. */
   providerRead(operation: Operation): Promise<void>
+  /**
+   * Asserts one of OpenCode's own host permissions for this call: `edit` before writing a workspace file,
+   * `external_directory` for a path outside the project, `read` before reading a workspace file to upload it. Never a
+   * `colab.*` action: the wrapper asserts the tool's own once. Rejects on a deny or a declined ask, as the host does.
+   */
+  hostAssert(request: HostAssertRequest): Promise<void>
+}
+
+/** A host permission request: the action is one of OpenCode's own three, the rest as `PermissionRequest`. */
+export interface HostAssertRequest {
+  readonly action: "edit" | "external_directory" | "read"
+  readonly resources: readonly string[]
+  readonly save?: readonly string[]
+  readonly metadata: Readonly<Record<string, unknown>>
 }
 
 /** A tool's handler: the parsed input in, the tool's result out. Throw a ColabError for a refusal or failure. */

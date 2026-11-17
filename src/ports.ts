@@ -5,7 +5,8 @@
  *
  * External ports (the network): ColabApi, VertexApi, DriveApi, GcsApi, RuntimeProtocol; and Auth for credentials.
  * Local ports: Ledger, PlanStorePort, RunEvents, Clock.
- * Seams between packages: AgentOnlyCheck (B), Release (F), Budget (F), EnterpriseRuns (E), Prices (E), DriveSync (C).
+ * Seams between packages: AgentOnlyCheck (B), Release (F), Budget (F), EnterpriseRuns (E), Prices (E), DriveSync (C),
+ * NotebookStore (C).
  *
  * Every method takes an AbortSignal and honours it. Every failure is a ColabError (src/domain/errors.ts) with a code
  * from the table; a port never puts a token, the runtime URL, notebook text or Google's raw text in a message.
@@ -329,10 +330,20 @@ export interface DriveApi {
   get(account: string, fileId: string, signal: AbortSignal): Promise<DriveFile | undefined>
   /** `alt=media`. */
   download(account: string, fileId: string, signal: AbortSignal): Promise<Uint8Array>
-  create(account: string, input: { readonly name: string; readonly folder?: string; readonly bytes: Uint8Array; readonly mimeType: string }, signal: AbortSignal): Promise<DriveFile>
+  /** `files.generateIds?count=1&space=drive&type=files` [D8]: an id to create with, so a retried create can join. */
+  generateId(account: string, signal: AbortSignal): Promise<string>
+  /** `id` is a pre-generated id from `generateId`; Google assigns one when absent. */
+  create(account: string, input: { readonly id?: string; readonly name: string; readonly folder?: string; readonly bytes: Uint8Array; readonly mimeType: string }, signal: AbortSignal): Promise<DriveFile>
   update(account: string, fileId: string, input: { readonly bytes?: Uint8Array; readonly trashed?: boolean }, signal: AbortSignal): Promise<DriveFile>
   /** `revisions.update` with keepForever; false when the file already has 200 kept revisions (REVISION_PIN_SKIPPED). */
   keepRevision(account: string, fileId: string, revisionId: string, signal: AbortSignal): Promise<boolean>
+  /**
+   * How many of the file's revisions are kept forever, over `revisions.list`
+   * (`GET drive/v3/files/{id}/revisions?fields=revisions(id,keepForever),nextPageToken&pageSize=1000`, `drive.file`
+   * allowed [D7]), following pages up to 10; `truncated` when that bound cut the count. A preview says "not pinned"
+   * before the commit when `kept` is at Drive's cap of 200 (design §7.2).
+   */
+  keptRevisions(account: string, fileId: string, signal: AbortSignal): Promise<{ readonly kept: number; readonly truncated: boolean }>
 }
 
 export interface GcsApi {
@@ -517,9 +528,31 @@ export interface Prices {
   usdPerHour(input: { readonly machine: string; readonly accelerator?: string; readonly acceleratorCount?: number; readonly diskGb?: number; readonly region?: string }): number | undefined
 }
 
-/** Package C: the Drive branch of colab_download (pull, with the sync record and LOCAL_CHANGED). */
+/**
+ * Package C: the Drive branch of colab_download (pull, with the sync record and LOCAL_CHANGED). D passes its
+ * `ctx.providerRead` as `read`; C calls `read(OPERATIONS.driveFilesGet)` before `get` and `alt=media`. The host's
+ * `external_directory` for a `to` outside the project, and `edit` on the destination, are D's, through `hostAssert`.
+ */
 export interface DriveSync {
-  pull(account: string, input: { readonly drive: string; readonly to?: string; readonly overwrite?: boolean }, signal: AbortSignal): Promise<Readonly<Record<string, unknown>>>
+  pull(account: string, input: { readonly drive: string; readonly to?: string; readonly overwrite?: boolean }, signal: AbortSignal, read: ProviderRead): Promise<Readonly<Record<string, unknown>>>
+}
+
+/**
+ * Package C: the notebook model, for package D's run and write-back. Cell ids are as `colab_notebook` shows them,
+ * derived ids included. `mergeRun` holds the per-path lock `colab_edit` holds, merges outputs and execution counts by
+ * id into the file as it is now, and refuses NOTEBOOK_CHANGED and writes nothing otherwise; the caller has asserted
+ * `edit` (through `hostAssert`).
+ */
+export interface NotebookStore {
+  read(path: string, signal: AbortSignal): Promise<{ readonly hash: string; readonly cells: readonly { readonly id: string; readonly type: "code" | "markdown" | "raw"; readonly source: string }[] }>
+  mergeRun(
+    path: string,
+    input: {
+      readonly cells: readonly { readonly id: string; readonly source: string; readonly outputs: readonly Readonly<Record<string, unknown>>[]; readonly executionCount: number | null }[]
+      readonly outputDir: string
+    },
+    signal: AbortSignal,
+  ): Promise<{ readonly hash: string }>
 }
 
 // ── The permission bridge (Day 0) ───────────────────────────────────────

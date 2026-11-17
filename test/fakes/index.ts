@@ -6,7 +6,7 @@
  *
  * Each fake keeps its state in plain fields a test can set and read, and records its calls.
  */
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { PlanStore } from "../../src/domain/plans.js"
 import { ColabError } from "../../src/domain/errors.js"
 import type { Deps } from "../../src/deps.js"
@@ -35,6 +35,7 @@ import type {
   KernelSession,
   Ledger,
   LedgerEvent,
+  NotebookStore,
   PermissionRequest,
   Prices,
   ProbeVerdict,
@@ -378,7 +379,9 @@ export class FakeVertex implements VertexApi {
 export class FakeDrive implements DriveApi {
   readonly calls: Call[] = []
   files = new Map<string, { file: DriveFile; bytes: Uint8Array }>()
-  keptRevisions = new Map<string, number>()
+  /** Kept-forever revisions per file id, as `keptRevisions` counts them. */
+  kept = new Map<string, number>()
+  private nextId = 1
   async list(account: string, input: unknown) {
     this.calls.push({ method: "list", args: [account, input] })
     return [...this.files.values()].map((entry) => entry.file)
@@ -393,9 +396,14 @@ export class FakeDrive implements DriveApi {
     if (!entry) throw new ColabError("NOT_FOUND")
     return entry.bytes
   }
-  async create(account: string, input: { name: string; folder?: string; bytes: Uint8Array; mimeType: string }) {
+  async generateId(account: string) {
+    this.calls.push({ method: "generateId", args: [account] })
+    return `generated-${this.nextId++}`
+  }
+  async create(account: string, input: { id?: string; name: string; folder?: string; bytes: Uint8Array; mimeType: string }) {
     this.calls.push({ method: "create", args: [account, input.name] })
-    const file: DriveFile = { id: `file-${this.files.size + 1}`, name: input.name, mimeType: input.mimeType, headRevisionId: "rev-1", ownedByMe: true }
+    if (input.id !== undefined && this.files.has(input.id)) throw new ColabError("UNAVAILABLE", "The id is already taken (Drive answers 409).")
+    const file: DriveFile = { id: input.id ?? `file-${this.files.size + 1}`, name: input.name, mimeType: input.mimeType, headRevisionId: "rev-1", ownedByMe: true }
     this.files.set(file.id, { file, bytes: input.bytes })
     return file
   }
@@ -410,10 +418,14 @@ export class FakeDrive implements DriveApi {
   }
   async keepRevision(account: string, fileId: string, revisionId: string) {
     this.calls.push({ method: "keepRevision", args: [account, fileId, revisionId] })
-    const kept = this.keptRevisions.get(fileId) ?? 0
+    const kept = this.kept.get(fileId) ?? 0
     if (kept >= 200) return false
-    this.keptRevisions.set(fileId, kept + 1)
+    this.kept.set(fileId, kept + 1)
     return true
+  }
+  async keptRevisions(account: string, fileId: string) {
+    this.calls.push({ method: "keptRevisions", args: [account, fileId] })
+    return { kept: this.kept.get(fileId) ?? 0, truncated: false }
   }
 }
 
@@ -489,11 +501,55 @@ export class FakePrices implements Prices {
   }
 }
 
+/** Calls `read` before its Drive reads, as package C must. */
 export class FakeDriveSync implements DriveSync {
   readonly calls: Call[] = []
-  async pull(account: string, input: unknown) {
+  async pull(account: string, input: unknown, _signal: AbortSignal, read: ProviderRead) {
     this.calls.push({ method: "pull", args: [account, input] })
+    await read(OPERATIONS.driveFilesGet)
     return { state: "ok" }
+  }
+}
+
+type StoredCell = { id: string; type: "code" | "markdown" | "raw"; source: string; outputs: readonly Readonly<Record<string, unknown>>[]; executionCount: number | null }
+
+/**
+ * Notebooks in memory, by path, with the store's contract: one merge per path at a time, by cell id into the notebook
+ * as it is now, and NOTEBOOK_CHANGED (nothing written) when a run cell is gone or its source changed.
+ */
+export class FakeNotebookStore implements NotebookStore {
+  notebooks = new Map<string, StoredCell[]>()
+  readonly merges: { path: string; cells: string[]; outputDir: string }[] = []
+  private readonly locks = new Map<string, Promise<unknown>>()
+  set(path: string, cells: { id: string; type?: StoredCell["type"]; source: string }[]) {
+    this.notebooks.set(path, cells.map((cell) => ({ type: "code", outputs: [], executionCount: null, ...cell })))
+  }
+  private hash(path: string) {
+    return `sha256:${createHash("sha256").update(JSON.stringify(this.notebooks.get(path) ?? [])).digest("hex")}`
+  }
+  async read(path: string) {
+    const cells = this.notebooks.get(path)
+    if (!cells) throw new ColabError("NOT_FOUND")
+    return { hash: this.hash(path), cells: cells.map(({ id, type, source }) => ({ id, type, source })) }
+  }
+  async mergeRun(path: string, input: { cells: readonly { id: string; source: string; outputs: readonly Readonly<Record<string, unknown>>[]; executionCount: number | null }[]; outputDir: string }) {
+    const previous = this.locks.get(path) ?? Promise.resolve()
+    const run = previous.then(() => {
+      const cells = this.notebooks.get(path)
+      if (!cells) throw new ColabError("NOT_FOUND")
+      for (const ran of input.cells) {
+        const found = cells.find((cell) => cell.id === ran.id)
+        if (!found || found.source !== ran.source) throw new ColabError("NOTEBOOK_CHANGED")
+      }
+      this.notebooks.set(path, cells.map((cell) => {
+        const ran = input.cells.find((item) => item.id === cell.id)
+        return ran ? { ...cell, outputs: ran.outputs, executionCount: ran.executionCount } : cell
+      }))
+      this.merges.push({ path, cells: input.cells.map((cell) => cell.id), outputDir: input.outputDir })
+      return { hash: this.hash(path) }
+    })
+    this.locks.set(path, run.catch(() => undefined))
+    return run
   }
 }
 
@@ -564,6 +620,7 @@ export interface Fakes {
   readonly budget: FakeBudget
   readonly enterprise: FakeEnterpriseRuns
   readonly prices: FakePrices
+  readonly notebooks: FakeNotebookStore
   readonly driveSync: FakeDriveSync
 }
 
@@ -585,6 +642,7 @@ export function fakeDeps(input: { readonly options?: unknown; readonly directory
     budget: new FakeBudget(),
     enterprise: new FakeEnterpriseRuns(),
     prices: new FakePrices(),
+    notebooks: new FakeNotebookStore(),
     driveSync: new FakeDriveSync(),
   }
   const deps: Deps = {

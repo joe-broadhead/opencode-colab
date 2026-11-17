@@ -9,14 +9,14 @@ reviewed design document; this page restates only what a package needs to build 
 
 | Piece | File | What it fixes |
 | --- | --- | --- |
-| Ports | `src/ports.ts` | Every boundary: Colab API, the runtime protocol (`openSession`, `execute`, `interrupt`, `watchdog`, `files`, `kernels`, `sessions`), the agent-only check, Vertex (lists across pages, `Listed`), Drive, GCS, auth `token(account, scopes)`, the ledger, the plan store, `RunEvents` subscribe, the clock; and the seams between packages (`Release`, `Budget`, `EnterpriseRuns`, `Prices`, `DriveSync`). |
-| Deps | `src/deps.ts` | One object with every port, built from each package's factory. Tools receive it; nothing imports another package's module. Two factories are optional, so a package adds them in its own files: F's `createBudget` (until then every budget check is `ok`) and the `prices` E's `createEnterprisePorts` returns (until then nothing is priced). |
+| Ports | `src/ports.ts` | Every boundary: Colab API, the runtime protocol (`openSession`, `execute`, `interrupt`, `watchdog`, `files`, `kernels`, `sessions`), the agent-only check, Vertex (lists across pages, `Listed`), Drive, GCS, auth `token(account, scopes)`, the ledger, the plan store, `RunEvents` subscribe, the clock; and the seams between packages (`Release`, `Budget`, `EnterpriseRuns`, `Prices`, `DriveSync`, `NotebookStore`). |
+| Deps | `src/deps.ts` | One object with every port, built from each package's factory. Tools receive it; nothing imports another package's module. Two factories are optional, so a package adds them in its own files: F's `createBudget` (until then every budget check is `ok`), the `prices` E's `createEnterprisePorts` returns (until then nothing is priced), and the `notebooks` C's factory returns (until then NOT_IMPLEMENTED); C may rename `createDrivePorts` to `createNotebookPorts`. |
 | Contract | `src/domain/contract.ts` | The 20 tools' input schemas and result shapes; every result is `{ state, …, error?, message?, next?, warnings? }`; `PLAN_PARAMS` per plan action. |
 | Errors | `src/domain/errors.ts` | The one error table (design §12, plus the Day 0 additions below), the warnings, the source-code mapping, `ColabError`, and `docs/errors.md` generated from it. |
 | Actions | `src/domain/actions.ts` | The 20 tools with class, owner and exposure; the `colab.*` action names; `colab.read` and `colab.probe` as permission-only reads; `colab.cleanup`; the operation ids; the §7.1 change table; the §7.2 plan actions with category, backend, owner and operation. |
 | Plan store and routing | `src/domain/plans.ts`, `src/plans/route.ts` | Single-use plans, 300 s, bound to session, agent and account; `colab_plan` → `colab_write` / `colab_delete`, refusals, category checks, the commit's one assert. |
 | Ledger | `src/ledger/store.ts` | `$XDG_STATE_HOME/opencode-colab/ledger/`: copy-on-write JSON per runtime and run, `events.jsonl`, a cross-process lock, pruning after `ledgerDays`. |
-| Secret screen | `src/redact.ts` | `screenSecrets(text)`: the kinds of secret-shaped text, never the text, for package C (sources, Drive pushes) and package E (job sources). |
+| Secret screen | `src/redact.ts` | `screenSecrets(text)` → `{ text, matches, found, kinds }` and `WITHHELD`: the one screen for package C (sources, outputs, Drive previews) and package E (job sources). No hex exemption beyond a 64-hex run after `sha256:`. |
 | Default rules | `src/permissions.ts` | The `access` → rules block: `colab.*` gets the change effect; the 12 read tools, `colab.read` and `colab.probe` allow; the 8 change tools get the change effect; `colab.cleanup` asks, and is denied at `read-only`. |
 | Registry | `src/tools/registry.ts`, `src/tools/spec.ts`, `src/tools/resources.ts`, `src/tools/types.ts` | Each tool's handler from its owner; the one wrapper that parses, resolves the account, asserts `colab.<tool>` once and maps errors to results. |
 | Declarations | `package.json` `jelly`, `sources` | 22 jelly entries (20 tools and 2 permission-only reads); the `colab.runs` and `colab.runtimes` sources. |
@@ -58,7 +58,9 @@ and call `deps.enterprise` (E) for a job or a GCS object and `deps.driveSync` (C
    `<account>:<operation>` for a change, plus `<account>:runtime:<id>` for a runtime-scoped call. Every assert except
    `colab.delete`'s offers Always for exactly those resources.
 3. The handler runs. Before each provider read it calls `ctx.providerRead(operation)`, which asserts `colab.read` on
-   `<account>:<operation>` once per operation and call.
+   `<account>:<operation>` once per operation and call. Before writing a workspace file, writing outside the project,
+   or reading a file to upload, it calls `ctx.hostAssert` with OpenCode's own `edit`, `external_directory` or `read`
+   (never a `colab.*` action).
 4. A `ColabError` becomes `{ state, error, message, next }`; an abort becomes `CANCELLED`; a host permission denial
    propagates unchanged.
 
@@ -110,6 +112,13 @@ What each package proves beyond design §16's must-prove column, from the Day 0 
   `INPUT_INVALID`.
 - **B.** Proxy-token refresh and the runtime URL's host allow-list (design §15.1's auth bullet) are B's to prove, with
   H6: the proxy token and `connectionInfo.url` come from B's `runtimes.get`; A supplies only the OAuth token.
+- **C.** Calls `ctx.hostAssert` unconditionally for `edit` (and `external_directory` outside the project) in
+  `colab_edit`, with the H8 host test on all six hosts; returns `notebooks` (`NotebookStore`, sharing `colab_edit`'s
+  per-path lock) from its factory; calls `read` before its Drive reads in `DriveSync.pull`; counts kept revisions
+  with `keptRevisions` at preview; uses `generateId` for a create that can be retried; screens with `screenSecrets`.
+- **D.** Write-back goes through `deps.notebooks.mergeRun` after `hostAssert({ action: "edit" })`; `colab_download`
+  and `colab_upload` assert `edit`/`external_directory` and `read` through `hostAssert`; passes `ctx.providerRead`
+  to `DriveSync.pull` and `EnterpriseRuns`.
 - **E.** Calls `deps.budget.check` at the preview and the commit of `job.create`, `schedule.create` and
   `schedule.resume` (`refuse` → `BUDGET_REACHED`, `warn` → `BUDGET_WARN`); returns `prices` from
   `createEnterprisePorts`; records a job's create LRO on `RunRecord.operation` and falls back to `listJobOperations`;
