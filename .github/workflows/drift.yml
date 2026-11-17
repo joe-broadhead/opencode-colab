@@ -1,0 +1,113 @@
+name: drift
+
+# The Colab API is v1beta and colabtools moves. This job re-reads what package B pins — the discovery document's methods,
+# paths, schemas and proxy header, the colabtools facts the probe snippet is built on, and the MCP protected-resource
+# metadata — and fails when any of them changed, so a Google change is a red build rather than a quiet wrong answer
+# (design §15.1, "Drift"). It never runs in `npm run check`: a normal build and test must not need Google.
+on:
+  schedule:
+    # Mondays, 06:17 UTC.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  google-shapes:
+    name: google-shapes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # No npm ci: the check imports the package's own pinned facts (type stripping) and reads Google's documents.
+      - name: Colab API discovery, colabtools and MCP metadata
+        run: |
+          node --input-type=module <<'NODE'
+          import { COLAB_API_PATHS, COLAB_DISCOVERY_REVISION, CREDENTIAL_FILES, EPHEMERAL_MARKERS, PROXY_TOKEN_HEADER, RUNTIME_HOST_SUFFIXES } from "./src/runtime/discovery.ts"
+
+          const problems = []
+          const note = (what, detail) => problems.push(`${what}: ${detail}`)
+
+          const discovery = await (await fetch("https://colaboratory.googleapis.com/$discovery/rest?version=v1beta")).json()
+          if (discovery.revision !== COLAB_DISCOVERY_REVISION) {
+            note("discovery revision", `live ${discovery.revision}, pinned ${COLAB_DISCOVERY_REVISION}; review the diff, then update src/runtime/discovery.ts and the client`)
+          }
+
+          const methods = {
+            "runtimes.create": ["POST", COLAB_API_PATHS.runtimes],
+            "runtimes.get": ["GET", "v1beta/{+name}"],
+            "runtimes.delete": ["DELETE", "v1beta/{+name}"],
+            "runtimes.list": ["GET", COLAB_API_PATHS.runtimes],
+            "runtimespecs.list": ["GET", COLAB_API_PATHS.runtimeSpecs],
+          }
+          for (const [id, [httpMethod, path]] of Object.entries(methods)) {
+            const [resource, name] = id.split(".")
+            const method = id === "getSubscription" ? discovery.methods?.getSubscription : discovery.resources?.[resource]?.methods?.[name]
+            if (!method) note(`method ${id}`, "is gone from the discovery document")
+            else {
+              if (method.httpMethod !== httpMethod) note(`method ${id}`, `HTTP method ${method.httpMethod}, expected ${httpMethod}`)
+              if (method.path !== path) note(`method ${id}`, `path ${method.path}, expected ${path}`)
+            }
+          }
+          const subscription = discovery.resources?.v1beta?.methods?.getSubscription
+          if (!subscription) note("method colaboratory.getSubscription", "is gone from the discovery document")
+
+          const required = {
+            Runtime: ["connectionInfo", "name", "runtimeSpec", "version"],
+            ConnectionInfo: ["expireTime", "token", "url"],
+            Key: ["accelerator", "shape", "variant"],
+            Operation: ["done", "error", "name", "response"],
+            RuntimeSpec: ["eligible", "key"],
+            Subscription: ["tier"],
+            ErrorInfo: ["reason"],
+          }
+          for (const [schema, fields] of Object.entries(required)) {
+            const properties = discovery.schemas?.[schema]?.properties
+            if (!properties) {
+              note(`schema ${schema}`, "is gone from the discovery document")
+              continue
+            }
+            for (const field of fields) if (!(field in properties)) note(`schema ${schema}`, `field ${field} is gone`)
+          }
+          const tokenDescription = discovery.schemas?.ConnectionInfo?.properties?.token?.description ?? ""
+          if (!tokenDescription.includes(PROXY_TOKEN_HEADER)) note("proxy token header", `${PROXY_TOKEN_HEADER} is no longer named by ConnectionInfo.token`)
+          const createRequest = discovery.resources?.runtimes?.methods?.create?.parameters ?? {}
+          for (const query of ["requestId", "runtimeId"]) if (!(query in createRequest)) note("runtimes.create", `query parameter ${query} is gone`)
+
+          // The colabtools facts the probe snippet and the REST fallback are built on (design §7.4 step 3).
+          const raw = async (path) => (await fetch(`https://raw.githubusercontent.com/googlecolab/colabtools/HEAD/google/colab/${path}`)).text()
+          const [auth, drive] = await Promise.all([raw("auth.py"), raw("drive.py")])
+          const colabtoolsFiles = ["content/.adc/adc.json", "content/.config/credentials.db"]
+          for (const path of colabtoolsFiles) {
+            if (!CREDENTIAL_FILES.includes(path)) note(`pinned credential file ${path}`, "is not in src/runtime/discovery.ts CREDENTIAL_FILES")
+            if (!auth.includes(path.replace("adc.json", ""))) note(`colabtools credential file ${path}`, "is no longer written by google/colab/auth.py")
+          }
+          for (const marker of EPHEMERAL_MARKERS) if (!auth.includes(marker) && !drive.includes(marker)) note(`colabtools marker ${marker}`, "is no longer read by google/colab/auth.py or drive.py")
+          if (!drive.includes("fuse.drive")) note("colabtools Drive mount", "fuse.drive is no longer the mount type google/colab/drive.py checks")
+
+          // Both remote servers publish their protected-resource metadata without a token; the scopes they name are the
+          // ones design §4 and §10 declare.
+          for (const [url, scope] of [
+            ["https://colaboratory.googleapis.com/.well-known/oauth-protected-resource/mcp", "colaboratory"],
+            ["https://aiplatform.googleapis.com/.well-known/oauth-protected-resource/mcp/notebook", "aiplatform"],
+          ]) {
+            const answer = await fetch(url)
+            if (!answer.ok) note(`MCP metadata ${url}`, `answered ${answer.status}`)
+            else if (!(await answer.text()).includes(scope)) note(`MCP metadata ${url}`, `no longer names the ${scope} scope`)
+          }
+
+          if (!RUNTIME_HOST_SUFFIXES.includes("colab.dev")) note("runtime host allow-list", "no longer names colab.dev")
+
+          if (problems.length > 0) {
+            console.error("Google's shapes moved; update package B and the pin in src/runtime/discovery.ts:")
+            for (const problem of problems) console.error(`  - ${problem}`)
+            process.exit(1)
+          }
+          console.log("drift: the pinned Colab API methods, schemas, colabtools facts and MCP scopes are unchanged")
+          NODE
