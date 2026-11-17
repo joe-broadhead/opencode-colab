@@ -11,3 +11,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - The Day 0 contract: the ports, the twenty tools' schemas and result shapes, the error table, the `colab.*` action
   names, the plan store with `colab_plan` → `colab_write` / `colab_delete`, the run ledger, the `access` default rules,
   the tool registry with stubs, the `jelly` and `sources` declarations, and fakes for every port.
+- Package C, notebooks: the nbformat 4 model (byte-stable unchanged files, ids derived in memory, outputs merged by
+  cell id), `colab_find`, `colab_notebook`, `colab_edit`, the Drive pull with sync records, the `drive.create`,
+  `drive.update` and `drive.trash` plans with outputs stripped by default, the foreign-origin warning and the source
+  secret screen.

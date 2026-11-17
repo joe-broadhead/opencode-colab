@@ -1,25 +1,28 @@
 // Package C, Notebooks (docs/v1-design.md, File ownership): the nbformat model, colab_notebook, colab_edit,
 // colab_find, the Drive pull (DriveSync) and the drive.create / drive.update / drive.trash plans with sync records,
-// the foreign-origin warning, pushOutputs and the source secret screen. Day 0 stubs answer NOT_IMPLEMENTED.
+// the foreign-origin warning, pushOutputs and the source secret screen.
 import type { PortEnv } from "../deps.js"
 import type { DriveApi, DriveSync } from "../ports.js"
-import { notImplemented, stubPort } from "../stub.js"
-import type { PlanHandler, PlanHandlers, ToolHandlers } from "../tools/types.js"
+import type { PlanHandlers, ToolHandlers } from "../tools/types.js"
+import { createHttpDriveApi } from "./drive-api.js"
+import { CREATE, TRASH, UPDATE } from "./drive-plans.js"
+import { edit } from "./edit.js"
+import { find } from "./find.js"
+import { notebook } from "./notebook.js"
+import { createDriveSync } from "./pull.js"
 
-export const HANDLERS: ToolHandlers = {
-  find: { run: async () => notImplemented("colab_find") },
-  notebook: { run: async () => notImplemented("colab_notebook") },
-  edit: { run: async () => notImplemented("colab_edit") },
-}
+/** The three tools this package owns. */
+export const HANDLERS: ToolHandlers = { find, notebook, edit }
 
-const stubPlan = (action: string): PlanHandler<never> => ({ preview: async () => notImplemented(`The ${action} plan`), commit: async () => notImplemented(`The ${action} plan`) })
-
+/** The three Drive plans, on either account backend: Drive's API is the same for a Colab and an enterprise account. */
 export const PLAN_HANDLERS: PlanHandlers = {
-  "drive.create": { colab: stubPlan("drive.create"), enterprise: stubPlan("drive.create") },
-  "drive.update": { colab: stubPlan("drive.update"), enterprise: stubPlan("drive.update") },
-  "drive.trash": { colab: stubPlan("drive.trash"), enterprise: stubPlan("drive.trash") },
+  "drive.create": { colab: CREATE, enterprise: CREATE },
+  "drive.update": { colab: UPDATE, enterprise: UPDATE },
+  "drive.trash": { colab: TRASH, enterprise: TRASH },
 }
 
-export function createDrivePorts(_env: PortEnv): { readonly drive: DriveApi; readonly driveSync: DriveSync } {
-  return { drive: stubPort<DriveApi>("DriveApi"), driveSync: stubPort<DriveSync>("DriveSync") }
+/** The Drive port and the pull seam, from the plugin's one fetch and its stored grants. */
+export function createDrivePorts(env: PortEnv): { readonly drive: DriveApi; readonly driveSync: DriveSync } {
+  const drive = createHttpDriveApi(env)
+  return { drive, driveSync: createDriveSync(env, drive) }
 }
