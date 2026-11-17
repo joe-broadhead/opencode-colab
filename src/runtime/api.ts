@@ -12,7 +12,7 @@ import { ColabError } from "../domain/errors.js"
 import type { PortEnv } from "../deps.js"
 import type { ColabApi, ColabRuntime, ConnectionInfo, RuntimeSpecKey, SubscriptionTier } from "../ports.js"
 import { redact, shortReason } from "../redact.js"
-import { COLAB_API_ORIGIN, COLAB_API_PATHS, COLAB_DISCOVERY_REVISION, COLAB_OPERATION_PATHS, COLAB_READ_SCOPE, COLAB_SCOPE } from "./discovery.js"
+import { COLAB_API_ORIGIN, COLAB_API_PATHS, COLAB_DISCOVERY_REVISION, COLAB_OPERATION_PATHS, COLAB_OPERATION_WAIT_TIMEOUT, COLAB_READ_SCOPE, COLAB_SCOPE } from "./discovery.js"
 
 /** The retry schedule for idempotent calls; a test passes zero delays. */
 const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [400, 1_200]
@@ -195,10 +195,10 @@ export function createColabApi(env: PortEnv, overrides: ColabApiOptions = {}): C
   }
 
   /**
-   * A create's Operation is followed where the v1 discovery documents it: `colaboratory.operations.wait` on
-   * `v1/operations/{id}:wait`, then `colaboratory.operations.get` on `v1/operations/{id}`, then the v1beta path, so a
-   * create still completes if Google serves only one of them. The name the API returned is `operations/{id}` (the
-   * version prefix stripped); L5 pins that shape.
+   * A create's Operation is followed where the v1 discovery documents it: `colaboratory.operations.wait`, a **GET** on
+   * `v1/operations/{id}:wait?timeout=…`, then `colaboratory.operations.get` (GET `v1/operations/{id}`), then the v1beta
+   * path, so a create still completes if Google serves only one of them. The name the API returned is `operations/{id}`
+   * (the version prefix stripped); L5 pins that shape.
    */
   const operationId = (name: string): string => {
     if (!/^(?:v1beta\/|v1\/)?operations\/[A-Za-z0-9_-]+$/.test(name)) throw new ColabError("UNAVAILABLE", "The Colab API's create answer named an operation this client cannot follow.")
@@ -208,7 +208,7 @@ export function createColabApi(env: PortEnv, overrides: ColabApiOptions = {}): C
   const readOperation = async (account: string, name: string, signal: AbortSignal): Promise<OperationResource> => {
     const id = operationId(name)
     try {
-      const answer = await call(account, { method: "POST", path: `${COLAB_OPERATION_PATHS.wait}/${id}:wait`, body: { name: `operations/${id}`, timeout: "3s" }, write: false, idempotent: true }, signal)
+      const answer = await call(account, { method: "GET", path: `${COLAB_OPERATION_PATHS.wait}/${id}:wait`, query: { timeout: COLAB_OPERATION_WAIT_TIMEOUT }, write: false, idempotent: true }, signal)
       return (answer.body ?? {}) as OperationResource
     } catch (error) {
       if (!(error instanceof ColabError) || error.code !== "NOT_FOUND") throw error

@@ -147,6 +147,35 @@ describe("the agent-only check", () => {
     }
   })
 
+  it("H1 (round 5): ephemeral auth's edit to gcloud's nested configurations/config_default is caught", async () => {
+    const fixture = await createRuntimeFixture()
+    const encoder = new TextEncoder()
+    try {
+      // The reviewer's sandbox: a stock gcloud config with its files one level down.
+      fixture.jupyter.contents.set("content/.config/configurations/config_default", encoder.encode("[core]\nproject = stock\n"))
+      fixture.jupyter.contents.set("content/.config/access_tokens.db", encoder.encode("sqlite-stock"))
+      const calibration = await calibrate(fixture)
+      expect(await probe(fixture, calibration)).toMatchObject({ ok: true })
+      // The grant rewrites the nested file; every top-level name and size stays the same, so only a recursive digest
+      // of names, sizes and content hashes sees it.
+      fixture.jupyter.contents.set("content/.config/configurations/config_default", encoder.encode("[core]\nproject = ephemeral\n"))
+      expect(await probe(fixture, calibration)).toMatchObject({ ok: false, code: "RUNTIME_HAS_CREDENTIALS", findings: { ephemeralMarkers: [GCLOUD_CONFIG_MARKER] } })
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("H1 (round 5): a nested file that appears under gcloud's config is a finding too", async () => {
+    const fixture = await createRuntimeFixture()
+    try {
+      const calibration = await calibrate(fixture)
+      fixture.jupyter.contents.set("content/.config/configurations/config_default", new TextEncoder().encode("[core]\n"))
+      expect(await probe(fixture, calibration)).toMatchObject({ ok: false, code: "RUNTIME_HAS_CREDENTIALS", findings: { ephemeralMarkers: [GCLOUD_CONFIG_MARKER] } })
+    } finally {
+      await fixture.close()
+    }
+  })
+
   it("L2: a credential file is refused whether or not REST can see hidden paths, because the probe kernel sees the runtime", async () => {
     for (const allowHidden of [true, false]) {
       const fixture = await createRuntimeFixture({ allowHidden })

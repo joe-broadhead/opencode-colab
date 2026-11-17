@@ -183,9 +183,14 @@ export async function createFakeColabApi(options: FakeColabApiOptions): Promise<
         response.writeHead(200, { "content-type": "application/json" })
         return response.end("{}")
       }
-      // `colaboratory.operations.wait` (v1, AIP-151) and `get`; the v1beta path answers too, for the client's fallback.
+      // `colaboratory.operations.wait` is a GET on v1/{+name}:wait with the timeout query (v1 discovery 20261116); any
+      // other method on that path is refused here, so a client that sends a POST fails its tests.
+      const waitPath = /^v1\/operations\/([^/:]+):wait$/.test(path)
+      if (waitPath && method !== "GET") {
+        return json(response, 405, errorBody(12, "UNIMPLEMENTED", "operations.wait is a GET"))
+      }
       const waitMatch = /^v1\/operations\/([^/:]+):wait$/.exec(path)
-      if (waitMatch && method === "POST") {
+      if (waitMatch && method === "GET") {
         const name = `operations/${waitMatch[1]}`
         const operation = operations.get(name)
         if (!operation) return json(response, 404, errorBody(5, "NOT_FOUND", "operation not found"))

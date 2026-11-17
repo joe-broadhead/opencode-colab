@@ -8,8 +8,10 @@
  *   answer `{ runtimeSpecs: [{ key, eligible }] }`), `getSubscription` (GET `v1beta/subscription`, answer `{ tier }`).
  *   `Runtime` = `{ name, runtimeSpec: Key, version?, connectionInfo: { url, token, expireTime } }`; `Key` =
  *   `{ variant, shape, accelerator }`; the proxy token header is `X-Colab-Runtime-Proxy-Token`.
- * - Colab API v1, same revision: `colaboratory.operations.get` and `colaboratory.operations.wait` on `v1/operations/{id}`
- *   — the create's long-running operation is followed there (design §9.5's `operations.wait`).
+ * - Colab API v1, revision 20261116: `colaboratory.operations.get` is `GET v1/{+name}` and `operations.wait` is
+ *   **`GET v1/{+name}:wait`** with `name=operations/{id}` and the duration in the `timeout` query — the create's
+ *   long-running operation is followed there (design §9.5's `operations.wait`; the REST reference's
+ *   `colaboratory.operations.wait`).
  * - Jupyter Server REST (`/api/kernels`, `/api/sessions`, `/api/contents`, `/files/{path}`) and the kernel WebSocket
  *   `/api/kernels/{kernel_id}/channels?session_id={id}`, as the `Runtime` description points clients at. A contents
  *   save over 50 MB is sent in pieces: `chunk: 1` starts, `chunk: -1` ends, as the default `AsyncLargeFileManager`
@@ -38,8 +40,13 @@ export const COLAB_API_PATHS = {
   subscription: "v1beta/subscription",
 } as const
 
-/** The long-running-operation paths, without the service root: `v1/operations/{id}` and its `:wait` (design §9.5). */
+/**
+ * The long-running-operation paths, without the service root: `GET v1/operations/{id}` and `GET v1/operations/{id}:wait`
+ * with the `timeout` query (design §9.5; Colab API v1 discovery revision 20261116 — wait is a GET, not a POST).
+ */
 export const COLAB_OPERATION_PATHS = { get: "v1/operations", wait: "v1/operations" } as const
+/** The `operations.wait` timeout query value (a google-duration). */
+export const COLAB_OPERATION_WAIT_TIMEOUT = "3s"
 
 /** The Jupyter server paths, without the runtime URL. */
 export const JUPYTER_PATHS = {

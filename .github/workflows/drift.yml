@@ -58,9 +58,18 @@ jobs:
             }
           }
           if (!discoveryMethod(v1beta, "v1beta", "getSubscription")) note("method colaboratory.getSubscription", "is gone from the v1beta discovery document")
-          // The create's operation is followed on v1 (design §9.5, review LOW 3).
-          for (const name of ["get", "wait"]) {
-            if (!discoveryMethod(v1, "operations", name)) note(`method colaboratory.operations.${name}`, "is gone from the v1 discovery document")
+          // The create's operation is followed on v1 (design §9.5, review LOW 3 and round 5: wait is a GET, not a POST).
+          const operations = {
+            get: { method: "GET", path: "v1/{+name}" },
+            wait: { method: "GET", path: "v1/{+name}:wait" },
+          }
+          for (const [name, shape] of Object.entries(operations)) {
+            const method = discoveryMethod(v1, "operations", name)
+            if (!method) note(`method colaboratory.operations.${name}`, "is gone from the v1 discovery document")
+            else {
+              if (method.httpMethod !== shape.method) note(`method colaboratory.operations.${name}`, `HTTP method ${method.httpMethod}, expected ${shape.method}`)
+              if (method.path !== shape.path) note(`method colaboratory.operations.${name}`, `path ${method.path}, expected ${shape.path}`)
+            }
           }
 
           const required = {

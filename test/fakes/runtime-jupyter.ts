@@ -225,13 +225,17 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
    */
   const baselines = new Map<string, FakeBaseline>()
 
+  /** The probe's recursive view of gcloud's config: every file's relative name, size and content hash (review round 5). */
   const configSnapshot = () => {
     const prefix = `${GCLOUD_CONFIG_DIR}/`
     const names = [...contents.keys()].filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length)).sort()
     if (names.length === 0) return null
     const digest = createHash("sha256")
-    for (const name of names) digest.update(`${name}:${contents.get(prefix + name)!.byteLength}`)
-    return { names, digest: digest.digest("hex") }
+    for (const name of names) {
+      const bytes = contents.get(prefix + name)!
+      digest.update(`${name}:${bytes.byteLength}:${createHash("sha256").update(bytes).digest("hex")}`)
+    }
+    return { files: names, digest: digest.digest("hex") }
   }
 
   const driveMount = (mounts: readonly string[]) =>

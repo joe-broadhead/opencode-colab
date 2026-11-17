@@ -42,7 +42,7 @@ describe("the host runtime and Colab's kernel channel", () => {
     // Nothing but the two loopback fakes: a request to any other origin fails this test's env.
     const env: PortEnv = {
       options,
-      directory: process.cwd(),
+      directory: "/project",
       clock,
       auth,
       ledger,
@@ -106,7 +106,7 @@ describe("the host runtime and Colab's kernel channel", () => {
     const ledger = new MemoryLedger()
     const env: PortEnv = {
       options,
-      directory: process.cwd(),
+      directory: "/project",
       clock: new FakeClock(),
       auth,
       ledger,
