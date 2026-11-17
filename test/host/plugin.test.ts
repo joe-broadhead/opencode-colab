@@ -1,8 +1,9 @@
 // The built plugin in an embedded OpenCode host. Nothing leaves the machine: close() fails the test if the host tried.
 import { afterAll, describe, expect, test } from "bun:test"
+import { TOOLS, toolId } from "../../src/domain/actions.js"
 import { defaultRules } from "../../src/permissions.js"
 import { isStatus } from "../../src/rpc.js"
-import { agentRules, cleanup, pluginState, startHost, status } from "./harness.js"
+import { agentRules, cleanup, pluginState, startHost, status, until } from "./harness.js"
 
 afterAll(cleanup)
 
@@ -12,26 +13,32 @@ const after = (rules: { action: string; resource: string; effect: string }[], le
 }
 
 describe("the plugin in a host", () => {
-  test("loads, inserts the default rules and answers status with no request off the machine", async () => {
+  test("loads, registers the twenty colab tools, inserts the default rules and answers status with no request off the machine", async () => {
     const host = await startHost()
     try {
       expect(await pluginState(host)).toEqual({ status: "active" })
       const rules = (await agentRules(host)).get("build") ?? []
       expect(after(rules, defaultRules("all").length)).toEqual(defaultRules("all"))
+      const tools = await until("the colab tools are listed", async () => {
+        const listed = (await host.probe().tool.list()).filter((tool) => tool.id.startsWith("colab_"))
+        return listed.length === TOOLS.length ? listed : undefined
+      })
+      expect(tools.map((tool) => tool.id).sort()).toEqual(TOOLS.map((tool) => toolId(tool.name)).sort())
       const answer = await status(host)
       expect(isStatus(answer)).toBe(true)
-      expect(answer).toMatchObject({ access: "all", accounts: [{ alias: "default", backend: "colab" }], tools: { registered: 0 }, unguardedAgents: [], nextStep: "Nothing to do." })
+      expect(answer).toMatchObject({ access: "all", accounts: [{ alias: "default", backend: "colab" }], tools: { registered: 20 }, unguardedAgents: [], nextStep: "Nothing to do." })
     } finally {
       await host.close()
     }
   }, 120_000)
 
-  test("at read-only, the namespace is denied", async () => {
+  test("at read-only, every change is denied and every read allowed", async () => {
     const host = await startHost({ options: { access: "read-only" } })
     try {
       const rules = (await agentRules(host)).get("build") ?? []
       expect(after(rules, defaultRules("read-only").length)).toEqual(defaultRules("read-only"))
-      expect(rules).toContainEqual({ action: "colab.*", resource: "*", effect: "deny" })
+      expect(rules).toContainEqual({ action: "colab.run", resource: "*", effect: "deny" })
+      expect(rules).toContainEqual({ action: "colab.read", resource: "*", effect: "allow" })
     } finally {
       await host.close()
     }

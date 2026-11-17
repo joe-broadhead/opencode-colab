@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
+import { TOOLS, toolId } from "../../src/domain/actions.js"
 import { parseSkill, SKILL_IDS } from "../../src/skills.js"
 
 const text = (id: string) => readFileSync(new URL(`../../skills/${id}/SKILL.md`, import.meta.url), "utf8")
@@ -16,8 +17,10 @@ describe("skills", () => {
       expect(skill.description.length).toBeGreaterThan(40)
     })
 
-    it(`${id} names no tool, because none exists yet`, () => {
-      expect(parseSkill(id, text(id)).content.match(/\bcolab_[a-z][a-z0-9_]*/g) ?? []).toEqual([])
+    it(`${id} names only tools the plugin registers`, () => {
+      const named = parseSkill(id, text(id)).content.match(/\bcolab_[a-z][a-z0-9_]*/g) ?? []
+      const known = new Set(TOOLS.map((tool) => toolId(tool.name)))
+      expect(named.filter((name) => !known.has(name))).toEqual([])
     })
   }
 

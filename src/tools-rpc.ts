@@ -7,22 +7,26 @@
  *   { "input": { "sessionID": "<session>", "input": <the tool's input> } }
  *
  * A script runs as a session and the agent it names; the rule for the method's permission action is resolved before
- * dispatch, and only `allow` runs. No method exists yet: the read tools become methods when they exist. Write, export
- * and destructive tools are never methods.
+ * dispatch, and only `allow` runs. The methods are the twelve read tools, run through the same wrapper as the model's
+ * tools (src/tools/spec.ts), and the source contract's `probe`. Write, export and destructive tools are never methods.
  */
 import type { Failure, MethodSpec, NextSteps, ToolsRpcPlugin } from "@we-the-rebel-alliance/source-contract/tools-rpc"
 import { toolsRpcId } from "@we-the-rebel-alliance/source-contract/tools-rpc"
 import { PLUGIN_ID, STATUS_COMMAND } from "./constants.js"
+import { TOOLS } from "./domain/actions.js"
+import type { ToolName } from "./domain/contract.js"
 import { ColabError } from "./domain/errors.js"
+import { sourceMethods } from "./sources/index.js"
+import { type Runner, scriptMethod } from "./tools/spec.js"
 
 /** The RPC's id: the plugin's id and `.tools`. package.json `sources.rpc` names it; scripts call it by name. */
 export const TOOLS_RPC_ID = toolsRpcId(PLUGIN_ID)
 
-/** No method yet. */
-export const METHOD_NAMES: readonly string[] = []
+/** The read tools, in design §6's order, then the source probe. */
+export const METHOD_NAMES: readonly string[] = [...TOOLS.filter((tool) => tool.class === "read").map((tool) => tool.name), "probe"]
 
-export function methods(): readonly MethodSpec[] {
-  return []
+export function methods(runner: Runner): readonly MethodSpec[] {
+  return [...TOOLS.filter((tool) => tool.class === "read").map((tool) => scriptMethod(tool.name as ToolName, runner)), ...sourceMethods()]
 }
 
 /** The next step for each code the module itself raises. Each is one sentence that ends with a full stop. */
