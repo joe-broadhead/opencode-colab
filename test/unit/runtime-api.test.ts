@@ -25,8 +25,21 @@ describe("the Colab API client", () => {
       expect(created.done).toBe(true)
       expect(created.runtime?.name).toBe("runtimes/oc-test1")
       expect(fixture.api.runtimes.has("oc-test1")).toBe(true)
-      // The operation was polled, not guessed at.
+      // The operation was followed where v1 documents it: `operations/{id}:wait`, then get if need be (review LOW 3).
+      expect(fixture.api.operationsWaited).toBeGreaterThanOrEqual(1)
       expect(fixture.api.requests.filter((request) => /operations\//.test(request.path)).length).toBeGreaterThanOrEqual(2)
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("falls back to the v1 operation's get when wait is not available (LOW 3)", async () => {
+    const fixture = await createRuntimeFixture({ createPolls: 1 })
+    try {
+      fixture.api.failNext({ method: "POST", path: /^v1\/operations\/[^/]+:wait$/ }, { status: 404 })
+      const created = await fixture.ports.colab.createRuntime("default", { runtimeId: "oc-test-wait", spec: { variant: "VARIANT_CPU", shape: "SHAPE_STANDARD", accelerator: "NONE" }, requestId: "3f1c0f4e-1111-4222-8333-944455550000", waitMs: 5_000 }, signal())
+      expect(created.done).toBe(true)
+      expect(fixture.api.requests.some((request) => /^v1\/operations\/[^/]+$/.test(request.path) && request.method === "GET")).toBe(true)
     } finally {
       await fixture.close()
     }

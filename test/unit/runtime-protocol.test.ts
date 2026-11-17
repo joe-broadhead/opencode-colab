@@ -1,10 +1,15 @@
 // Package B's runtime protocol: the "ours only" fence, the URL and token checks, `allow_stdin: false`, the
-// `colab_request` decline, the proxy token on the upgrade, a token refresh and the runtime's files (design §16 row B:
-// "runtime protocol (REST + kernel WebSocket, token and URL checks, allow_stdin false, colab_request decline, the
-// watchdog)"; §15.1 agent-only runtimes, capture as transport; L2, L9, H6).
+// `colab_request` decline, the proxy token on the upgrade, a token refresh, chunked files, the owner lease and the
+// session adoption check (design §16 row B; §15.1 agent-only runtimes, capture as transport; review round 4 M3, M4,
+// M5, LOW 1, LOW 2, LOW 6; L2, L9, H4, H6).
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { ColabError } from "../../src/domain/errors.js"
 import type { IopubMessage } from "../../src/ports.js"
+import { createOwnerLease } from "../../src/runtime/lease.js"
+import { createRuntimeProtocol } from "../../src/runtime/protocol.js"
 import { createRuntimeFixture, PROXY_TOKEN, RUNTIME_ID } from "../fakes/runtime-env.js"
 
 const fresh = () => new AbortController().signal
@@ -15,8 +20,7 @@ const collect = async (stream: AsyncIterable<IopubMessage>): Promise<IopubMessag
   return messages
 }
 
-const failureOf = async (work: Promise<unknown>, signal = fresh()): Promise<ColabError | undefined> => {
-  void signal
+const failureOf = async (work: Promise<unknown>): Promise<ColabError | undefined> => {
   try {
     await work
   } catch (error) {
@@ -41,10 +45,13 @@ describe("the runtime protocol", () => {
     }
   })
 
-  it("refuses another account's runtime, a released runtime and a tainted one, with its own code", async () => {
+  it("refuses another account's runtime, a creating runtime, a released runtime and a tainted one, with its own code", async () => {
     const fixture = await createRuntimeFixture()
     try {
       await fixture.own(RUNTIME_ID, { account: "work" })
+      expect((await failureOf(fixture.ports.runtime.kernels({ account: "default", runtimeId: RUNTIME_ID }, fresh())))?.code).toBe("RUNTIME_NOT_OURS")
+      // The contract keeper kept the fence to `ready` (review contract request 4): a create still settling is not ours yet.
+      await fixture.own(RUNTIME_ID, { state: "creating" })
       expect((await failureOf(fixture.ports.runtime.kernels({ account: "default", runtimeId: RUNTIME_ID }, fresh())))?.code).toBe("RUNTIME_NOT_OURS")
       await fixture.own(RUNTIME_ID, { state: "released" })
       expect((await failureOf(fixture.ports.runtime.kernels({ account: "default", runtimeId: RUNTIME_ID }, fresh())))?.code).toBe("RUNTIME_GONE")
@@ -122,12 +129,45 @@ describe("the runtime protocol", () => {
       const first = await fixture.ports.runtime.openSession(target, { name: "oc-nonce-1-run", path: "/content/analysis.ipynb" }, fresh())
       const second = await fixture.ports.runtime.openSession(target, { name: "oc-nonce-1-run", path: "/content/analysis.ipynb" }, fresh())
       expect(second.session.kernelId).toBe(first.session.kernelId)
+      expect(second).toBe(first)
       expect(await fixture.ports.runtime.sessions(target, fresh())).toHaveLength(1)
       expect(fixture.jupyter.upgrades).toHaveLength(1)
       expect(fixture.jupyter.upgrades[0]?.headers["x-colab-runtime-proxy-token"]).toBe(PROXY_TOKEN)
       expect(fixture.jupyter.upgrades[0]?.path).toMatch(/^\/api\/kernels\/[^/]+\/channels\?session_id=/)
       await first.close()
-      await second.close()
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("R1 (M3): after a Stop aborts the signal that opened a session, the next run on that session still works", async () => {
+    const fixture = await createRuntimeFixture()
+    try {
+      await fixture.own()
+      const target = { account: "default", runtimeId: RUNTIME_ID }
+      const opening = new AbortController()
+      const first = await fixture.ports.runtime.openSession(target, { name: "oc-nonce-1-run", path: "/content/a.ipynb" }, opening.signal)
+      opening.abort()
+      const again = await fixture.ports.runtime.openSession(target, { name: "oc-nonce-1-run", path: "/content/a.ipynb" }, fresh())
+      const messages = await collect(again.execute("print(1)", { allowStdin: false, silent: false, storeHistory: true }, fresh()))
+      expect(messages.map((message) => message.msgType)).toEqual(["stream", "status"])
+      expect(again.session.kernelId).toBe(first.session.kernelId)
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("M3: a handle whose socket closed is dropped and re-opened by the next openSession", async () => {
+    const fixture = await createRuntimeFixture()
+    try {
+      await fixture.own()
+      const target = { account: "default", runtimeId: RUNTIME_ID }
+      const first = await fixture.ports.runtime.openSession(target, { name: "oc-nonce-1-run", path: "/content/a.ipynb" }, fresh())
+      await first.close()
+      const again = await fixture.ports.runtime.openSession(target, { name: "oc-nonce-1-run", path: "/content/a.ipynb" }, fresh())
+      expect(again).not.toBe(first)
+      expect(await collect(again.execute("print(1)", { allowStdin: false, silent: false, storeHistory: true }, fresh()))).toHaveLength(2)
+      await again.close()
     } finally {
       await fixture.close()
     }
@@ -166,6 +206,113 @@ describe("the runtime protocol", () => {
     }
   })
 
+  it("writes and reads a runtime file, and asks for a range only when the caller does", async () => {
+    const fixture = await createRuntimeFixture({ allowHidden: true })
+    try {
+      await fixture.own()
+      const target = { account: "default", runtimeId: RUNTIME_ID }
+      const payload = new TextEncoder().encode("value\n1,2,3\n")
+      const written = await fixture.ports.runtime.files.write(target, "/content/outputs/data.csv", (async function* () {
+        yield payload
+      })(), fresh())
+      expect(written.bytes).toBe(payload.byteLength)
+      const chunks: Uint8Array[] = []
+      for await (const chunk of await fixture.ports.runtime.files.read(target, "/content/outputs/data.csv", fresh())) chunks.push(chunk)
+      expect(Buffer.concat(chunks).toString("utf8")).toBe("value\n1,2,3\n")
+      expect(fixture.jupyter.requests.some((request) => request.headers["range"] !== undefined)).toBe(false)
+      // The range argument is the contract keeper's `files.read` amendment; the cast keeps this compiling either way.
+      const rangedRead = fixture.ports.runtime.files.read as unknown as (target: { account: string; runtimeId: string }, path: string, signal: AbortSignal, options?: { range?: { start: number; end?: number } }) => Promise<AsyncIterable<Uint8Array>>
+      const ranged: Uint8Array[] = []
+      for await (const chunk of await rangedRead(target, "/content/outputs/data.csv", fresh(), { range: { start: 0, end: 4 } })) ranged.push(chunk)
+      expect(Buffer.concat(ranged).toString("utf8")).toBe("value\n1,2,3\n")
+      expect(fixture.jupyter.requests.at(-1)?.headers["range"]).toBe("bytes=0-4")
+      const listed = await fixture.ports.runtime.files.list(target, "/content/outputs", fresh())
+      expect(listed?.map((entry) => entry.path)).toEqual(["content/outputs/data.csv"])
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("M4: sends a contents write over the piece size in chunk pieces, and the runtime joins them", async () => {
+    const fixture = await createRuntimeFixture({ maxContentsBytes: 8 })
+    try {
+      await fixture.own()
+      const target = { account: "default", runtimeId: RUNTIME_ID }
+      const payload = new TextEncoder().encode("0123456789abcdefghij")
+      const written = await fixture.ports.runtime.files.write(target, "/content/big.bin", (async function* () {
+        yield payload
+      })(), fresh())
+      expect(written.bytes).toBe(20)
+      // chunk 1 starts, 2 appends, -1 ends, as Jupyter's AsyncLargeFileManager takes them.
+      expect(fixture.jupyter.chunksSeen).toEqual([1, 2, -1])
+      expect(new TextDecoder().decode(fixture.jupyter.contents.get("content/big.bin"))).toBe("0123456789abcdefghij")
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("LOW 2: refuses a runtime path with a dot segment before any request", async () => {
+    const fixture = await createRuntimeFixture()
+    try {
+      await fixture.own()
+      const target = { account: "default", runtimeId: RUNTIME_ID }
+      expect((await failureOf(fixture.ports.runtime.files.list(target, "/content/../../api/kernels", fresh())))?.code).toBe("PATH_REFUSED")
+      expect((await failureOf(fixture.ports.runtime.files.list(target, "/content/%2e%2e/secrets", fresh())))?.code).toBe("PATH_REFUSED")
+      expect(fixture.jupyter.requests).toEqual([])
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("M5: a second OpenCode process is RUNTIME_BUSY, for the protocol and for the check, and nothing is tainted", async () => {
+    const leaseDir = mkdtempSync(join(tmpdir(), "colab-lease-"))
+    const fixture = await createRuntimeFixture({ leaseDir })
+    try {
+      await fixture.own()
+      const target = { account: "default", runtimeId: RUNTIME_ID }
+      await fixture.ports.runtime.openSession(target, { name: "oc-nonce-1-run", path: "/content/a.ipynb" }, fresh())
+      // The same lease file, seen by a process whose pid is another live one.
+      const other = createOwnerLease({ dir: leaseDir, pid: process.ppid })
+      const otherProtocol = createRuntimeProtocol(fixture.env, fixture.ports.colab, { allowLoopback: true, lease: other })
+      expect((await failureOf(otherProtocol.openSession(target, { name: "oc-other-run", path: "/content/b.ipynb" }, fresh())))?.code).toBe("RUNTIME_BUSY")
+      const claim = await other.claim(RUNTIME_ID)
+      expect(claim).toEqual({ owner: false, holder: process.pid })
+      expect(fixture.ledger.runtimes.get(RUNTIME_ID)?.tainted).toBeUndefined()
+      other.dispose()
+    } finally {
+      await fixture.close()
+      rmSync(leaseDir, { recursive: true, force: true })
+    }
+  })
+
+  it("LOW 1: a session with the plugin's name but another client's id is foreign, not adopted", async () => {
+    const fixture = await createRuntimeFixture()
+    try {
+      await fixture.own()
+      const target = { account: "default", runtimeId: RUNTIME_ID }
+      const first = await fixture.ports.runtime.openSession(target, { name: "oc-nonce-1-run", path: "/content/a.ipynb" }, fresh())
+      await first.close()
+      // Another client opened a session under the copied name, with its own id.
+      fixture.jupyter.replaceSessionId("oc-nonce-1-run")
+      expect((await failureOf(fixture.ports.runtime.openSession(target, { name: "oc-nonce-1-run", path: "/content/a.ipynb" }, fresh())))?.code).toBe("RUNTIME_SHARED")
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("LOW 6: a held handle re-checks the ledger, so a tainted runtime refuses its next execute", async () => {
+    const fixture = await createRuntimeFixture()
+    try {
+      await fixture.own()
+      const target = { account: "default", runtimeId: RUNTIME_ID }
+      const session = await fixture.ports.runtime.openSession(target, { name: "oc-nonce-1-run", path: "/content/a.ipynb" }, fresh())
+      await fixture.ledger.taint(RUNTIME_ID, { code: "RUNTIME_SHARED", at: "2026-11-17T09:30:00.000Z" })
+      expect((await failureOf(collect(session.execute("print(1)", { allowStdin: false, silent: false, storeHistory: true }, fresh()))))?.code).toBe("RUNTIME_SHARED")
+    } finally {
+      await fixture.close()
+    }
+  })
+
   it("H4: a call's own signal stops the run, and ends the stream with CANCELLED rather than a quiet finish", async () => {
     const fixture = await createRuntimeFixture()
     try {
@@ -198,27 +345,6 @@ describe("the runtime protocol", () => {
       expect(messages.map((message) => message.msgType)).toEqual(["stream", "status"])
       expect(messages.some((message) => message.content.text === "replayed\n")).toBe(false)
       expect(new Set(messages.map((message) => message.parentMsgId)).size).toBe(1)
-    } finally {
-      await fixture.close()
-    }
-  })
-
-  it("writes and reads a runtime file with a contents write and a ranged file read", async () => {
-    const fixture = await createRuntimeFixture({ allowHidden: true })
-    try {
-      await fixture.own()
-      const target = { account: "default", runtimeId: RUNTIME_ID }
-      const payload = new TextEncoder().encode("value\n1,2,3\n")
-      const written = await fixture.ports.runtime.files.write(target, "/content/outputs/data.csv", (async function* () {
-        yield payload
-      })(), fresh())
-      expect(written.bytes).toBe(payload.byteLength)
-      const chunks: Uint8Array[] = []
-      for await (const chunk of await fixture.ports.runtime.files.read(target, "/content/outputs/data.csv", fresh())) chunks.push(chunk)
-      expect(Buffer.concat(chunks).toString("utf8")).toBe("value\n1,2,3\n")
-      expect(fixture.jupyter.requests.some((request) => request.headers["range"] === "bytes=0-")).toBe(true)
-      const listed = await fixture.ports.runtime.files.list(target, "/content/outputs", fresh())
-      expect(listed?.map((entry) => entry.path)).toEqual(["content/outputs/data.csv"])
     } finally {
       await fixture.close()
     }

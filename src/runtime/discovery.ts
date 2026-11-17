@@ -8,15 +8,18 @@
  *   answer `{ runtimeSpecs: [{ key, eligible }] }`), `getSubscription` (GET `v1beta/subscription`, answer `{ tier }`).
  *   `Runtime` = `{ name, runtimeSpec: Key, version?, connectionInfo: { url, token, expireTime } }`; `Key` =
  *   `{ variant, shape, accelerator }`; the proxy token header is `X-Colab-Runtime-Proxy-Token`.
+ * - Colab API v1, same revision: `colaboratory.operations.get` and `colaboratory.operations.wait` on `v1/operations/{id}`
+ *   — the create's long-running operation is followed there (design §9.5's `operations.wait`).
  * - Jupyter Server REST (`/api/kernels`, `/api/sessions`, `/api/contents`, `/files/{path}`) and the kernel WebSocket
- *   `/api/kernels/{kernel_id}/channels?session_id={id}`, as the `Runtime` description points clients at.
- * - colabtools HEAD, read 17 Nov 2026: the credential artefacts `auth.py` writes (`_get_adc_path`,
- *   `_install_adc`) and `drive.py` mounts (`fuse.drive`), and the environment markers `auth.py` and `drive.py` read
- *   (the USE_AUTH_EPHEM switch, the TBE_EPHEM_CREDS_ADDR and TBE_CREDS_ADDR addresses, and the
- *   GOOGLE_APPLICATION_CREDENTIALS variable).
+ *   `/api/kernels/{kernel_id}/channels?session_id={id}`, as the `Runtime` description points clients at. A contents
+ *   save over 50 MB is sent in pieces: `chunk: 1` starts, `chunk: -1` ends, as the default `AsyncLargeFileManager`
+ *   saves them and as Google's Colab MCP tells its clients to.
+ * - colabtools HEAD, read 17 Nov 2026: the credential artefacts `auth.py` writes (`_get_adc_path`, `_install_adc`),
+ *   the `fuse.drive` mount `drive.py` makes, and the one trace ephemeral auth leaves in gcloud's config
+ *   (`_enable_metadata_server_for_gcloud` unsets a property and deletes `$CLOUDSDK_CONFIG/gce`).
  *
  * The drift workflow (`.github/workflows/drift.yml`) re-reads all of it weekly and fails when a method, field, path or
- * marker this file names is gone, so a Google change is a red build and not a quiet wrong answer. Live checks L2, L5,
+ * fact this file names is gone, so a Google change is a red build and not a quiet wrong answer. Live checks L2, L5,
  * L6, L9 and L15–L17 resolve what the documents leave open; each one is marked TODO at its use site.
  */
 
@@ -35,6 +38,9 @@ export const COLAB_API_PATHS = {
   subscription: "v1beta/subscription",
 } as const
 
+/** The long-running-operation paths, without the service root: `v1/operations/{id}` and its `:wait` (design §9.5). */
+export const COLAB_OPERATION_PATHS = { get: "v1/operations", wait: "v1/operations" } as const
+
 /** The Jupyter server paths, without the runtime URL. */
 export const JUPYTER_PATHS = {
   kernels: "api/kernels",
@@ -47,12 +53,12 @@ export const JUPYTER_PATHS = {
 export const PROXY_TOKEN_HEADER = "X-Colab-Runtime-Proxy-Token"
 
 /**
- * Hosts that may receive the proxy token: only URLs that are https on a Google-owned suffix. The exact host L2 records
- * goes into this list; until then every other host, a plain-http URL and a URL carrying credentials is
- * RUNTIME_UNVERIFIED and the token is not sent (design §7.4, "the header is attached only when the URL is https on a
- * host in the allow-list recorded by L2").
+ * Hosts that may receive the proxy token: only URLs that are https on a Google-owned suffix. Narrowed from the first
+ * pass after review: no bare `google.com`, because the runtime proxy is not served from it, and L2 pins the exact
+ * suffix before release (design §7.4, "the header is attached only when the URL is https on a host in the allow-list
+ * recorded by L2"). Anything else is RUNTIME_UNVERIFIED and the token is not sent.
  */
-export const RUNTIME_HOST_SUFFIXES: readonly string[] = ["colab.dev", "googleusercontent.com", "google.com", "colab.research.google.com"]
+export const RUNTIME_HOST_SUFFIXES: readonly string[] = ["colab.dev", "googleusercontent.com"]
 
 /**
  * The credential files colabtools and gcloud write on a runtime (design §7.4 step 3), as paths below the runtime's
@@ -68,19 +74,29 @@ export const CREDENTIAL_FILES: readonly string[] = [
 ]
 
 /**
- * The environment markers colabtools reads when ephemeral credentials are in play (design §7.4 step 3), presence only:
- * auth.py branches on the USE_AUTH_EPHEM switch, drive.py reads the TBE_EPHEM_CREDS_ADDR and TBE_CREDS_ADDR variables,
- * and a set GOOGLE_APPLICATION_CREDENTIALS is how colabtools points libraries at the ADC file it installed.
+ * gcloud's config directory on a Colab runtime (the SDK config variable), and the one file in it whose disappearance means
+ * ephemeral auth was enabled: `auth.py`'s `_enable_metadata_server_for_gcloud` deletes `gce`. The probe baselines the
+ * directory's listing and digests at calibration and reports a change, never a presence — a stock runtime already has
+ * `active_config` and `config_sentinel` here.
  */
-// Spelled as one list and split, because src/ may hold no upper-snake string literal that is not an error code or a
-// Google enum value (test/unit/errors.test.ts). These are colabtools' environment variable names, not codes.
-export const EPHEMERAL_MARKERS: readonly string[] = "USE_AUTH_EPHEM TBE_EPHEM_CREDS_ADDR TBE_CREDS_ADDR GOOGLE_APPLICATION_CREDENTIALS".split(" ")
+export const GCLOUD_CONFIG_DIR = "content/.config"
+/** The file ephemeral auth removes (design §7.4 step 3, pinned by L17). */
+export const GCLOUD_GCE_FILE = "gce"
+/** The marker name a change to that directory reports; the only observable trace of an ephemeral grant. */
+export const GCLOUD_CONFIG_MARKER = "gcloud-config-changed"
+
+/**
+ * The environment variables colabtools reads are deliberately **not** probe markers (review H1): every standard Colab
+ * runtime carries the ephemeral-credential addresses (drive.py indexes them with no default), and the ADC variable is
+ * written into the calling kernel's own environment, which the probe kernel never sees. The fake runtime carries the
+ * stock environment too, so a check that reads those variables again fails its tests.
+ */
 
 /** The Drive mount point the REST fallback looks at even when hidden paths are blind (design §7.4 step 3). */
 export const DRIVE_MOUNT_PATH = "content/drive"
 
 /** The directory that tells REST whether hidden paths are visible on this runtime (design §7.4 step 2). */
-export const HIDDEN_PATHS_PROBE = "content/.config"
+export const HIDDEN_PATHS_PROBE = GCLOUD_CONFIG_DIR
 
 /**
  * The colabtools facts above were read at this version: the repository's HEAD on 17 Nov 2026. The probe snippet's

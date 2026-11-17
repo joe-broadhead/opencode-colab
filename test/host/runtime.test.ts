@@ -88,7 +88,7 @@ describe("the host runtime and Colab's kernel channel", () => {
 
     // The socket opened before the refresh is still the one carrying messages: no second upgrade, one session.
     const second: string[] = []
-    for await (const message of session.execute(probeSnippet(), { allowStdin: false, silent: true, storeHistory: false }, signal)) second.push(message.msgType)
+    for await (const message of session.execute(probeSnippet({ mode: "compare", epoch: "x" }), { allowStdin: false, silent: true, storeHistory: false }, signal)) second.push(message.msgType)
     expect(second).toEqual(["stream", "status"])
     expect(jupyter.upgrades).toHaveLength(1)
     expect((await protocol.sessions(target, signal)).map((entry) => entry.name)).toEqual(["oc-nonce-host-run"])

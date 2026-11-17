@@ -10,6 +10,8 @@ import { ColabError } from "../domain/errors.js"
 export interface TextSocket {
   send(text: string): void
   close(): void
+  /** True once the socket has closed, however it closed: the next `openSession` by name re-opens it (review M3). */
+  isClosed(): boolean
   /** A fresh view of the frames still to come; one consumer at a time, as a kernel session allows one run. */
   readonly messages: () => AsyncIterable<string>
   /** Resolves when the socket has closed, however it closed. */
@@ -99,6 +101,8 @@ export async function connectTextSocket(input: ConnectOptions): Promise<TextSock
     })
   })
 
+  // The opening signal bounds opening only: once the socket is open it lives until close() or the runtime ends, so a
+  // Stop on the call that opened it does not kill the next run (review M3).
   const onAbort = () => {
     frames.fail(new ColabError("CANCELLED"))
     try {
@@ -109,6 +113,7 @@ export async function connectTextSocket(input: ConnectOptions): Promise<TextSock
   }
   const detach = () => signal.removeEventListener("abort", onAbort)
   signal.addEventListener("abort", onAbort, { once: true })
+  let isShut = false
 
   socket.addEventListener("message", (event: MessageEvent) => {
     const data = (event as MessageEvent).data
@@ -116,10 +121,12 @@ export async function connectTextSocket(input: ConnectOptions): Promise<TextSock
   })
   socket.addEventListener("close", () => {
     detach()
+    isShut = true
     frames.end()
   })
   socket.addEventListener("error", () => {
     detach()
+    isShut = true
     frames.fail(new ColabError("UNAVAILABLE", "The kernel channel failed to open or dropped."))
   })
 
@@ -142,6 +149,8 @@ export async function connectTextSocket(input: ConnectOptions): Promise<TextSock
     }
     const onOpen = () => {
       cleanup()
+      // Opening is over: the signal must not close the socket any more.
+      detach()
       resolve()
     }
     const onError = () => {
@@ -162,18 +171,20 @@ export async function connectTextSocket(input: ConnectOptions): Promise<TextSock
 
   return {
     send(text: string) {
-      if (signal.aborted) throw new ColabError("CANCELLED")
+      if (isShut) throw new ColabError("KERNEL_DIED", "The kernel channel is closed.")
       socket.send(text)
     },
     close() {
       detach()
       frames.end()
+      isShut = true
       try {
         socket.close()
       } catch {
         // Already closed.
       }
     },
+    isClosed: () => isShut,
     messages: () => frames.iterate(),
     closed,
     closeInfo: () => ({ ...(closeCode !== undefined ? { code: closeCode } : {}), ...(closeReason !== undefined ? { reason: closeReason } : {}) }),

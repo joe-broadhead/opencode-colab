@@ -47,6 +47,8 @@ export interface FakeColabApi {
   /** requestId → runtimeId, so a retried create joins. */
   readonly joins: Map<string, string>
   readonly requests: { readonly method: string; readonly path: string; readonly query: string; readonly body: string; readonly authorization?: string }[]
+  /** How many `operations/{id}:wait` calls the client made. */
+  readonly operationsWaited: number
   /** Fail the next `count` requests whose method and path match (default once). */
   failNext(match: { readonly method: string; readonly path: RegExp }, failure: FakeFailure, count?: number): void
   /** The token every new `connectionInfo` carries. */
@@ -72,6 +74,7 @@ export async function createFakeColabApi(options: FakeColabApiOptions): Promise<
   const operations = new Map<string, { polls: number; runtimeId: string; error?: unknown; done: boolean }>()
   const failures: { method: string; path: RegExp; failure: FakeFailure; count: number }[] = []
   let operationSeq = 0
+  let operationsWaited = 0
   const createPolls = options.createPolls ?? 0
 
   const api: Partial<FakeColabApi> & { proxyToken: string; tier: string } = {
@@ -180,6 +183,19 @@ export async function createFakeColabApi(options: FakeColabApiOptions): Promise<
         response.writeHead(200, { "content-type": "application/json" })
         return response.end("{}")
       }
+      // `colaboratory.operations.wait` (v1, AIP-151) and `get`; the v1beta path answers too, for the client's fallback.
+      const waitMatch = /^v1\/operations\/([^/:]+):wait$/.exec(path)
+      if (waitMatch && method === "POST") {
+        const name = `operations/${waitMatch[1]}`
+        const operation = operations.get(name)
+        if (!operation) return json(response, 404, errorBody(5, "NOT_FOUND", "operation not found"))
+        operationsWaited += 1
+        if (!operation.done) {
+          operation.polls -= 1
+          if (operation.polls <= 0) operation.done = true
+        }
+        return json(response, 200, operationResource(name, operation))
+      }
       const operationMatch = /^(?:v1beta\/|v1\/)?operations\/([^/]+)$/.exec(path)
       if (operationMatch && method === "GET") {
         const name = `operations/${operationMatch[1]}`
@@ -210,6 +226,9 @@ export async function createFakeColabApi(options: FakeColabApiOptions): Promise<
     runtimes,
     joins,
     requests,
+    get operationsWaited() {
+      return operationsWaited
+    },
     failNext(match, failure, count = 1) {
       failures.push({ ...match, failure, count })
     },

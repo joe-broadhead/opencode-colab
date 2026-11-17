@@ -13,7 +13,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import type { Duplex } from "node:stream"
-import { CREDENTIAL_FILES, EPHEMERAL_MARKERS } from "../../src/runtime/discovery.js"
+import { CREDENTIAL_FILES, GCLOUD_CONFIG_DIR } from "../../src/runtime/discovery.js"
 import { PROBE_SENTINEL } from "../../src/runtime/probe.js"
 
 export interface FakeIopub {
@@ -25,13 +25,21 @@ export interface FakeKernelState {
   kernelId: string
   sessionId: string
   executionCount: number
-  /** Credential artefacts present on the "filesystem", as paths from `CREDENTIAL_FILES`. */
-  readonly credentialFiles: Set<string>
-  readonly ephemeralMarkers: Set<string>
-  mounted: boolean
+  /** `/proc/mounts` as this runtime sees it: `source|mountpoint|type`, stock entries included. */
+  mounts: string[]
+  /** Colab's real stock environment, carried so a probe that reads it again fails its tests (review H1). */
+  readonly environment: Record<string, string>
   ramBytes: number
   /** The proxy's own connection to the kernel, so a baseline is never mistaken for another client. */
   readonly proxyConnections: number
+}
+
+/** The probe kernel's stored baseline, as ipykernel's globals would hold it. */
+interface FakeBaseline {
+  readonly epoch: string
+  readonly mounts: readonly string[]
+  readonly files: readonly string[]
+  readonly config: unknown
 }
 
 export interface FakeJupyterOptions {
@@ -145,6 +153,12 @@ export interface FakeJupyter {
   readonly watchdogs: number[]
   readonly watchdogCancels: number
   readonly executed: { readonly code: string; readonly allowStdin: unknown; readonly silent: unknown }[]
+  /** The `chunk` numbers a chunked contents write sent, in order. */
+  readonly chunksSeen: number[]
+  /** Clears the probe kernel's globals and puts the execution count back at 1, as a restart does. */
+  restartProbeKernel(): void
+  /** Gives the named session a new id under the same name, as another client opening the copied name would. */
+  replaceSessionId(sessionName: string): string
   /** Extra sessions a test wants on the runtime (a foreign client's). */
   readonly foreignSessions: Session[]
   /** Extra connections a test wants on a kernel. */
@@ -184,14 +198,17 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
   let probeExtraOutput = ""
   const emit = new Map<string, readonly FakeIopub[]>()
   const sockets = new Set<Duplex>()
+  const uploads = new Map<string, Buffer[]>()
+  const chunksSeen: number[] = []
 
   const state: FakeKernelState = {
     kernelId: "",
     sessionId: "",
     executionCount: 0,
-    credentialFiles: new Set(),
-    ephemeralMarkers: new Set(),
-    mounted: false,
+    // A stock Colab runtime: container mounts (one of them FUSE) and the ephemeral-credential addresses in the
+    // environment. None of this is evidence of a credential (review H1).
+    mounts: ["overlay|/|overlay", "proc|/proc|proc", "tmpfs|/dev/shm|tmpfs", "lxcfs|/proc/cpuinfo|fuse.lxcfs"],
+    environment: { USE_AUTH_EPHEM: "0", TBE_EPHEM_CREDS_ADDR: "http://169.254.169.254/tbe/ephemeral", TBE_CREDS_ADDR: "http://169.254.169.254/tbe" },
     ramBytes: 96 * 1024 * 1024,
     proxyConnections: options.proxyConnections ?? 1,
   }
@@ -202,14 +219,58 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
     return kernel
   }
 
-  const probeLine = () =>
-    `${PROBE_SENTINEL} ${JSON.stringify({
-      mounts: state.mounted,
-      credential_files: [...state.credentialFiles].sort(),
-      ephemeral_markers: [...state.ephemeralMarkers].sort(),
-      ram_bytes: state.ramBytes,
+  /**
+   * What the probe snippet would print, computed from this fake's filesystem, mounts and per-kernel globals — including
+   * a restart, which clears them and resets the execution count the way ipykernel does (review M1).
+   */
+  const baselines = new Map<string, FakeBaseline>()
+
+  const configSnapshot = () => {
+    const prefix = `${GCLOUD_CONFIG_DIR}/`
+    const names = [...contents.keys()].filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length)).sort()
+    if (names.length === 0) return null
+    const digest = createHash("sha256")
+    for (const name of names) digest.update(`${name}:${contents.get(prefix + name)!.byteLength}`)
+    return { names, digest: digest.digest("hex") }
+  }
+
+  const driveMount = (mounts: readonly string[]) =>
+    mounts.some((entry) => {
+      const [source, mount, type] = entry.split("|")
+      return Boolean(type?.startsWith("fuse") && `${source}${mount}${type}`.toLowerCase().includes("drive"))
+    })
+
+  const probeAnswer = (code: string, kernelId: string): string => {
+    const request = JSON.parse(/_OC_REQUEST = (\{[^\n]*\})/.exec(code)?.[1] ?? "{}") as { mode?: string; epoch?: string }
+    const files = CREDENTIAL_FILES.filter((path) => contents.has(path))
+    if (request.mode === "baseline") {
+      baselines.set(kernelId, { epoch: request.epoch ?? "", mounts: [...state.mounts], files, config: configSnapshot() })
+      return JSON.stringify({
+        mode: "baseline",
+        epoch: request.epoch ?? "",
+        drive_mount: driveMount(state.mounts),
+        files,
+        execution_count: state.executionCount,
+        ram_bytes: state.ramBytes,
+      })
+    }
+    const stored = baselines.get(kernelId)
+    if (!stored) {
+      return JSON.stringify({ mode: "compare", epoch: "", epoch_ok: false, restarted: true, drive_mount: false, mounts_changed: false, config_changed: false, added_files: [], execution_count: state.executionCount })
+    }
+    const config = configSnapshot()
+    return JSON.stringify({
+      mode: "compare",
+      epoch: stored.epoch,
+      epoch_ok: stored.epoch === request.epoch,
+      restarted: false,
+      drive_mount: driveMount(state.mounts),
+      mounts_changed: state.mounts.some((entry) => !stored.mounts.includes(entry)),
+      config_changed: JSON.stringify(stored.config) !== JSON.stringify(config),
+      added_files: files.filter((path) => !stored.files.includes(path)),
       execution_count: state.executionCount,
-    })}`
+    })
+  }
 
   const json = (response: ServerResponse, status: number, body: unknown) => {
     const text = JSON.stringify(body)
@@ -244,8 +305,10 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
       if (!kernel) return notFound(response)
       if (interrupt[2] === "interrupt") interrupts.push(kernel.id)
       else {
+        // ipykernel on restart: a new namespace (globals gone) and an execution count back at 1 (review M1).
         kernel.executionState = "idle"
-        state.executionCount = 0
+        baselines.delete(kernel.id)
+        state.executionCount = 1
       }
       response.writeHead(204)
       return response.end()
@@ -284,9 +347,27 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
         })
       }
       if (method === "PUT") {
-        const input = JSON.parse(body.toString("utf8") || "{}") as { format?: string; content?: string }
+        const input = JSON.parse(body.toString("utf8") || "{}") as { format?: string; content?: string; chunk?: number }
         if (input.format !== "base64" || typeof input.content !== "string") return json(response, 400, { message: "bad contents write" })
         const bytes = Buffer.from(input.content, "base64")
+        if (typeof input.chunk === "number") {
+          // Jupyter's AsyncLargeFileManager: chunk 1 starts, -1 ends, the pieces in between append.
+          chunksSeen.push(input.chunk)
+          if (input.chunk === 1) {
+            uploads.set(target, [bytes])
+            return json(response, 201, { type: "file", path: target, size: bytes.length })
+          }
+          const parts = uploads.get(target)
+          if (!parts) return json(response, 400, { message: "chunk without a first piece" })
+          parts.push(bytes)
+          if (input.chunk === -1) {
+            const whole = Buffer.concat(parts)
+            contents.set(target, whole)
+            uploads.delete(target)
+            return json(response, 201, { type: "file", path: target, size: whole.length })
+          }
+          return json(response, 201, { type: "file", path: target, size: bytes.length })
+        }
         contents.set(target, bytes)
         return json(response, 201, { type: "file", path: target, size: bytes.length })
       }
@@ -361,7 +442,7 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
       executed.push({ code, allowStdin: content.allow_stdin, silent: content.silent })
       const silent = content.silent === true
       if (!silent) state.executionCount += 1
-      if (code.includes(PROBE_SENTINEL)) return finish(parent, `${probeLine()}\n${probeExtraOutput}`)
+      if (code.includes(PROBE_SENTINEL)) return finish(parent, `${PROBE_SENTINEL} ${probeAnswer(code, kernel.id)}\n${probeExtraOutput}`)
       if (code.includes("_oc_watchdog_start")) {
         const seconds = Number(/_oc_watchdog_start\((\d+)\)/.exec(code)?.[1] ?? 0)
         watchdogs.push(seconds)
@@ -449,7 +530,9 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
 
   const [jupyterUrl, url] = await Promise.all([listen(server), listen(proxy)])
   // Seed the runtime with the usual Colab directories; the probe's own session gets its kernel lazily.
-  contents.set("content/.config/README.txt", Buffer.from("hidden on stock Jupyter\n"))
+  // A stock runtime's gcloud config: present, but holding no credential (review H1).
+  contents.set("content/.config/active_config", Buffer.from("default\n"))
+  contents.set("content/.config/config_sentinel", Buffer.from(""))
 
   return {
     url,
@@ -472,6 +555,19 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
       return extraConnections
     },
     emit,
+    chunksSeen,
+    restartProbeKernel() {
+      for (const kernel of kernels.values()) baselines.delete(kernel.id)
+      state.executionCount = 1
+    },
+    replaceSessionId(sessionName: string) {
+      const session = [...sessions.values()].find((entry) => entry.name === sessionName)
+      if (!session) throw new Error(`no session named ${sessionName}`)
+      const id = `session-${randomUUID().slice(0, 8)}`
+      sessions.set(id, { ...session, id })
+      sessions.delete(session.id)
+      return id
+    },
     get probeExtraOutput() {
       return probeExtraOutput
     },
@@ -509,5 +605,3 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
 
 /** The credential file names the fake can hold, so a test names one without restating the list. */
 export const FAKE_CREDENTIAL_FILES = CREDENTIAL_FILES
-/** The environment markers the fake kernel can report. */
-export const FAKE_EPHEMERAL_MARKERS = EPHEMERAL_MARKERS
