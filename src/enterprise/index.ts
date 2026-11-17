@@ -1,31 +1,33 @@
-// Package E, Enterprise (docs/v1-design.md, File ownership): jobs (plans, ids, polling, GCS capture, cancel),
-// schedules (plans, bounds, overlap, displayName reconcile), colab_pause, Enterprise runtime list and stop/delete
-// plans, the price table and estimates, colab_jobs / colab_schedules, and the Enterprise branches of colab_execution,
-// colab_cancel and colab_download (EnterpriseRuns). Day 0 stubs answer NOT_IMPLEMENTED.
+// Package E, Enterprise (docs/v1-design.md, File ownership): jobs (plans, ids, polling, GCS capture, cancel), schedules
+// (plans, bounds, overlap, displayName reconcile), colab_pause, Enterprise runtime list and stop/delete plans, the price
+// table and estimates, colab_jobs / colab_schedules, and the Enterprise branches of colab_execution, colab_cancel and
+// colab_download (EnterpriseRuns). The Vertex and Cloud Storage clients are here too, over `fetch`; every test uses fakes.
 import type { PortEnv } from "../deps.js"
 import type { EnterpriseRuns, GcsApi, VertexApi } from "../ports.js"
-import { notImplemented, stubPort } from "../stub.js"
-import type { PlanHandler, PlanHandlers, ToolHandlers } from "../tools/types.js"
+import type { PlanHandlers, ToolHandlers } from "../tools/types.js"
+import { createGcs } from "./gcs.js"
+import { jobsHandler } from "./jobs.js"
+import { pauseHandler } from "./pause.js"
+import { PLAN_HANDLERS as JOB_PLAN_HANDLERS } from "./plans.js"
+import { createEnterpriseRuns, type EnterpriseRunsEnv } from "./runs.js"
+import { PLAN_HANDLERS as SCHEDULE_PLAN_HANDLERS } from "./schedule-plans.js"
+import { schedulesHandler } from "./schedules.js"
+import { createVertex } from "./vertex.js"
 
 export const HANDLERS: ToolHandlers = {
-  jobs: { run: async () => notImplemented("colab_jobs") },
-  schedules: { run: async () => notImplemented("colab_schedules") },
-  pause: { run: async () => notImplemented("colab_pause") },
+  jobs: jobsHandler,
+  schedules: schedulesHandler,
+  pause: pauseHandler,
 }
-
-const stubPlan = (action: string): PlanHandler<never> => ({ preview: async () => notImplemented(`The ${action} plan`), commit: async () => notImplemented(`The ${action} plan`) })
 
 export const PLAN_HANDLERS: PlanHandlers = {
-  "runtime.stop": { enterprise: stubPlan("runtime.stop") },
-  "runtime.delete": { enterprise: stubPlan("runtime.delete") },
-  "job.create": { enterprise: stubPlan("job.create") },
-  "job.delete": { enterprise: stubPlan("job.delete") },
-  "schedule.create": { enterprise: stubPlan("schedule.create") },
-  "schedule.update": { enterprise: stubPlan("schedule.update") },
-  "schedule.resume": { enterprise: stubPlan("schedule.resume") },
-  "schedule.delete": { enterprise: stubPlan("schedule.delete") },
+  ...JOB_PLAN_HANDLERS,
+  ...SCHEDULE_PLAN_HANDLERS,
 }
 
-export function createEnterprisePorts(_env: PortEnv): { readonly vertex: VertexApi; readonly gcs: GcsApi; readonly enterprise: EnterpriseRuns } {
-  return { vertex: stubPort<VertexApi>("VertexApi"), gcs: stubPort<GcsApi>("GcsApi"), enterprise: stubPort<EnterpriseRuns>("EnterpriseRuns") }
+export function createEnterprisePorts(env: PortEnv): { readonly vertex: VertexApi; readonly gcs: GcsApi; readonly enterprise: EnterpriseRuns } {
+  const vertex = createVertex(env)
+  const gcs = createGcs(env)
+  const runs: EnterpriseRunsEnv = { ...env, vertex, gcs }
+  return { vertex, gcs, enterprise: createEnterpriseRuns(runs) }
 }
