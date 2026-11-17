@@ -106,6 +106,7 @@ export const OPERATIONS = {
   jobsCreate: "aiplatform.projects.locations.notebookExecutionJobs.create",
   jobsDelete: "aiplatform.projects.locations.notebookExecutionJobs.delete",
   jobOperationsCancel: "aiplatform.projects.locations.notebookExecutionJobs.operations.cancel",
+  jobOperationsList: "aiplatform.projects.locations.notebookExecutionJobs.operations.list",
   schedulesList: "aiplatform.projects.locations.schedules.list",
   schedulesGet: "aiplatform.projects.locations.schedules.get",
   schedulesCreate: "aiplatform.projects.locations.schedules.create",

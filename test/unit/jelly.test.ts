@@ -81,8 +81,7 @@ async function assertedActions(): Promise<Map<ToolName, string[]>> {
       input = { planId: plan.id }
     }
     const before = permission.requests.length
-    const result = (await runTool(name, input, call(`call_${name}`), runner)) as { error?: string }
-    expect(result.error, `colab_${name} ran its stub`).toBe("NOT_IMPLEMENTED")
+    await runTool(name, input, call(`call_${name}`), runner)
     out.set(name, permission.requests.slice(before).map((request) => request.action))
   }
   return out
@@ -112,7 +111,12 @@ describe("the jelly declaration", () => {
 
   it("asserted equals declared: each tool asserts exactly its own action, once, before anything runs", async () => {
     const asserted = await assertedActions()
-    for (const tool of TOOLS) expect(asserted.get(tool.name as ToolName), tool.name).toEqual([actionOf(tool.name)])
+    // Package-neutral: a built tool also asserts colab.read for its provider reads; its own action comes first, once.
+    for (const tool of TOOLS) {
+      const actions = asserted.get(tool.name as ToolName) ?? []
+      expect(actions[0], tool.name).toBe(actionOf(tool.name))
+      expect(actions.filter((action) => action !== READ_ACTION), tool.name).toEqual([actionOf(tool.name)])
+    }
     const all = new Set([...[...asserted.values()].flat(), READ_ACTION, ...sourceMethods().map((method) => method.action)])
     expect([...all].sort()).toEqual([...DECLARED_ACTIONS].sort())
   })

@@ -95,6 +95,7 @@ describe("the wrapper", () => {
     expect(await runTool("jobs", { account: "nope" }, call(), runner)).toMatchObject({ state: "refused", error: "ACCOUNT_UNKNOWN" })
     expect(await runTool("jobs", {}, call(), runner)).toMatchObject({ state: "refused", error: "ACCOUNT_REQUIRED" })
     expect(permission.requests).toHaveLength(0)
+    // `work` is a named account, so its access is read: a read tool still asserts and runs on it.
     expect(await runTool("jobs", { account: "work" }, call(), runner)).toEqual({ state: "failed", error: "RATE_LIMITED", message: "Quota.", next: "Make the same call after that delay.", retryAfterSec: 30 })
   })
 

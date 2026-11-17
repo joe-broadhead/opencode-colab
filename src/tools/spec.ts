@@ -80,6 +80,21 @@ export function handlerContext(runner: Runner, call: ToolCall, account: HandlerC
   }
 }
 
+/**
+ * An account with `access: "read"` makes no change (design §4): every change tool, colab_plan, and every plan commit
+ * refuse it here, before any assert or network call. Scopes cannot do this for Enterprise (cloud-platform has no read
+ * form), Drive (drive.file at both levels) or runs (the proxy token comes with colaboratory.readonly).
+ */
+export function assertWritable(account: Pick<HandlerContext["account"], "alias" | "access">): void {
+  if (account.access !== "read") return
+  throw new ColabError("ACCOUNT_READ_ONLY", `The account "${account.alias}" has access read, so the plugin makes no change on it.`, {
+    next: `Set accounts.${account.alias}.access to write and sign in again.`,
+  })
+}
+
+/** The tools refused on a read account: the eight changes, and colab_plan, whose only purpose is a change. */
+export const needsWrite = (name: ToolName) => name === "plan" || toolEntry(name).class !== "read"
+
 /** Runs one tool call: the same path for the model's tool and a script's RPC method. */
 export async function runTool(name: ToolName, raw: unknown, call: ToolCall, runner: Runner): Promise<unknown> {
   try {
@@ -92,6 +107,7 @@ export async function runTool(name: ToolName, raw: unknown, call: ToolCall, runn
       return await handler.run(input as never, base as HandlerContext)
     }
     const account = resolveAccount(runner.deps.options, typeof input.account === "string" ? input.account : undefined)
+    if (needsWrite(name)) assertWritable(account)
     const ctx = handlerContext(runner, call, account)
     const resources = await resourcesFor(name, input, account.alias, runner.deps.ledger)
     const metadata = { account: account.alias, ...(await handler.metadata?.(input as never, ctx)) }

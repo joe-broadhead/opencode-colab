@@ -339,7 +339,8 @@ export const DownloadInput = z
 export const DownloadOutput = result({ path: z.string(), bytes: z.number().int().nonnegative(), sha256: z.string(), charts: z.string().optional() })
 
 export const PauseInput = z.object({ account: Account, schedule: z.string().min(1).max(512) }).strict()
-export const PauseOutput = result({ schedule: z.string(), state: z.literal("PAUSED") })
+/** `state` is the call's outcome, as in every result; the schedule's own state is `scheduleState`. */
+export const PauseOutput = result({ schedule: z.string(), scheduleState: z.literal("PAUSED") })
 
 /** colab_write and colab_delete take only the plan id. */
 export const CommitInput = z.object({ planId: PlanId }).strict()

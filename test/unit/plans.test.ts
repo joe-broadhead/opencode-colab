@@ -90,7 +90,7 @@ describe("the routing", () => {
   })
 
   it("answers refused, unknown and other-backend actions with their own codes, and bad params as INPUT_INVALID", async () => {
-    const { runner } = setup(handlers, { accounts: { work: { backend: "enterprise", project: "p", region: "us-central1" }, default: {} } })
+    const { runner } = setup(handlers, { accounts: { work: { backend: "enterprise", project: "p", region: "us-central1", access: "write" }, default: {} } })
     expect(await runTool("plan", { action: "share", params: {} }, call(), runner)).toMatchObject({ error: "SHARE_UNSUPPORTED" })
     expect(await runTool("plan", { action: "template.create" }, call(), runner)).toMatchObject({ error: "ACTION_UNSUPPORTED" })
     expect(await runTool("plan", { action: "teleport" }, call(), runner)).toMatchObject({ error: "ACTION_UNSUPPORTED" })
@@ -110,7 +110,7 @@ describe("the routing", () => {
   })
 
   it("commits with colab_write and colab_delete when there are two named accounts and none is default", async () => {
-    const { runner, permission } = setup(handlers, { accounts: { home: {}, work: { backend: "enterprise", project: "p", region: "us-central1" } } })
+    const { runner, permission } = setup(handlers, { accounts: { home: { access: "write" }, work: { backend: "enterprise", project: "p", region: "us-central1", access: "write" } } })
     const created = (await runTool("plan", { action: "runtime.create", account: "home", params: { spec: CPU } }, call(), runner)) as { planId: string }
     expect(await runTool("write", { planId: created.planId }, call(), runner)).toMatchObject({ state: "ok", result: { created: "NONE" } })
     const released = (await runTool("plan", { action: "runtime.delete", account: "home", params: { runtime: "oc-01" } }, call(), runner)) as { planId: string }
@@ -124,10 +124,54 @@ describe("the routing", () => {
   it("gives a commit's handler the plan's account, not the caller's", async () => {
     const seen: string[] = []
     const local: PlanHandlers = { "drive.trash": { enterprise: { preview: async () => ({ preview: {}, payload: {}, fingerprint: {} }), commit: async (_plan, ctx) => (seen.push(ctx.account.alias), {}) } } }
-    const { runner } = setup(local, { accounts: { work: { backend: "enterprise" }, default: {} } })
+    const { runner } = setup(local, { accounts: { work: { backend: "enterprise", access: "write" }, default: {} } })
     const planned = (await runTool("plan", { action: "drive.trash", account: "work", params: { drive: "file-1" } }, call(), runner)) as { planId: string }
     await runTool("delete", { planId: planned.planId }, call(), runner)
     expect(seen).toEqual(["work"])
     expect(handlerContext).toBeTypeOf("function")
+  })
+})
+
+describe("an account with access read (design §4)", () => {
+  const readOnly = {
+    accounts: {
+      home: { access: "read" },
+      work: { backend: "enterprise", project: "p", region: "us-central1", access: "read" },
+      default: {},
+    },
+  }
+  const refusesBeforeAnything = async (tool: string, input: Record<string, unknown>, permission: RecordingPermission, runner: Runner) => {
+    const before = permission.requests.length
+    expect(await runTool(tool as never, input, call(), runner), `${tool} ${JSON.stringify(input)}`).toMatchObject({ state: "refused", error: "ACCOUNT_READ_ONLY", next: expect.stringMatching(/^Set accounts\.(home|work)\.access to write and sign in again\.$/) })
+    expect(permission.requests.length, `${tool} asserted nothing`).toBe(before)
+  }
+
+  it("on a colab account: refuses every change tool, a Drive push plan and a runtime plan, before any assert", async () => {
+    const { runner, permission, fakes } = setup({}, readOnly)
+    await refusesBeforeAnything("run", { account: "home", runtime: "oc-01", code: "print(1)" }, permission, runner)
+    await refusesBeforeAnything("upload", { account: "home", runtime: "oc-01", path: "data.csv" }, permission, runner)
+    await refusesBeforeAnything("download", { account: "home", runtime: "oc-01", path: "/content/outputs/x.csv" }, permission, runner)
+    await refusesBeforeAnything("edit", { account: "home", path: "a.ipynb", ops: [{ op: "create" }] }, permission, runner)
+    await refusesBeforeAnything("cancel", { account: "home", runId: "run-1" }, permission, runner)
+    await refusesBeforeAnything("plan", { account: "home", action: "runtime.create", params: { spec: CPU } }, permission, runner)
+    await refusesBeforeAnything("plan", { account: "home", action: "drive.create", params: { path: "a.ipynb" } }, permission, runner)
+    expect(fakes.colab.calls).toEqual([])
+  })
+
+  it("on an enterprise account: refuses job and schedule plans, pause and a job cancel, before any assert", async () => {
+    const { runner, permission, fakes } = setup({}, readOnly)
+    await refusesBeforeAnything("plan", { account: "work", action: "job.create", params: { notebook: { path: "a.ipynb" } } }, permission, runner)
+    await refusesBeforeAnything("plan", { account: "work", action: "schedule.create", params: { notebook: { gcs: "gs://b/n.ipynb" }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 3 } }, permission, runner)
+    await refusesBeforeAnything("pause", { account: "work", schedule: "schedules/1" }, permission, runner)
+    await refusesBeforeAnything("cancel", { account: "work", job: "jobs/oc-job-1" }, permission, runner)
+    expect(fakes.vertex.calls).toEqual([])
+  })
+
+  it("refuses to commit a plan whose account is read, before the commit's assert, on either backend", async () => {
+    const { runner, permission, deps } = setup({}, readOnly)
+    for (const [account, backend, category] of [["home", "colab", "delete"], ["work", "enterprise", "write"]] as const) {
+      const plan = deps.plans.create({ action: category === "write" ? "job.create" : "runtime.delete", category, account, backend, operation: category === "write" ? "aiplatform.projects.locations.notebookExecutionJobs.create" : "colaboratory.runtimes.delete", sessionId: "ses_a", agentId: "build", preview: {}, payload: {}, fingerprint: {} })
+      await refusesBeforeAnything(category, { planId: plan.id }, permission, runner)
+    }
   })
 })

@@ -65,3 +65,34 @@ export function withoutSecret(text: string, secret: string | undefined): string 
   if (!secret || secret.length < 4) return text
   return text.split(secret).join("[redacted]")
 }
+
+/**
+ * The kinds of secret-shaped text the family screens for, shared by package C (cell sources, Drive pushes) and package
+ * E (job sources) through this one function (design §7.5): the token shapes above, plus private keys, service-account
+ * key JSON, Google API keys, AWS keys, GitHub and Slack tokens, `sk-` keys, secret assignments and bearer tokens. Each
+ * kind has a name; the match itself is never returned. `long-token` is the broad catch-all the redaction uses (any run
+ * of 40 key characters), so a hash or a long identifier can match it.
+ */
+const SCREEN: readonly { readonly kind: string; readonly pattern: RegExp }[] = [
+  { kind: "bearer-or-basic", pattern: SECRETS[0]![0] },
+  { kind: "key-value", pattern: SECRETS[1]![0] },
+  { kind: "jwt", pattern: SECRETS[2]![0] },
+  { kind: "vendor-token", pattern: SECRETS[3]![0] },
+  { kind: "long-token", pattern: SECRETS[4]![0] },
+  { kind: "private-key", pattern: /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/ },
+  { kind: "service-account-key", pattern: /"type"\s*:\s*"service_account"|"private_key"\s*:\s*"-----BEGIN/ },
+  { kind: "google-api-key", pattern: /\bAIza[0-9A-Za-z_-]{35}\b/ },
+  { kind: "aws-key", pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  { kind: "github-token", pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/ },
+  { kind: "slack-token", pattern: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
+  { kind: "api-key", pattern: /\bsk-[A-Za-z0-9]{20,}\b/ },
+  { kind: "secret-assignment", pattern: /\b(?:api[_-]?key|secret|password|passwd|access[_-]?token|auth[_-]?token)\b\s*[:=]\s*["'][^"'\s]{8,}["']/i },
+  { kind: "bearer-token", pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/ },
+]
+
+/** Whether `text` holds secret-shaped text, and which kinds, sorted; never the text itself. */
+export function screenSecrets(text: string): { readonly found: boolean; readonly kinds: readonly string[] } {
+  // A fresh RegExp each time, so a global pattern's lastIndex never carries over between calls.
+  const kinds = SCREEN.filter((entry) => new RegExp(entry.pattern.source, entry.pattern.flags.replace("g", "")).test(text)).map((entry) => entry.kind)
+  return { found: kinds.length > 0, kinds: [...new Set(kinds)].sort() }
+}

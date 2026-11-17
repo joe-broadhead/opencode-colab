@@ -12,9 +12,11 @@ import { ColabError } from "../../src/domain/errors.js"
 import type { Deps } from "../../src/deps.js"
 import { createRunEvents } from "../../src/events.js"
 import { loadOptions, type Options } from "../../src/options.js"
+import { OPERATIONS } from "../../src/domain/actions.js"
 import type {
   AgentOnlyCheck,
   Auth,
+  Budget,
   Calibration,
   Clock,
   ColabApi,
@@ -34,7 +36,9 @@ import type {
   Ledger,
   LedgerEvent,
   PermissionRequest,
+  Prices,
   ProbeVerdict,
+  ProviderRead,
   Release,
   RunRecord,
   RuntimeProtocol,
@@ -288,12 +292,23 @@ export class FakeVertex implements VertexApi {
     this.record("getJob", [account, name])
     return this.jobs.get(name)
   }
+  /** Create LROs by job name, as `listJobOperations` lists them. */
+  operations = new Map<string, { name: string; done: boolean }[]>()
   async createJob(account: string, input: { jobId: string; body: Record<string, unknown> }) {
     this.record("createJob", [account, input])
     const name = `jobs/${input.jobId}`
-    const job = this.jobs.get(name) ?? { name, displayName: String(input.body.displayName ?? input.jobId), state: "JOB_STATE_PENDING" }
+    const existing = this.jobs.get(name)
+    // A create that joins an existing job has no LRO of its own.
+    if (existing) return { job: existing }
+    const job: EnterpriseJob = { name, displayName: String(input.body.displayName ?? input.jobId), state: "JOB_STATE_PENDING" }
     this.jobs.set(name, job)
-    return { job, operation: `${name}/operations/op-1` }
+    const operation = `${name}/operations/op-1`
+    this.operations.set(name, [{ name: operation, done: false }])
+    return { job, operation }
+  }
+  async listJobOperations(account: string, job: string) {
+    this.record("listJobOperations", [account, job])
+    return this.operations.get(job) ?? []
   }
   async deleteJob(account: string, name: string) {
     this.record("deleteJob", [account, name])
@@ -302,9 +317,11 @@ export class FakeVertex implements VertexApi {
   async cancelOperation(account: string, operation: string) {
     this.record("cancelOperation", [account, operation])
   }
-  async listSchedules(account: string) {
-    this.record("listSchedules", [account])
-    return [...this.schedules.values()]
+  /** Understands only Google's exact `display_name="…"` filter, as the reconcile sends it. */
+  async listSchedules(account: string, input: { filter?: string } = {}) {
+    this.record("listSchedules", [account, input])
+    const exact = /^display_name="(.*)"$/.exec(input.filter ?? "")?.[1]
+    return [...this.schedules.values()].filter((schedule) => exact === undefined || schedule.displayName === exact)
   }
   async getSchedule(account: string, name: string) {
     this.record("getSchedule", [account, name])
@@ -425,19 +442,50 @@ export class FakeRelease implements Release {
   }
 }
 
+/** Calls `read` before each provider read, as package E must: jobs.get, then the GCS reads. */
 export class FakeEnterpriseRuns implements EnterpriseRuns {
   readonly calls: Call[] = []
-  async execution(account: string, input: unknown) {
+  async execution(account: string, input: unknown, _signal: AbortSignal, read: ProviderRead) {
     this.calls.push({ method: "execution", args: [account, input] })
+    await read(OPERATIONS.jobsGet)
     return { state: "ok" }
   }
-  async cancel(account: string, job: string) {
+  async cancel(account: string, job: string, _signal: AbortSignal, read: ProviderRead) {
     this.calls.push({ method: "cancel", args: [account, job] })
-    return { state: "ok", action: "cancelled" }
+    await read(OPERATIONS.jobOperationsList)
+    return { state: "ok", action: "cancel-requested" }
   }
-  async downloadGcs(account: string, input: unknown) {
+  async downloadGcs(account: string, input: unknown, _signal: AbortSignal, read: ProviderRead) {
     this.calls.push({ method: "downloadGcs", args: [account, input] })
+    await read(OPERATIONS.storageObjectsGet)
     return { state: "ok" }
+  }
+}
+
+/** A budget a test sets: `verdict` for every check, and the checks it saw. */
+export class FakeBudget implements Budget {
+  readonly checks: { account: string; action: string; usd?: number; runtimeHours?: number }[] = []
+  verdict: "ok" | "warn" | "refuse" = "ok"
+  async check(account: string, input: { action: "runtime.create" | "job.create" | "schedule.create" | "schedule.resume"; usd?: number; runtimeHours?: number }) {
+    this.checks.push({ account, ...input })
+    return { verdict: this.verdict, ...(this.verdict === "ok" ? {} : { spentUsd: 10, limitUsd: 10 }) }
+  }
+}
+
+/** A price table a test fills: USD/h per machine, plus per accelerator; one region. */
+export class FakePrices implements Prices {
+  readonly asOf = "2026-11-17"
+  readonly source = "test table"
+  readonly region = "us-central1"
+  machines = new Map<string, number>([["e2-standard-4", 0.19]])
+  accelerators = new Map<string, number>([["T4", 0.4]])
+  usdPerHour(input: { machine: string; accelerator?: string; acceleratorCount?: number; diskGb?: number; region?: string }) {
+    if (input.region !== undefined && input.region !== this.region) return undefined
+    const machine = this.machines.get(input.machine)
+    if (machine === undefined) return undefined
+    if (input.accelerator === undefined || input.accelerator === "NONE") return machine
+    const accelerator = this.accelerators.get(input.accelerator)
+    return accelerator === undefined ? undefined : machine + accelerator * (input.acceleratorCount ?? 1)
   }
 }
 
@@ -513,7 +561,9 @@ export interface Fakes {
   readonly gcs: FakeGcs
   readonly ledger: MemoryLedger
   readonly release: FakeRelease
+  readonly budget: FakeBudget
   readonly enterprise: FakeEnterpriseRuns
+  readonly prices: FakePrices
   readonly driveSync: FakeDriveSync
 }
 
@@ -532,7 +582,9 @@ export function fakeDeps(input: { readonly options?: unknown; readonly directory
     gcs: new FakeGcs(),
     ledger: new MemoryLedger(clock),
     release: new FakeRelease(),
+    budget: new FakeBudget(),
     enterprise: new FakeEnterpriseRuns(),
+    prices: new FakePrices(),
     driveSync: new FakeDriveSync(),
   }
   const deps: Deps = {
