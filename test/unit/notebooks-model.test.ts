@@ -236,8 +236,8 @@ describe("the source secret screen", () => {
     expect(screenSecrets(checksum).matches).toBeGreaterThan(0)
     // The plugin's own hash form is the one exemption.
     const own = "hash = 'sha256:5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8'"
-    expect(screenSecrets(own)).toEqual({ text: own, matches: 0, kinds: [] })
+    expect(screenSecrets(own)).toEqual({ text: own, matches: 0, found: false, kinds: [] })
     const code = "values = [1, 2, 3]\nprint(sum(values))\n"
-    expect(screenSecrets(code)).toEqual({ text: code, matches: 0, kinds: [] })
+    expect(screenSecrets(code)).toEqual({ text: code, matches: 0, found: false, kinds: [] })
   })
 })

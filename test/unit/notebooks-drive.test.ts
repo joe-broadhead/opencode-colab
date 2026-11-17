@@ -107,7 +107,7 @@ describe("the Drive pull", () => {
   })
 
   it("refuses Drive on an enterprise account that did not opt into drive.file", async () => {
-    setup({ accounts: { ent: { backend: "enterprise", project: "p", region: "us-central1", outputBucket: "gs://bucket/out" } } })
+    setup({ accounts: { ent: { access: "write", backend: "enterprise", project: "p", region: "us-central1", outputBucket: "gs://bucket/out" } } })
     expect(await runTool("plan", { account: "ent", action: "drive.create", params: { path: "missing.ipynb" } }, call(), runner)).toMatchObject({ state: "refused", error: "AUTH_SCOPE_MISSING" })
     const pulled = await Promise.resolve(driveSync().pull("ent", { drive: "f1" }, new AbortController().signal, read)).catch((error: unknown) => error)
     expect(pulled).toMatchObject({ code: "AUTH_SCOPE_MISSING" })
@@ -325,7 +325,7 @@ describe("the plans as declared", () => {
   it("has a Drive handler for both backends of every Drive action", async () => {
     for (const action of ["drive.create", "drive.update", "drive.trash"] as const) {
       expect(PLAN_ACTIONS[action].backends).toEqual({ colab: expect.anything(), enterprise: expect.anything() })
-      setup({ accounts: { ent: { backend: "enterprise", drive: true, project: "p", region: "us-central1", outputBucket: "gs://bucket/out" } } })
+      setup({ accounts: { ent: { access: "write", backend: "enterprise", drive: true, project: "p", region: "us-central1", outputBucket: "gs://bucket/out" } } })
       const params = action === "drive.trash" ? { drive: "missing" } : { path: "missing.ipynb" }
       const result = await runTool("plan", { account: "ent", action, params }, call(), runner)
       // The enterprise account reaches the same handler: the failure is about the target, never ACTION_UNSUPPORTED.
