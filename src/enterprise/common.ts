@@ -12,7 +12,7 @@ import type { HandlerContext } from "../tools/types.js"
 import { ColabError, type WarningCode } from "../domain/errors.js"
 import { OPERATIONS } from "../domain/actions.js"
 import { screenSecrets } from "../redact.js"
-import { acceleratorShort, acceleratorType, PRICES_AS_OF, PRICES_REGION, priceOf, type Price } from "./prices.js"
+import { acceleratorShort, acceleratorType, PRICES_AS_OF, PRICES_REGION, priceGaps, priceOf, type Price } from "./prices.js"
 import { enterpriseSettings, type EnterpriseSettings } from "./account.js"
 import { parseNotebook, sha256Of, type Notebook, type SecretScreen } from "./notebook.js"
 import { nextRuns, occurrencesBetween, parseCron } from "./cron.js"
@@ -140,9 +140,19 @@ export async function chooseCompute(ctx: HandlerContext, params: ComputeParams, 
   if (!region) throw new ColabError("PROJECT_REQUIRED", "The enterprise account has no region, so its endpoint and price region are unknown.", { next: "Set accounts.<alias>.region in opencode.json." })
   const price = priceOf({ machine, ...(accelerator !== undefined ? { accelerator } : {}), ...(acceleratorCount !== undefined ? { acceleratorCount } : {}), region, ...(options.rates !== undefined ? { rates: options.rates } : {}) })
   if (!price) {
-    const where = region === PRICES_REGION ? "" : ` The table prices ${PRICES_REGION}; ${region} needs its own rate.`
-    throw new ColabError("ESTIMATE_UNKNOWN", `The machine "${machine}"${accelerator !== undefined ? ` with ${accelerator}` : ""} is not in the price table of ${PRICES_AS_OF} for ${region}.${where}`, {
-      next: `Pick a priced machine (e2-standard-4, n1-standard-4, n2-standard-4, g2-standard-8, a2-highgpu-1g or a3-highgpu-1g) and an accelerator it carries, add "${machine}" to the rates option at the ${region} rate, or use a ${PRICES_REGION} account.`,
+    const gaps = priceGaps({ machine, ...(accelerator !== undefined ? { accelerator } : {}), region, ...(options.rates !== undefined ? { rates: options.rates } : {}) })
+    // Outside the table's region, every component (machine, accelerator, disk) needs a rate: never mix regions (R2).
+    const where =
+      region === PRICES_REGION
+        ? ""
+        : gaps.length > 0
+          ? ` The rates option has no ${gaps.map((gap) => `"${gap}"`).join(", ")} rate for ${region}, so an estimate would mix regions.`
+          : ` The table prices ${PRICES_REGION}; ${region} needs its own rates.`
+    throw new ColabError("ESTIMATE_UNKNOWN", `The machine "${machine}"${accelerator !== undefined ? ` with ${accelerator}` : ""} is not priced for ${region} from the ${PRICES_AS_OF} table.${where}`, {
+      next:
+        region === PRICES_REGION
+          ? `Pick a priced machine (e2-standard-4, n1-standard-4, n2-standard-4, g2-standard-8, a2-highgpu-1g or a3-highgpu-1g) and an accelerator it carries, or add "${machine}" to the rates option.`
+          : `Add ${gaps.length > 0 ? gaps.map((gap) => `"${gap}"`).join(", ") : `"${machine}"`} to the rates option at the ${region} rate (rate "disk" is USD per GiB-hour), or use a ${PRICES_REGION} account.`,
     })
   }
   // The allow-list covers a machine's own GPU (g2's L4, a2's A100) as well as a named one (design §8.6).
@@ -256,6 +266,8 @@ export interface ScheduleCost {
   readonly timeoutSource?: "job request" | "google-default"
   readonly pricesRegion: string
   readonly machine?: string
+  /** The rates keys missing for an outside-the-table region; empty when priced. */
+  readonly gaps?: readonly string[]
 }
 
 /**
@@ -265,8 +277,9 @@ export interface ScheduleCost {
 export function scheduleCost(schedule: EnterpriseSchedule, ctx: HandlerContext, compute: ComputeSpec | undefined): ScheduleCost {
   const spec = compute ?? computeOfSchedule(schedule)
   if (!spec.machine) return { pricesRegion: PRICES_REGION }
-  const price = priceOf({ machine: spec.machine, ...(spec.accelerator !== undefined ? { accelerator: spec.accelerator } : {}), ...(spec.acceleratorCount !== undefined ? { acceleratorCount: spec.acceleratorCount } : {}), region: ctx.account.region, ...(ctx.deps.options.rates !== undefined ? { rates: ctx.deps.options.rates } : {}) })
-  if (!price) return { pricesRegion: PRICES_REGION, machine: spec.machine }
+  const input = { machine: spec.machine, ...(spec.accelerator !== undefined ? { accelerator: spec.accelerator } : {}), ...(spec.acceleratorCount !== undefined ? { acceleratorCount: spec.acceleratorCount } : {}), region: ctx.account.region, ...(ctx.deps.options.rates !== undefined ? { rates: ctx.deps.options.rates } : {}) }
+  const price = priceOf(input)
+  if (!price) return { pricesRegion: PRICES_REGION, machine: spec.machine, gaps: priceGaps(input) }
   const timeoutSeconds = spec.timeoutSeconds ?? GOOGLE_DEFAULT_TIMEOUT_SECONDS
   const timeoutMinutes = Math.round(timeoutSeconds / 60)
   const perRun = price.usdPerHour * (timeoutSeconds / 3600)
@@ -291,8 +304,9 @@ export function checkScheduleCost(cost: ScheduleCost, maxUsd: number | undefined
   const capUsd = maxUsd ?? options.maxJobUsd
   if (capUsd > options.maxJobUsdCeiling) throw new ColabError("COST_CAP", `maxUsd ($${capUsd}) is over maxJobUsdCeiling ($${options.maxJobUsdCeiling}).`, { next: `Pass maxUsd of $${options.maxJobUsdCeiling} or less.` })
   if (cost.perRun === undefined) {
-    throw new ColabError("ESTIMATE_UNKNOWN", `The schedule's machine${cost.machine !== undefined ? ` "${cost.machine}"` : ""} cannot be priced from the ${PRICES_REGION} table for ${ctx.account.region}.`, {
-      next: "Use a priced machine in the price table's region, or add the machine to the rates option at the account's region rate.",
+    const gaps = cost.gaps ?? []
+    throw new ColabError("ESTIMATE_UNKNOWN", `The schedule's machine${cost.machine !== undefined ? ` "${cost.machine}"` : ""} cannot be priced for ${ctx.account.region}: ${gaps.length > 0 ? `the rates option has no ${gaps.map((gap) => `"${gap}"`).join(", ")} rate, so an estimate would mix regions` : `the ${PRICES_REGION} table does not cover it`}.`, {
+      next: gaps.length > 0 ? `Add ${gaps.map((gap) => `"${gap}"`).join(", ")} to the rates option at the ${ctx.account.region} rate ("disk" is USD per GiB-hour), or use a ${PRICES_REGION} account.` : "Use a priced machine in the table's region, or add its rates.",
     })
   }
   if (cost.perRun > capUsd) {

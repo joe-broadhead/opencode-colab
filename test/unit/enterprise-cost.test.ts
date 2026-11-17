@@ -235,9 +235,17 @@ describe("the worst case is an upper bound (review M4)", () => {
       error: "ESTIMATE_UNKNOWN",
       message: expect.stringContaining("europe-west4"),
     })
-    const priced = setup({ ...regional, rates: { "e2-standard-4": 0.3 } }, directory)
+    // A machine-only override would still bill the disk at us-central1 rates: refuse and name the missing component.
+    const partial = setup({ ...regional, rates: { "e2-standard-4": 0.3 } }, directory)
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), partial.runner)).toMatchObject({
+      error: "ESTIMATE_UNKNOWN",
+      message: expect.stringContaining('"disk"'),
+    })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), partial.runner)).toMatchObject({ message: expect.stringContaining("mix regions") })
+    // With the machine and the disk, the estimate uses only the account region's rates.
+    const priced = setup({ ...regional, rates: { "e2-standard-4": 0.3, disk: 0.0004 } }, directory)
     const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), priced.runner)) as { preview: Record<string, any> }
-    expect(planned).toMatchObject({ state: "ok", preview: { cost: { pricesRegion: "us-central1" }, output: { pricesRegion: "us-central1" } } })
+    expect(planned).toMatchObject({ state: "ok", preview: { cost: { pricesRegion: "us-central1", usdPerHour: 0.34 }, output: { pricesRegion: "us-central1" } } })
   })
 
   it("costs a schedule with no timeout at Google's 24 h default, and the cap applies", async () => {
@@ -257,6 +265,20 @@ describe("the worst case is an upper bound (review M4)", () => {
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/9", foreign({ jobRequest: { parent: "projects/proj/locations/us-central1", notebookExecutionJob: { customEnvironmentSpec: { machineSpec: { machineType: "n9-unknown" } } } } }) as never)
     expect(await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "9", maxRunCount: 4 } }, call(), runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN" })
     expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN" })
+  })
+
+  it("refuses a regional estimate unless the machine, its accelerator and the disk all have rates", async () => {
+    const { directory, path } = notebookAt()
+    const regional = { accounts: { work: { ...ENTERPRISE.accounts.work, region: "europe-west4" } } }
+    const g2 = setup({ ...regional, accelerators: ["NONE", "T4", "L4"], rates: { "g2-standard-8": 1.1, disk: 0.0004 } }, directory)
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "g2-standard-8" } }, call(), g2.runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN", message: expect.stringContaining('"L4"') })
+    const complete = setup({ ...regional, accelerators: ["NONE", "T4", "L4"], rates: { "g2-standard-8": 1.1, L4: 0.8, disk: 0.0004 } }, directory)
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "g2-standard-8" } }, call(), complete.runner)).toMatchObject({ state: "ok" })
+    const t4 = setup({ ...regional, rates: { "n1-standard-4": 0.2, disk: 0.0004 } }, directory)
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n1-standard-4", accelerator: "T4" } }, call(), t4.runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN", message: expect.stringContaining('"T4"') })
+    const seam = createPrices({ options: { rates: { "e2-standard-4": 0.3, disk: 0.0004 } } })
+    expect(seam.usdPerHour({ machine: "e2-standard-4", region: "europe-west4" })).toBeCloseTo(0.34, 6)
+    expect(createPrices({ options: { rates: { "e2-standard-4": 0.3 } } }).usdPerHour({ machine: "e2-standard-4", region: "europe-west4" })).toBeUndefined()
   })
 
   it("does not let an n2 machine claim a GPU it cannot carry", async () => {

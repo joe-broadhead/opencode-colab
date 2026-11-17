@@ -22,7 +22,7 @@ import { runIdentity, type RunIdentity, type EnterpriseSettings } from "./accoun
 import { budgetCheck, checkCost, chooseCompute, describeNotebook, jobNameOf, labelsFor, notebookForJob, notebookParam, payloadOf, settingsFor } from "./common.js"
 import { jobId as newJobId, lastSegment } from "./ids.js"
 import type { EnterpriseJob } from "../ports.js"
-import { recordCreate, rememberOperation } from "./runs.js"
+import { abandonJobCreate, confirmJobCreate, openJobCreate, reconcileCreate, rememberOperation } from "./runs.js"
 
 /** The exact words the person sees before an Enterprise runtime is stopped or deleted (design §7.2, §3 principle 2). */
 export const STOP_WARNING = "kernel state and running cells are lost; the disk is kept and still billed; the person may be using this runtime — there is no idle signal"
@@ -211,9 +211,23 @@ const jobCreate: PlanHandler<"job.create"> = {
       identity,
       sessionId: ctx.call.sessionID,
     })
-    const created = await ctx.deps.vertex.createJob(ctx.account.alias, { jobId: payload.jobId, body }, ctx.call.signal)
+    const notebook = payload.notebook.path ?? payload.notebook.gcs
+    // Settle any earlier create that was left unconfirmed before this plan may create another (review R1).
+    await reconcileCreate(ctx.deps, ctx.account.alias, settings, notebook, ctx.providerRead, ctx.call.signal)
+    // The intent goes to the ledger before the call: a lost answer, a Stop or a crash leaves a record that blocks a
+    // second create until it is reconciled.
+    await openJobCreate(ctx.deps, ctx.account.alias, payload.jobId, { ...(notebook !== undefined ? { notebook } : {}), summary: `Colab Enterprise job ${payload.jobId}` })
+    let created: Awaited<ReturnType<typeof ctx.deps.vertex.createJob>>
+    try {
+      created = await ctx.deps.vertex.createJob(ctx.account.alias, { jobId: payload.jobId, body }, ctx.call.signal)
+    } catch (error) {
+      // An uncertain outcome or a Stop may still have landed: leave the record pending. A definitive refusal did not.
+      if (ColabError.is(error) && (error.code === "UNCERTAIN" || error.code === "CANCELLED")) throw error
+      await abandonJobCreate(ctx.deps, ctx.account.alias, payload.jobId, ColabError.is(error) ? error.code : "UNAVAILABLE")
+      throw error
+    }
     rememberOperation(created.job.name, created.operation ?? "")
-    await recordCreate(ctx.deps, ctx.account.alias, created.job as EnterpriseJob, `Colab Enterprise job ${payload.jobId}`, created.operation)
+    await confirmJobCreate(ctx.deps, ctx.account.alias, created.job as EnterpriseJob, created.operation)
     return {
       job: created.job.name,
       id: lastSegment(created.job.name),

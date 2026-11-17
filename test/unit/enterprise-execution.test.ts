@@ -113,6 +113,8 @@ describe("colab_execution on an Enterprise job", () => {
     expect(existsSync(join(directory, result.cells[1].rich[0].path))).toBe(true)
     const lines = readFileSync(join(directory, `.colab/runs/${id}/outputs.jsonl`), "utf8").trim().split("\n")
     expect(lines).toHaveLength(4)
+    // Polling keeps the create operation the ledger recorded, so cancel-after-restart still works.
+    expect((await fakes.ledger.getRun(id))?.operation).toBe(vertex.operationNames[0])
     // The ledger closes the run, and the colab.runs source sees one finished event.
     expect(reads).toContain("aiplatform.projects.locations.notebookExecutionJobs.get")
     expect(reads).toContain("storage.objects.list")

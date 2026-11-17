@@ -139,9 +139,12 @@ export interface PriceInput {
   readonly accelerator?: string
   readonly acceleratorCount?: number
   readonly diskGb?: number
-  /** The account's region; the table is us-central1, and any other region needs a `rates` override. */
+  /** The account's region; the table is us-central1, and any other region needs a rate for every component. */
   readonly region?: string
-  /** The `rates` option: USD/h overrides by machine name, accelerator type or short name. */
+  /**
+   * The `rates` option: USD/h overrides by machine name or accelerator type/short name, and `disk` in USD per GiB-hour.
+   * Outside the table's region every component must be present; a partial entry is not a price.
+   */
   readonly rates?: Readonly<Record<string, number>>
 }
 
@@ -163,17 +166,38 @@ export interface Price {
 
 const round = (value: number) => Number(value.toFixed(6))
 
+/** The `rates` key for the disk, in USD per GiB-hour, required outside the table's region. */
+export const DISK_RATE_KEY = "disk"
+
+/** The components `rates` is missing for a region the table does not cover; empty when priced or in the table's region. */
+export function priceGaps(input: PriceInput): readonly string[] {
+  const region = input.region ?? PRICES_REGION
+  if (region === PRICES_REGION) return []
+  const entry = MACHINES[input.machine]
+  const rates = input.rates ?? {}
+  const missing: string[] = []
+  if (rates[input.machine] === undefined) missing.push(input.machine)
+  const accelerator = entry?.accelerator ?? acceleratorType(input.accelerator)
+  if (accelerator !== undefined) {
+    const short = acceleratorShort(accelerator)
+    if (rates[accelerator] === undefined && rates[short] === undefined) missing.push(short === "NONE" ? accelerator : short)
+  }
+  if (rates[DISK_RATE_KEY] === undefined) missing.push(DISK_RATE_KEY)
+  return missing
+}
+
 /**
- * The $/h of a machine, its disk and any accelerator, or undefined when the machine (or its accelerator) is not in the
- * table and `rates` does not price it. The plan's `ESTIMATE_UNKNOWN` is this function's undefined.
+ * The $/h of a machine, its disk and any accelerator, or undefined when a component cannot be priced. In the table's
+ * region the table prices every component; elsewhere every component must come from `rates`, so an estimate never mixes
+ * two regions' rates (review R2).
  */
 export function priceOf(input: PriceInput): Price | undefined {
   const entry = MACHINES[input.machine]
   const rates = input.rates ?? {}
   const override = rates[input.machine]
   const region = input.region ?? PRICES_REGION
-  // One region's table is not an upper bound for another: the machine's own override is the only way to price it (M4).
-  if (region !== PRICES_REGION && override === undefined) return undefined
+  const regional = region !== PRICES_REGION
+  if (regional && priceGaps(input).length > 0) return undefined
   const eased = input.accelerator === undefined || acceleratorType(input.accelerator) !== undefined
   if (!eased) return undefined
   const diskGb = input.diskGb ?? DEFAULT_DISK_GB
@@ -186,20 +210,20 @@ export function priceOf(input: PriceInput): Price | undefined {
     if (!entry.accelerator && accelerator && !(entry.attachable ?? []).includes(accelerator)) return undefined
   }
   const series = entry ? SERIES[entry.series] : undefined
-  const vCpuUsdPerHour = entry && series ? entry.vCpu * (series.vCpu + series.vCpuManagement) : 0
-  const memoryUsdPerHour = entry && series ? entry.ramGib * (series.gib + series.gibManagement) : 0
+  // In the table's region the table's rates apply; elsewhere every value below comes from `rates`.
+  const vCpuUsdPerHour = regional ? 0 : entry && series ? entry.vCpu * (series.vCpu + series.vCpuManagement) : 0
+  const memoryUsdPerHour = regional ? 0 : entry && series ? entry.ramGib * (series.gib + series.gibManagement) : 0
   let acceleratorUsdPerHour = 0
   let overridden = false
   if (accelerator) {
     const gpu = GPU[accelerator]
     if (!gpu) return undefined
     const accOverride = rates[accelerator] ?? rates[acceleratorShort(accelerator)]
-    acceleratorUsdPerHour = acceleratorCount * (accOverride ?? gpu.hour + gpu.management)
+    acceleratorUsdPerHour = acceleratorCount * (regional ? (accOverride as number) : (accOverride ?? gpu.hour + gpu.management))
     overridden = overridden || accOverride !== undefined
   }
-  const diskUsdPerHour = diskGb * (SSD.gib + SSD.gibManagement)
-  // A machine override replaces the machine's compute (vCPU + memory), never the accelerator or the disk.
-  const compute = override ?? vCpuUsdPerHour + memoryUsdPerHour
+  const diskUsdPerHour = diskGb * (regional ? (rates[DISK_RATE_KEY] as number) : SSD.gib + SSD.gibManagement)
+  const compute = regional ? (override as number) : (override ?? vCpuUsdPerHour + memoryUsdPerHour)
   overridden = overridden || override !== undefined
   const price: Price = {
     machine: input.machine,

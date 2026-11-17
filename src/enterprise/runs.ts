@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs"
 import { basename, extname, join } from "node:path"
 import type * as z from "zod"
 import type { PortEnv } from "../deps.js"
-import { ColabError } from "../domain/errors.js"
+import { ColabError, type ErrorCode } from "../domain/errors.js"
 import { CellResult } from "../domain/contract.js"
 import { OPERATIONS } from "../domain/actions.js"
 import type { EnterpriseJob, EnterpriseRuns, GcsApi, Ledger, RunRecord, VertexApi } from "../ports.js"
@@ -123,6 +123,7 @@ async function record(env: EnterpriseRunsEnv, account: string, job: EnterpriseJo
     state: finished ? terminalRunState(job.state) : "running",
     cellIds: existing.cellIds,
     outputPaths: input.outputPaths ?? existing.outputPaths,
+    ...(existing.operation !== undefined ? { operation: existing.operation } : {}),
     ...(finished && job.state !== "JOB_STATE_SUCCEEDED"
       ? { errorCode: job.state === "JOB_STATE_EXPIRED" ? "JOB_TIMEOUT" : job.state === "JOB_STATE_CANCELLED" ? "CANCELLED" : "JOB_FAILED" }
       : {}),
@@ -132,22 +133,86 @@ async function record(env: EnterpriseRunsEnv, account: string, job: EnterpriseJo
   if (finished && !existing.endedAt) await env.ledger.append({ type: "run.finished", id: runId, account })
 }
 
-/** The create half: a job this plugin started, recorded while it runs (design §5). */
-export async function recordCreate(env: { readonly ledger: Ledger; readonly clock: { now(): Date } }, account: string, job: EnterpriseJob, summary: string, operation?: string): Promise<void> {
-  const runId = lastSegment(job.name)
-  if (await env.ledger.getRun(runId)) return
+/** A create whose outcome is unknown: the record exists, the job may, and no second create may start until resolved. */
+export const isPendingCreate = (run: RunRecord) => run.backend === "enterprise" && run.errorCode === "UNCERTAIN" && run.endedAt === undefined
+
+/**
+ * Write the create's intent **before** the API call (review R1). A crash, a Stop or a lost answer then always leaves a
+ * record keyed by the client-chosen job id, which `reconcileCreate` finds before any later create.
+ */
+export async function openJobCreate(env: { readonly ledger: Ledger; readonly clock: { now(): Date } }, account: string, jobId: string, input: { readonly notebook?: string; readonly summary: string }): Promise<void> {
+  if (await env.ledger.getRun(jobId)) return
   await env.ledger.putRun({
-    runId,
+    runId: jobId,
     account,
     backend: "enterprise",
-    job: job.name,
-    startedAt: job.createTime ?? env.clock.now().toISOString(),
+    ...(input.notebook !== undefined ? { notebook: input.notebook } : {}),
+    startedAt: env.clock.now().toISOString(),
     state: "running",
     cellIds: [],
     outputPaths: [],
-    ...(operation !== undefined && operation !== "" ? { operation } : {}),
-    summary,
+    errorCode: "UNCERTAIN",
+    summary: `${input.summary} (create unconfirmed)`,
   })
+}
+
+/** The create landed: record the operation and clear the uncertainty. Also records a joined job with no pending record. */
+export async function confirmJobCreate(env: { readonly ledger: Ledger; readonly clock: { now(): Date } }, account: string, job: EnterpriseJob, operation?: string): Promise<void> {
+  const runId = lastSegment(job.name)
+  const existing = await env.ledger.getRun(runId)
+  const { errorCode: _drop, ...rest } = existing ?? { runId, account, backend: "enterprise" as const, job: job.name, startedAt: job.createTime ?? env.clock.now().toISOString(), state: "running" as const, cellIds: [], outputPaths: [], summary: `Colab Enterprise job ${runId}` }
+  const finished = isTerminal(job.state)
+  await env.ledger.putRun({
+    ...rest,
+    ...(finished ? { endedAt: job.endTime ?? env.clock.now().toISOString(), state: terminalRunState(job.state) } : { state: "running" }),
+    ...(operation !== undefined && operation !== "" ? { operation } : {}),
+    summary: String(rest.summary).replace(/ \(create unconfirmed\)$/, ""),
+  })
+}
+
+/** A create that definitively did not land: settle its record so it no longer blocks anything. */
+export async function abandonJobCreate(env: { readonly ledger: Ledger; readonly clock: { now(): Date } }, account: string, jobId: string, code: ErrorCode): Promise<void> {
+  const existing = await env.ledger.getRun(jobId)
+  if (!existing) return
+  const { errorCode: _drop, endedAt: _old, ...rest } = existing
+  await env.ledger.putRun({ ...rest, state: "failed", endedAt: env.clock.now().toISOString(), errorCode: code, summary: String(existing.summary ?? "").replace(/ \(create unconfirmed\)$/, "") })
+  await env.ledger.append({ type: "run.finished", id: jobId, account })
+}
+
+export interface ReconcileEnv {
+  readonly ledger: Ledger
+  readonly clock: { now(): Date }
+  readonly vertex: VertexApi
+}
+
+/**
+ * Before a create, settle every unresolved create for this account and notebook: a job that exists or an operation still
+ * running blocks the new create with UNCERTAIN; nothing at all means the earlier create never landed, so its record is
+ * closed and the new one may proceed (review R1).
+ */
+export async function reconcileCreate(env: ReconcileEnv, account: string, settings: EnterpriseSettings, notebook: string | undefined, read: ProviderRead, signal: AbortSignal): Promise<"none" | "cleared"> {
+  const pending = (await env.ledger.listRuns({ account })).filter(isPendingCreate).filter((run) => notebook === undefined || run.notebook === undefined || run.notebook === notebook)
+  if (pending.length === 0) return "none"
+  let cleared = false
+  for (const run of pending) {
+    const name = jobResource(settings, run.runId)
+    await read(OPERATIONS.jobsGet)
+    const job = await env.vertex.getJob(account, name, signal)
+    await read(OPERATIONS.jobOperationsList)
+    const operations = await env.vertex.listJobOperations(account, name, signal)
+    if (job) {
+      await confirmJobCreate(env, account, job, operations.find((operation) => !operation.done)?.name ?? operations[0]?.name)
+      throw new ColabError("UNCERTAIN", `The earlier create ${run.runId} was left unconfirmed, and its job exists.`, {
+        next: `Read it with colab_execution({ job: "${run.runId}" }), or delete it with a job.delete plan, before planning another job.`,
+      })
+    }
+    if (operations.some((operation) => !operation.done)) {
+      throw new ColabError("UNCERTAIN", `The earlier create ${run.runId} left an operation still running.`, { next: "colab_jobs lists the account's jobs before planning again." })
+    }
+    await abandonJobCreate(env, account, run.runId, "UNCERTAIN")
+    cleared = true
+  }
+  return cleared ? "cleared" : "none"
 }
 
 async function poll(env: EnterpriseRunsEnv, account: string, name: string, waitSeconds: number, options: RunsOptions, signal: AbortSignal, read: ProviderRead): Promise<EnterpriseJob> {
