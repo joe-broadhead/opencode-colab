@@ -12,6 +12,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import type { Deps } from "../../src/deps.js"
+import { CONTRACTS } from "../../src/domain/contract.js"
 import { createEnterpriseRuns, type EnterpriseRunsEnv } from "../../src/enterprise/runs.js"
 import { runTool, type Runner } from "../../src/tools/spec.js"
 import { toolHandlers } from "../../src/tools/registry.js"
@@ -176,13 +177,14 @@ describe("colab_cancel on an Enterprise job", () => {
     expect(vertex.jobs.get(name)!.state).toBe("JOB_STATE_CANCELLED")
   })
 
-  it("says the job is still running when the cancel does not stop it (L11's bad answer)", async () => {
+  it("answers cancel-requested when the cancel was sent but the job had not stopped (L11)", async () => {
     const { runner, runs, vertex, directory } = setup()
     const id = await createJob({ directory, runner })
     vertex.cancelStops = false
     const result = (await runs.cancel("work", id, new AbortController().signal, read)) as Record<string, unknown>
-    expect(result).toMatchObject({ state: "ok", job: id, action: "cancelled", message: expect.stringContaining("still JOB_STATE_RUNNING") })
+    expect(result).toMatchObject({ state: "ok", job: id, action: "cancel-requested", message: expect.stringContaining("still JOB_STATE_RUNNING") })
     expect(result.remainingSec).toBeGreaterThan(0)
+    expect(CONTRACTS.cancel.output.safeParse(result).success).toBe(true)
   })
 
   it("answers JOB_UNCANCELLABLE for a job this process did not create, with what remains", async () => {
@@ -267,7 +269,7 @@ describe("cancel finds the create LRO after a restart (request 4)", () => {
     vertex.putJob({ name, displayName: "scheduled", state: "JOB_STATE_RUNNING", createTime: "2026-11-17T09:00:00Z", updateTime: "2026-11-17T09:00:00Z" })
     vertex.operations.set(name, [{ name: "projects/proj/locations/us-central1/operations/op-9", done: false }])
     const result = (await runs.cancel("work", name, new AbortController().signal, read)) as Record<string, unknown>
-    expect(result).toMatchObject({ state: "ok", job: "scheduled-1", action: "cancelled" })
+    expect(result).toMatchObject({ state: "ok", job: "scheduled-1", action: "cancel-requested" })
     expect(vertex.calls.some((call) => call.method === "listJobOperations")).toBe(true)
     expect(vertex.calls.filter((call) => call.method === "cancelOperation").at(-1)!.args[1]).toBe("projects/proj/locations/us-central1/operations/op-9")
     expect(reads).toContain("aiplatform.projects.locations.notebookExecutionJobs.operations.list")

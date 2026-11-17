@@ -310,8 +310,10 @@ export function createEnterpriseRuns(env: EnterpriseRunsEnv, options: RunsOption
         await record(env, account, observed)
         return { state: "ok", job: id, action: "cancelled", remainingSec: 0, message: `The job is ${observed.state}.` }
       }
-      // Google accepts the cancel asynchronously; L11 records whether the job actually stops (design §9.4).
-      return { state: "ok", job: id, action: "cancelled", remainingSec: remaining(observed, env.clock.now()), message: `Cancellation requested; the job is still ${observed.state}.` }
+      // Google accepted the cancel asynchronously, and the job had not stopped when the call returned: say so, rather
+      // than claiming it stopped. L11 records whether it does (design §9.4); `cancel-requested` is the contract's own
+      // state for exactly this moment.
+      return { state: "ok", job: id, action: "cancel-requested", remainingSec: remaining(observed, env.clock.now()), message: `Cancellation requested; the job is still ${observed.state}.` }
     },
 
     async downloadGcs(account, input, signal, read) {
