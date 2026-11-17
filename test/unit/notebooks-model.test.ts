@@ -25,7 +25,7 @@ import {
   setNotebookMetadata,
   splitLines,
 } from "../../src/notebooks/model.js"
-import { screenSecrets, WITHHELD } from "../../src/notebooks/secret.js"
+import { screenSecrets, WITHHELD } from "../../src/redact.js"
 
 const bytes = (text: string) => Buffer.from(text, "utf8")
 const decode = (value: Uint8Array) => new TextDecoder().decode(value)
@@ -224,10 +224,20 @@ describe("the source secret screen", () => {
     }
   })
 
-  it("leaves a sha256 checksum and ordinary Python alone", () => {
+  it("withholds the family's long key run, hex included, and spares only sha256:<hex> (review M3)", () => {
+    const hex = "0123456789abcdef0123456789abcdef01234567"
+    // A 40-hex Weights & Biases key in the two everyday Colab forms.
+    expect(screenSecrets(`wandb.login(key="${hex}")`).matches).toBeGreaterThan(0)
+    expect(screenSecrets(`os.environ["WANDB_API_KEY"] = "${hex}"`).matches).toBeGreaterThan(0)
+    // A Hugging Face token.
+    expect(screenSecrets('login("hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567")').matches).toBeGreaterThan(0)
+    // A bare 64-hex checksum is withheld too.
     const checksum = "digest = '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8'"
-    expect(screenSecrets(checksum)).toEqual({ text: checksum, matches: 0 })
+    expect(screenSecrets(checksum).matches).toBeGreaterThan(0)
+    // The plugin's own hash form is the one exemption.
+    const own = "hash = 'sha256:5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8'"
+    expect(screenSecrets(own)).toEqual({ text: own, matches: 0, kinds: [] })
     const code = "values = [1, 2, 3]\nprint(sum(values))\n"
-    expect(screenSecrets(code)).toEqual({ text: code, matches: 0 })
+    expect(screenSecrets(code)).toEqual({ text: code, matches: 0, kinds: [] })
   })
 })

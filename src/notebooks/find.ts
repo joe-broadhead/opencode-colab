@@ -14,7 +14,7 @@ import { OPERATIONS } from "../domain/actions.js"
 import { ColabError } from "../domain/errors.js"
 import type { HandlerContext, ToolHandler } from "../tools/types.js"
 import { requireDrive, requireGcs } from "./account.js"
-import { resolveWorkspacePath } from "./paths.js"
+import { resolveWorkspacePath, workDirectory } from "./paths.js"
 
 /** The MIME type a Colab notebook has in Drive (design §1; TODO(L8): confirm it against a real file). */
 export const COLAB_MIME = "application/vnd.google.colaboratory"
@@ -22,6 +22,8 @@ const NOTEBOOK = /\.ipynb$/i
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 200
 const SKIP_DIRECTORIES = new Set(["node_modules"])
+/** The walk's bound: a pathological tree ends as a truncated page, never a hang. */
+const MAX_ENTRIES = 20_000
 
 interface Found {
   readonly where: "workspace" | "drive" | "gcs"
@@ -61,12 +63,18 @@ function compileGlob(pattern: string): string[] | undefined {
   return pattern.replace(/\\/g, "/").split("/").filter((segment) => segment.length > 0)
 }
 
-async function walkWorkspace(root: string, pattern: string, limit: number): Promise<{ readonly found: Found[]; readonly truncated: boolean }> {
+/** Both the project and the workDir's downloads are searched; a huge tree stops at the bound instead of hanging. */
+async function walkWorkspace(root: string, pattern: string, limit: number, downloads: string | undefined): Promise<{ readonly found: Found[]; readonly truncated: boolean }> {
   const segments = compileGlob(pattern)
   if (!segments) throw new ColabError("INPUT_INVALID", "A workspace pattern is relative and has no .. segment.", { next: 'Use a pattern such as "**/*.ipynb".' })
   const found: Found[] = []
   let truncated = false
-  const visit = async (folder: string) => {
+  let seen = 0
+  const visit = async (folder: string, allowDot: boolean) => {
+    if (seen > MAX_ENTRIES) {
+      truncated = true
+      return
+    }
     let entries
     try {
       entries = await readdir(folder, { withFileTypes: true })
@@ -74,10 +82,16 @@ async function walkWorkspace(root: string, pattern: string, limit: number): Prom
       return
     }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (entry.name.startsWith(".")) continue
+      if (!allowDot && entry.name.startsWith(".")) continue
+      if (entry.name === "." || entry.name === "..") continue
+      seen += 1
+      if (seen > MAX_ENTRIES) {
+        truncated = true
+        return
+      }
       const absolute = join(folder, entry.name)
       if (entry.isDirectory()) {
-        if (!SKIP_DIRECTORIES.has(entry.name)) await visit(absolute)
+        if (!SKIP_DIRECTORIES.has(entry.name)) await visit(absolute, allowDot)
         continue
       }
       if (!entry.isFile() || !NOTEBOOK.test(entry.name)) continue
@@ -88,10 +102,13 @@ async function walkWorkspace(root: string, pattern: string, limit: number): Prom
         return
       }
       const info = await stat(absolute).catch(() => undefined)
-      found.push({ where: "workspace", path, name: entry.name, ...(info ? { modified: info.mtime.toISOString() } : {}) })
+      if (!found.some((entry) => entry.path === path)) found.push({ where: "workspace", path, name: entry.name, ...(info ? { modified: info.mtime.toISOString() } : {}) })
     }
   }
-  await visit(root)
+  await visit(root, false)
+  // A pulled notebook lives under the workDir, which the project walk skips as a dot folder.
+  if (downloads !== undefined && !truncated) await visit(downloads, true)
+  found.sort((a, b) => (a.path ?? "").localeCompare(b.path ?? ""))
   return { found, truncated }
 }
 
@@ -106,7 +123,7 @@ export const find: ToolHandler<"find"> = {
 
     if (input.where === "workspace") {
       const root = await resolveWorkspacePath(".", { directory: ctx.deps.directory, allowedRoots: ctx.deps.options.allowedRoots })
-      const walked = await walkWorkspace(root.absolute, input.pattern ?? "**/*.ipynb", limit)
+      const walked = await walkWorkspace(root.absolute, input.pattern ?? "**/*.ipynb", limit, join(workDirectory(ctx.deps.directory, ctx.deps.options.workDir), "files"))
       notebooks = walked.found
       truncated = walked.truncated
     } else if (input.where === "drive") {

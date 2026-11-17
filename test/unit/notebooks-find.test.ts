@@ -89,6 +89,14 @@ describe("colab_find in Drive", () => {
     expect(driveQuery("a\\b")).toBe("mimeType = 'application/vnd.google.colaboratory' and trashed = false and name contains 'a\\\\b'")
   })
 
+  it("lists notebooks the plugin pulled into the workDir (review LOW 10)", async () => {
+    mkdirSync(join(directory, ".colab/files"), { recursive: true })
+    writeFileSync(join(directory, ".colab/files/pulled.ipynb"), "{}")
+    setup()
+    const result = (await runTool("find", { where: "workspace" }, call(), runner)) as { notebooks: { path: string }[] }
+    expect(result.notebooks.map((entry) => entry.path)).toContain(".colab/files/pulled.ipynb")
+  })
+
   it("refuses Drive on an account that was not signed in with drive.file", async () => {
     setup({ accounts: { work: { drive: false } } })
     expect(await runTool("find", { where: "drive" }, call(), runner)).toMatchObject({ state: "refused", error: "AUTH_SCOPE_MISSING" })

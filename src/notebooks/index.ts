@@ -2,7 +2,7 @@
 // colab_find, the Drive pull (DriveSync) and the drive.create / drive.update / drive.trash plans with sync records,
 // the foreign-origin warning, pushOutputs and the source secret screen.
 import type { PortEnv } from "../deps.js"
-import type { DriveApi, DriveSync } from "../ports.js"
+import type { DriveApi, DriveSync, NotebookStore } from "../ports.js"
 import type { PlanHandlers, ToolHandlers } from "../tools/types.js"
 import { createHttpDriveApi } from "./drive-api.js"
 import { CREATE, TRASH, UPDATE } from "./drive-plans.js"
@@ -10,6 +10,7 @@ import { edit } from "./edit.js"
 import { find } from "./find.js"
 import { notebook } from "./notebook.js"
 import { createDriveSync } from "./pull.js"
+import { createNotebookStore } from "./store.js"
 
 /** The three tools this package owns. */
 export const HANDLERS: ToolHandlers = { find, notebook, edit }
@@ -21,8 +22,11 @@ export const PLAN_HANDLERS: PlanHandlers = {
   "drive.trash": { colab: TRASH, enterprise: TRASH },
 }
 
-/** The Drive port and the pull seam, from the plugin's one fetch and its stored grants. */
-export function createDrivePorts(env: PortEnv): { readonly drive: DriveApi; readonly driveSync: DriveSync } {
+/**
+ * Package C's ports, from the plugin's one fetch and its stored grants: the Drive client, the Drive pull seam and the
+ * notebook store package D's write-back calls. The store and `colab_edit` share one per-path lock.
+ */
+export function createNotebookPorts(env: PortEnv): { readonly drive: DriveApi; readonly driveSync: DriveSync; readonly notebooks: NotebookStore } {
   const drive = createHttpDriveApi(env)
-  return { drive, driveSync: createDriveSync(env, drive) }
+  return { drive, driveSync: createDriveSync(env, drive), notebooks: createNotebookStore(env) }
 }

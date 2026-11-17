@@ -2,15 +2,19 @@
  * `colab_edit` (design §6): local notebook edits, all or nothing. `create`, `insert`, `replace`, `delete`, `move`,
  * `clearOutputs` and `setMetadata`, applied in order to one in-memory model and written once, atomically. Every edit but
  * the `create`-first form takes `ifHash`, the hash `colab_notebook` returned, and a file that moved is
- * `NOTEBOOK_CHANGED` with nothing written. The tool asserts `colab.edit` before it runs (the wrapper) and owes OpenCode's
- * `edit` on the path, plus `external_directory` outside the project (H8): the requests are built in permissions.ts and
- * asserted when the host context carries an assert.
+ * `NOTEBOOK_CHANGED` with nothing written.
  *
- * An edit that changes nothing writes nothing, so a notebook's bytes are never reformatted for no reason.
+ * Two guards, because `ifHash` alone loses an edit when two calls overlap (review M1): the whole read → check → write
+ * runs under the per-path lock `lock.ts` holds (the same lock `NotebookStore.mergeRun` takes), and the file is re-read
+ * and re-hashed immediately before the rename, which narrows the cross-process window to the rename itself. A `create`
+ * whose path appeared meanwhile answers `FILE_EXISTS`.
+ *
+ * The tool asserts `colab.edit` before it runs (the wrapper) and asks OpenCode's `edit` on the path, plus
+ * `external_directory` outside the project, through the handler context (H8).
  */
 import { ColabError } from "../domain/errors.js"
-import type { Assert } from "../ports.js"
 import type { HandlerContext, ToolHandler } from "../tools/types.js"
+import { withNotebookLock } from "./lock.js"
 import {
   clearCellOutputs,
   createNotebook,
@@ -29,7 +33,7 @@ import {
   type Notebook,
 } from "./model.js"
 import { assertHostEdits } from "./permissions.js"
-import { exists, readWorkspaceFile, refuseExisting, resolveWorkspacePath, writeWorkspaceFile, type WorkspaceTarget } from "./paths.js"
+import { exists, readOptionalFile, readWorkspaceFile, refuseExisting, resolveWorkspacePath, writeWorkspaceFile, type WorkspaceTarget } from "./paths.js"
 
 type EditOp = NonNullable<Parameters<ToolHandler<"edit">["run"]>[0]["ops"]>[number]
 
@@ -78,43 +82,52 @@ export const edit: ToolHandler<"edit"> = {
 
   async run(input, ctx: HandlerContext) {
     const target = await resolveWorkspacePath(input.path, { directory: ctx.deps.directory, allowedRoots: ctx.deps.options.allowedRoots })
-    await assertHostEdits(ctx as HandlerContext & { readonly assert?: Assert }, target)
+    await assertHostEdits(ctx, target)
 
-    const first = input.ops[0]!
-    let notebook: Notebook
-    let before: string | undefined
+    return withNotebookLock(target.absolute, async () => {
+      const first = input.ops[0]!
+      let notebook: Notebook
+      let before: string | undefined
 
-    if (first.op === "create") {
-      if (await exists(target)) refuseExisting(target, "Read it with colab_notebook and pass ifHash, or choose another path.")
-      notebook = createNotebook({
-        kernel: first.kernel,
-        cells: (first.cells ?? []).map((cell) => ({
-          type: cell.type,
-          source: cell.source,
-          ...(cell.metadata !== undefined ? { metadata: cell.metadata as unknown as JsonObject } : {}),
-        })),
-      })
-    } else {
-      const bytes = await readWorkspaceFile(target, ctx.deps.options.maxDownloadBytes)
-      before = notebookHash(bytes)
-      if (input.ifHash !== before) {
-        throw new ColabError("NOTEBOOK_CHANGED", "The notebook's bytes differ from the ifHash this call passed.", { next: "Read it again with colab_notebook, then edit with the hash it returns." })
+      if (first.op === "create") {
+        if (await exists(target)) refuseExisting(target, "Read it with colab_notebook and pass ifHash, or choose another path.")
+        notebook = createNotebook({
+          kernel: first.kernel,
+          cells: (first.cells ?? []).map((cell) => ({
+            type: cell.type,
+            source: cell.source,
+            ...(cell.metadata !== undefined ? { metadata: cell.metadata as unknown as JsonObject } : {}),
+          })),
+        })
+      } else {
+        const bytes = await readWorkspaceFile(target, ctx.deps.options.maxDownloadBytes)
+        before = notebookHash(bytes)
+        if (input.ifHash !== before) {
+          throw new ColabError("NOTEBOOK_CHANGED", "The notebook's bytes differ from the ifHash this call passed.", { next: "Read it again with colab_notebook, then edit with the hash it returns." })
+        }
+        notebook = parseNotebook(bytes)
       }
-      notebook = parseNotebook(bytes)
-    }
 
-    for (const op of input.ops) {
-      if (op.op === "create") continue
-      applyOp(notebook, op)
-    }
+      for (const op of input.ops) {
+        if (op.op === "create") continue
+        applyOp(notebook, op)
+      }
 
-    // Nothing changed: leave the bytes exactly as they are.
-    if (!notebook.changed && before !== undefined) {
-      return { state: "ok" as const, path: displayPath(target), hash: before, cells: notebook.cells.length }
-    }
+      // Nothing changed: leave the bytes exactly as they are.
+      if (!notebook.changed && before !== undefined) {
+        return { state: "ok" as const, path: displayPath(target), hash: before, cells: notebook.cells.length }
+      }
 
-    const bytes = serializeNotebook(notebook)
-    await writeWorkspaceFile(target, bytes)
-    return { state: "ok" as const, path: displayPath(target), hash: notebookHash(bytes), cells: notebook.cells.length }
+      const bytes = serializeNotebook(notebook)
+      // Cross-process guard: the file must still be the one this call read (or still absent for a create).
+      const current = await readOptionalFile(target)
+      if (before === undefined) {
+        if (current !== undefined) refuseExisting(target, "Read it with colab_notebook and pass ifHash, or choose another path.")
+      } else if (current === undefined || notebookHash(current) !== before) {
+        throw new ColabError("NOTEBOOK_CHANGED", "Another process changed the notebook before this edit could be written.", { next: "Read it again with colab_notebook, then edit with the hash it returns." })
+      }
+      await writeWorkspaceFile(target, bytes)
+      return { state: "ok" as const, path: displayPath(target), hash: notebookHash(bytes), cells: notebook.cells.length }
+    })
   },
 }

@@ -6,7 +6,7 @@
  * its text cannot reorder a row.
  */
 import { cellExecutionCount, cellOutputs, cellSource, cellType, type Notebook, type NotebookCell } from "./model.js"
-import { screenSecrets } from "./secret.js"
+import { screenSecrets } from "../redact.js"
 
 export interface OutputPreviewView {
   readonly type: string

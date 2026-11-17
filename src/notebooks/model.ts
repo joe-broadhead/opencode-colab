@@ -35,6 +35,8 @@ export interface Notebook {
   readonly cells: NotebookCell[]
   /** The bytes the model read; `serializeNotebook` returns them while nothing changed. */
   readonly raw?: Uint8Array
+  /** The file holds an integer JSON cannot keep exactly, so the model refuses to rewrite it (review LOW 4). */
+  readonly lossy: boolean
   changed: boolean
 }
 
@@ -124,7 +126,11 @@ function splitOutput(output: JsonValue): JsonValue {
   return out
 }
 
-/** Python's `str.splitlines(True)` for the line endings notebooks use. */
+/**
+ * Python's `str.splitlines(True)` for the line endings notebooks use: `\n`, `\r\n` and `\r`. Python also breaks on
+ * `\v`, `\f`, `\x1c`–`\x1e`, `\x85`, `\u2028` and `\u2029`; those stay inside one line here, which rejoins to the
+ * same text, so a file that is not rewritten keeps its bytes and a rewrite only differs in line grouping.
+ */
 export function splitLines(text: string): string[] {
   const lines: string[] = []
   let start = 0
@@ -164,6 +170,43 @@ function cloneJson(value: JsonValue): JsonValue {
   return value
 }
 
+/**
+ * Whether the JSON text holds an integer literal JSON cannot keep exactly (above 2^53 - 1, outside a string). A model
+ * that read one refuses to rewrite the file: `JSON.parse` would round it, and a notebook's metadata is not ours to
+ * change. Reading still works.
+ */
+function hasUnsafeInteger(text: string): boolean {
+  let inString = false
+  let escaped = false
+  const outside: string[] = []
+  for (const character of text) {
+    if (inString) {
+      if (escaped) escaped = false
+      else if (character === "\\") escaped = true
+      else if (character === '"') inString = false
+      outside.push(" ")
+      continue
+    }
+    if (character === '"') {
+      inString = true
+      outside.push(" ")
+      continue
+    }
+    outside.push(character)
+  }
+  for (const match of outside.join("").matchAll(/-?\d+/g)) {
+    const digits = match[0].replace(/^-/, "")
+    if (digits.length < 16) continue
+    try {
+      const value = BigInt(match[0])
+      if (value > 9007199254740991n || value < -9007199254740991n) return true
+    } catch {
+      // Not an integer literal after all.
+    }
+  }
+  return false
+}
+
 /** JSON with object keys sorted, as nbformat's `sort_keys=True` writes. */
 function sortKeysDeep(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map((item) => sortKeysDeep(item))
@@ -188,8 +231,10 @@ function stableStringify(value: unknown): string {
  */
 export function parseNotebook(bytes: Uint8Array): Notebook {
   let document: unknown
+  let text: string
   try {
-    document = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    document = JSON.parse(text)
   } catch {
     invalid("it is not UTF-8 JSON")
   }
@@ -240,7 +285,7 @@ export function parseNotebook(bytes: Uint8Array): Notebook {
     cells.push({ json, id, derived: typeof declared !== "string" })
   })
 
-  return { nbformatMinor: minor as number, metadata: cloneJson(metadata) as JsonObject, cells, raw: bytes, changed: false }
+  return { nbformatMinor: minor as number, metadata: cloneJson(metadata) as JsonObject, cells, raw: bytes, lossy: hasUnsafeInteger(text), changed: false }
 }
 
 /**
@@ -251,6 +296,11 @@ export function parseNotebook(bytes: Uint8Array): Notebook {
 export function serializeNotebook(notebook: Notebook, options: { readonly persistIds?: boolean } = {}): Uint8Array {
   const persistIds = options.persistIds ?? true
   if (!notebook.changed && notebook.raw) return notebook.raw
+  if (notebook.lossy) {
+    throw new ColabError("NOTEBOOK_INVALID", "The notebook holds an integer larger than JSON can keep exactly, so the plugin will not rewrite it.", {
+      next: "Open it in Jupyter and save it there, or fix the integer by hand, then edit it with colab_edit.",
+    })
+  }
   const cells = notebook.cells.map((cell) => {
     const out = cloneJson(cell.json) as JsonObject
     if (cell.derived && !persistIds) delete out.id
@@ -270,8 +320,8 @@ export function serializeNotebook(notebook: Notebook, options: { readonly persis
   })
   const persist = persistIds && notebook.cells.some((cell) => cell.derived)
   const document: JsonObject = { cells, metadata: cleanMetadata(notebook.metadata), nbformat: 4, nbformat_minor: persist ? Math.max(notebook.nbformatMinor, 5) : notebook.nbformatMinor }
-  // nbformat's JSONWriter: json.dumps(indent=1, sort_keys=True), and no trailing newline.
-  return Buffer.from(JSON.stringify(sortKeysDeep(document), null, 1), "utf8")
+  // nbformat's JSONWriter (indent=1, sort_keys=True), and nbformat.write() ends the file with a newline.
+  return Buffer.from(`${JSON.stringify(sortKeysDeep(document), null, 1)}\n`, "utf8")
 }
 
 // ── Reading a cell ──────────────────────────────────────────────────────
@@ -349,7 +399,7 @@ export function selectCellIndices(notebook: Notebook, selector: "all" | readonly
 // ── Editing ─────────────────────────────────────────────────────────────
 
 export function createNotebook(input: { readonly kernel?: string; readonly cells?: readonly NewCell[] }): Notebook {
-  const notebook: Notebook = { nbformatMinor: 5, metadata: {}, cells: [], changed: true }
+  const notebook: Notebook = { nbformatMinor: 5, metadata: {}, cells: [], lossy: false, changed: true }
   for (const cell of input.cells ?? []) insertCell(notebook, notebook.cells.length, cell)
   if (input.kernel !== undefined) notebook.metadata.kernelspec = { name: input.kernel, display_name: input.kernel }
   return notebook

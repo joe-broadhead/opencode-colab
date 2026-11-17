@@ -6,8 +6,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { OPERATIONS } from "../../src/domain/actions.js"
-import { notebookHash, parseNotebook } from "../../src/notebooks/model.js"
-import { assertHostEdits, editRequests } from "../../src/notebooks/permissions.js"
+import { cellSource, notebookHash, parseNotebook } from "../../src/notebooks/model.js"
+import { hostEditRequests } from "../../src/notebooks/permissions.js"
 import { resolveWorkspacePath } from "../../src/notebooks/paths.js"
 import type { PermissionRequest } from "../../src/ports.js"
 import { toolHandlers } from "../../src/tools/registry.js"
@@ -93,6 +93,35 @@ describe("colab_edit", () => {
     expect(notebook.cells[1]!.json.outputs).toHaveLength(1)
   })
 
+  it("serializes two concurrent edits with one ifHash, so neither is lost (review probe P1)", async () => {
+    write("doc.ipynb", fixture([codeCell("x = 1")]))
+    const hash = notebookHash(read("doc.ipynb"))
+    const results = (await Promise.all([
+      runTool("edit", { path: "doc.ipynb", ifHash: hash, ops: [{ op: "insert", at: 1, cell: { type: "code", source: "FIRST" } }] }, call("c_a"), runner),
+      runTool("edit", { path: "doc.ipynb", ifHash: hash, ops: [{ op: "insert", at: 1, cell: { type: "code", source: "SECOND" } }] }, call("c_b"), runner),
+    ])) as { state: string; error?: string }[]
+    expect(results.map((result) => result.state).sort()).toEqual(["ok", "refused"])
+    expect(results.find((result) => result.state === "refused")).toMatchObject({ error: "NOTEBOOK_CHANGED" })
+    const sources = parseNotebook(read("doc.ipynb")).cells.map((cell) => cellSource(cell))
+    expect(sources).toContain("x = 1")
+    expect(sources.filter((source) => source === "FIRST" || source === "SECOND")).toHaveLength(1)
+  })
+
+  it("ends a rewritten file with a newline, as nbformat.write does (review probe P5)", async () => {
+    write("doc.ipynb", fixture([codeCell("a")]))
+    await runTool("edit", { path: "doc.ipynb", ifHash: notebookHash(read("doc.ipynb")), ops: [{ op: "replace", cell: 0, source: "b" }] }, call(), runner)
+    expect(read("doc.ipynb").toString("utf8").endsWith("\n")).toBe(true)
+  })
+
+  it("refuses to rewrite a notebook holding an integer JSON cannot keep exactly (review probe P5)", async () => {
+    const text = fixture([codeCell("x")]).replace('"metadata": {}', '"metadata": {"big": 12345678901234567890}')
+    write("doc.ipynb", text)
+    const before = read("doc.ipynb")
+    const result = await runTool("edit", { path: "doc.ipynb", ifHash: notebookHash(before), ops: [{ op: "replace", cell: 0, source: "y" }] }, call(), runner)
+    expect(result).toMatchObject({ state: "refused", error: "NOTEBOOK_INVALID" })
+    expect(read("doc.ipynb")).toEqual(before)
+  })
+
   it("requires ifHash for anything but create", async () => {
     write("doc.ipynb", fixture([codeCell("a")]))
     expect(await runTool("edit", { path: "doc.ipynb", ops: [{ op: "replace", cell: 0, source: "b" }] }, call(), runner)).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
@@ -135,32 +164,42 @@ describe("colab_edit", () => {
     expect(result.path).toBe(target)
   })
 
-  it("asks colab.edit once on notebook.local.edit, with the edit metadata (H8's fence)", async () => {
+  it("asks colab.edit once on notebook.local.edit, then the host's edit on the path (H8)", async () => {
     write("doc.ipynb", fixture([codeCell("a")]))
     await runTool("edit", { path: "doc.ipynb", ifHash: notebookHash(read("doc.ipynb")), ops: [{ op: "replace", cell: 0, source: "b" }] }, call(), runner)
-    expect(permission.requests).toHaveLength(1)
+    expect(permission.requests.map((request) => request.action)).toEqual(["colab.edit", "edit"])
     expect(permission.requests[0]).toMatchObject({
       action: "colab.edit",
       resources: [`default:${OPERATIONS.localEdit}`],
       save: [`default:${OPERATIONS.localEdit}`],
       metadata: { account: "default", path: "doc.ipynb", ops: ["replace"], operations: 1 },
     })
+    expect(permission.requests[1]).toMatchObject({ action: "edit", resources: [join(directory, "doc.ipynb")], save: [join(directory, "doc.ipynb")], metadata: { path: "doc.ipynb" } })
+  })
+
+  it("writes nothing when the host's edit ask is denied (H8)", async () => {
+    write("doc.ipynb", fixture([codeCell("a")]))
+    const before = read("doc.ipynb")
+    permission.decide = (request) => {
+      if (request.action === "edit") throw new Error("denied by the agent's edit rule")
+    }
+    await expect(runTool("edit", { path: "doc.ipynb", ifHash: notebookHash(before), ops: [{ op: "replace", cell: 0, source: "b" }] }, call(), runner)).rejects.toThrow(/denied/)
+    expect(read("doc.ipynb")).toEqual(before)
   })
 
   it("builds the host edit and external_directory asks H8 requires", async () => {
     write("doc.ipynb", fixture([codeCell("a")]))
     const inside = await resolveWorkspacePath("doc.ipynb", { directory, allowedRoots: [] })
-    expect(editRequests(call(), inside)).toEqual([{ sessionID: "ses_test", agent: "build", action: "edit", resources: [join(directory, "doc.ipynb")], save: [join(directory, "doc.ipynb")], metadata: { path: "doc.ipynb" }, source: { type: "tool", messageID: "msg_test", id: "call_1" } }])
+    expect(hostEditRequests(inside)).toEqual([{ action: "edit", resources: [join(directory, "doc.ipynb")], save: [join(directory, "doc.ipynb")], metadata: { path: "doc.ipynb" } }])
 
     const outsideTarget = join(outside, "x.ipynb")
-    const requests = editRequests(call(), { absolute: outsideTarget, relative: outsideTarget, insideProject: false })
+    const requests = hostEditRequests({ absolute: outsideTarget, relative: outsideTarget, insideProject: false })
     expect(requests.map((request) => request.action)).toEqual(["edit", "external_directory"])
     expect(requests[1]).toMatchObject({ resources: [`${outside}/*`], save: [`${outside}/*`], metadata: { destination: outsideTarget } })
 
-    const asserted: PermissionRequest[] = []
-    await assertHostEdits({ call: call(), assert: async (request) => void asserted.push(request) }, { absolute: outsideTarget, relative: outsideTarget, insideProject: false })
-    expect(asserted.map((request) => request.action)).toEqual(["edit", "external_directory"])
-    // Without a host assert the edit still runs under its own colab.edit ask.
-    await expect(assertHostEdits({ call: call() }, inside)).resolves.toBeUndefined()
+    // Through the tool: an allowedRoot outside the project asks both, in order.
+    const result = (await runTool("edit", { path: outsideTarget, ops: [{ op: "create", cells: [{ type: "code", source: "x" }] }] }, call(), runner)) as { state: string }
+    expect(result.state).toBe("ok")
+    expect(permission.requests.map((request) => request.action)).toEqual(["colab.edit", "edit", "external_directory"])
   })
 })

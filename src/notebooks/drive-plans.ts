@@ -17,7 +17,6 @@ import { ColabError, type WarningCode } from "../domain/errors.js"
 import type { StoredPlan } from "../ports.js"
 import type { HandlerContext, PlanHandler, PlanParams, PlanPreview } from "../tools/types.js"
 import { requireDrive } from "./account.js"
-import { DRIVE_SIMPLE_UPLOAD_MAX } from "./drive-api.js"
 import { COLAB_MIME } from "./find.js"
 import {
   cellOutputs,
@@ -32,12 +31,15 @@ import {
 } from "./model.js"
 import { readWorkspaceFile, resolveWorkspacePath, type WorkspaceTarget } from "./paths.js"
 import { readSyncRecord, writeSyncRecord } from "./sync.js"
-import { screenSecrets } from "./secret.js"
+import { screenSecrets } from "../redact.js"
+import { cutWithMarker, sanitizeText } from "./view.js"
 
 type Outputs = "strip" | "keep"
 type PushPlan = { readonly path: string; readonly outputs: Outputs; readonly fileId?: string }
 
 const displayPath = (target: WorkspaceTarget) => (target.insideProject ? target.relative : target.absolute)
+/** A Drive name is untrusted text: strip controls and bidi marks and cap it before it reaches a preview. */
+const shown = (name: string) => cutWithMarker(sanitizeText(name), 200, "…")
 function planChanged(detail: string): never {
   throw new ColabError("PLAN_CHANGED", detail, { next: "Plan again and show the person the new preview." })
 }
@@ -101,6 +103,7 @@ function previewWithSecrets(secret: { readonly sources: number; readonly outputs
 
 const colabAutosave = "If the notebook is open in Colab, Colab's autosave may overwrite this push."
 const pinNote = "The revision this replaces is kept (keepForever). If the file already has Drive's maximum of 200 kept revisions, it is not pinned and the result says REVISION_PIN_SKIPPED."
+const notPinned = "Drive already keeps this file's maximum of 200 revisions, so the revision this replaces is not pinned (REVISION_PIN_SKIPPED)."
 
 const outputsWording = (outputs: Outputs) => (outputs === "strip" ? "outputs are stripped" : "outputs are kept")
 
@@ -116,30 +119,34 @@ async function previewCreate(params: PlanParams<"drive.create">, ctx: HandlerCon
   }
   const outputs: Outputs = params.outputs ?? ctx.deps.options.pushOutputs
   const name = pushName(params.name, target)
+  // A pre-generated id makes the create retry-safe: a lost answer joins the file the id already names (guides/manage-uploads).
+  await ctx.providerRead(OPERATIONS.driveFilesGenerateIds)
+  const driveId = await ctx.deps.drive.generateId(ctx.account.alias, ctx.call.signal)
   const secret = secretCells(notebook)
   const pushed = pushBytes(notebook, outputs)
-  if (pushed.length > DRIVE_SIMPLE_UPLOAD_MAX) {
-    throw new ColabError("FILE_TOO_LARGE", `The notebook is ${pushed.length} bytes to upload${outputs === "strip" ? " even with outputs stripped" : ""}, over Drive's 5 MB upload limit.`, {
-      next: "Plan again with outputs: \"strip\", split the notebook, or push it from the Drive web app.",
+  if (pushed.length > ctx.deps.options.maxUploadBytes) {
+    throw new ColabError("FILE_TOO_LARGE", `The notebook is ${pushed.length} bytes to upload${outputs === "strip" ? " even with outputs stripped" : ""}, over maxUploadBytes.`, {
+      next: "Plan again with outputs: \"strip\", split the notebook, or raise maxUploadBytes.",
     })
   }
   const preview = previewWithSecrets(secret, {
-    headline: `Create ${name} in Drive with ${notebook.cells.length} cells; ${outputsWording(outputs)}.`,
+    headline: `Create ${shown(name)} in Drive with ${notebook.cells.length} cells; ${outputsWording(outputs)}.`,
     path: displayPath(target),
-    name,
+    name: shown(name),
     ...(params.folder !== undefined ? { folder: params.folder } : {}),
     cells: notebook.cells.length,
     bytes: pushed.length,
     hash,
     outputs,
+    driveId,
     revisions: "A new file: no revision is replaced.",
     colab: colabAutosave,
     trust: "untrusted",
   })
   return {
     preview,
-    payload: { path: target.absolute, name, ...(params.folder !== undefined ? { folder: params.folder } : {}), outputs } satisfies PushPlan & { name: string; folder?: string },
-    fingerprint: { hash, name, folder: params.folder ?? null, outputs },
+    payload: { path: target.absolute, name, driveId, ...(params.folder !== undefined ? { folder: params.folder } : {}), outputs } satisfies PushPlan & { name: string; driveId: string; folder?: string },
+    fingerprint: { hash, name, folder: params.folder ?? null, outputs, driveId },
   }
 }
 
@@ -162,32 +169,37 @@ async function previewUpdate(params: PlanParams<"drive.update">, ctx: HandlerCon
     throw new ColabError("DRIVE_CONFLICT", "Drive's head revision differs from the sync record's base revision.", { next: "Pull the Drive copy to another path, merge, and plan again." })
   }
   const outputs: Outputs = params.outputs ?? ctx.deps.options.pushOutputs
+  // What Drive already keeps decides the preview's pin line, not an error string after the push (review M2).
+  await ctx.providerRead(OPERATIONS.driveRevisionsList)
+  const kept = await ctx.deps.drive.keptRevisions(ctx.account.alias, file.id, ctx.call.signal)
+  const pin = kept.kept < 200
   const secret = secretCells(notebook)
   const pushed = pushBytes(notebook, outputs)
-  if (pushed.length > DRIVE_SIMPLE_UPLOAD_MAX) {
-    throw new ColabError("FILE_TOO_LARGE", `The notebook is ${pushed.length} bytes to upload${outputs === "strip" ? " even with outputs stripped" : ""}, over Drive's 5 MB upload limit.`, {
-      next: "Plan again with outputs: \"strip\", split the notebook, or push it from the Drive web app.",
+  if (pushed.length > ctx.deps.options.maxUploadBytes) {
+    throw new ColabError("FILE_TOO_LARGE", `The notebook is ${pushed.length} bytes to upload${outputs === "strip" ? " even with outputs stripped" : ""}, over maxUploadBytes.`, {
+      next: "Plan again with outputs: \"strip\", split the notebook, or raise maxUploadBytes.",
     })
   }
   const preview = previewWithSecrets(secret, {
-    headline: `Replace the Drive copy of ${file.name} with ${notebook.cells.length} cells; ${outputsWording(outputs)}.`,
+    headline: `Replace the Drive copy of ${shown(file.name)} with ${notebook.cells.length} cells; ${outputsWording(outputs)}.`,
     path: displayPath(target),
     drive: file.id,
-    name: file.name,
+    name: shown(file.name),
     cells: notebook.cells.length,
     bytes: pushed.length,
     hash,
     outputs,
     baseRevision: record.baseRevision,
     headRevision: file.headRevisionId ?? "",
-    revisions: pinNote,
+    revisions: pin ? pinNote : notPinned,
+    pin,
     colab: colabAutosave,
     trust: "untrusted",
   })
   return {
     preview,
-    payload: { path: target.absolute, outputs, fileId: file.id } satisfies PushPlan,
-    fingerprint: { hash, outputs, revision: file.headRevisionId ?? "", name: file.name },
+    payload: { path: target.absolute, outputs, fileId: file.id, pin } satisfies PushPlan & { pin: boolean },
+    fingerprint: { hash, outputs, revision: file.headRevisionId ?? "", name: file.name, pin },
   }
 }
 
@@ -195,12 +207,12 @@ async function previewTrash(params: PlanParams<"drive.trash">, ctx: HandlerConte
   requireDrive(ctx.account)
   await ctx.providerRead(OPERATIONS.driveFilesGet)
   const file = await ctx.deps.drive.get(ctx.account.alias, params.drive, ctx.call.signal)
-  if (!file) throw new ColabError("NOT_FOUND", "Drive has no notebook the plugin may see with that id.", { next: 'colab_find({ where: "drive" }) lists the notebooks the plugin may see.' })
+  if (!file) throw new ColabError("NOT_FOUND", "Drive has no notebook the plugin may see with that id.", { next: "colab_find({ where: \"drive\" }) lists the notebooks the plugin may see; one it never opened needs gws's export into the workspace, then colab_notebook({ path })." })
   return {
     preview: {
-      headline: `Move ${file.name} to the Drive trash.`,
+      headline: `Move ${shown(file.name)} to the Drive trash.`,
       drive: file.id,
-      name: file.name,
+      name: shown(file.name),
       ...(file.modifiedTime !== undefined ? { modified: file.modifiedTime } : {}),
       revision: file.headRevisionId ?? "",
       restorable: "A trashed notebook stays in the Drive trash until the trash is emptied, and can be restored from Drive before then. A Colab tab that has it open keeps its own copy.",
@@ -223,11 +235,24 @@ async function commitCreate(plan: StoredPlan, ctx: HandlerContext): Promise<Read
   const { target, notebook, hash } = await loadLocal(payload.path, ctx)
   if (hash !== plan.fingerprint.hash) planChanged("The local notebook changed since the preview.")
   const name = String(plan.fingerprint.name ?? pushName(undefined, target))
+  const driveId = typeof plan.fingerprint.driveId === "string" ? plan.fingerprint.driveId : undefined
   const bytes = pushBytes(notebook, payload.outputs)
-  await ctx.providerRead(OPERATIONS.driveFilesCreate)
-  const created = await ctx.deps.drive.create(ctx.account.alias, { name, ...(typeof plan.fingerprint.folder === "string" ? { folder: plan.fingerprint.folder } : {}), bytes, mimeType: COLAB_MIME }, ctx.call.signal)
+  let created
+  let joined = false
+  try {
+    created = await ctx.deps.drive.create(ctx.account.alias, { ...(driveId !== undefined ? { id: driveId } : {}), name, ...(typeof plan.fingerprint.folder === "string" ? { folder: plan.fingerprint.folder } : {}), bytes, mimeType: COLAB_MIME }, ctx.call.signal)
+  } catch (error) {
+    // The client retried with the same id; an answer it could not get at all is one read away from known.
+    if (driveId === undefined) throw error
+    const found = await ctx.deps.drive.get(ctx.account.alias, driveId, ctx.call.signal).catch(() => undefined)
+    if (!found || found.name !== name) {
+      throw new ColabError("UNCERTAIN", "Drive's answer to the upload was lost, and the file the plan named is not there.", { next: 'colab_find({ where: "drive" }) tells you whether the notebook arrived; plan again if it did not.' })
+    }
+    created = found
+    joined = true
+  }
   await writeSyncRecord(target, ctx.deps.directory, ctx.deps.options.workDir, { fileId: created.id, baseRevision: created.headRevisionId ?? "", baseHash: hash })
-  return { fileId: created.id, name: created.name, revision: created.headRevisionId ?? "", cells: notebook.cells.length, outputs: payload.outputs, sha256: hashBytes(bytes), trust: "untrusted" }
+  return { fileId: created.id, name: created.name, revision: created.headRevisionId ?? "", joined, cells: notebook.cells.length, outputs: payload.outputs, sha256: hashBytes(bytes), trust: "untrusted" }
 }
 
 async function commitUpdate(plan: StoredPlan, ctx: HandlerContext): Promise<Readonly<Record<string, unknown>>> {
@@ -243,21 +268,35 @@ async function commitUpdate(plan: StoredPlan, ctx: HandlerContext): Promise<Read
   if ((file.headRevisionId ?? "") !== plan.fingerprint.revision) planChanged("Drive's head revision changed since the preview.")
   const replaced = file.headRevisionId ?? ""
   const bytes = pushBytes(notebook, payload.outputs)
-  await ctx.providerRead(OPERATIONS.driveFilesUpdate)
+  // The push lands first. Nothing below may fail the commit: a caller that hears "failed" would plan again over a push
+  // that is already in Drive (review M2).
   const updated = await ctx.deps.drive.update(ctx.account.alias, record.fileId, { bytes }, ctx.call.signal)
-  let pinned = false
-  if (replaced !== "") {
-    await ctx.providerRead(OPERATIONS.driveRevisionsUpdate)
-    pinned = await ctx.deps.drive.keepRevision(ctx.account.alias, record.fileId, replaced, ctx.call.signal)
-  }
   await writeSyncRecord(target, ctx.deps.directory, ctx.deps.options.workDir, { fileId: updated.id, baseRevision: updated.headRevisionId ?? "", baseHash: hash })
+  let pinned = false
+  let pinFailure: "cap" | "error" | undefined
+  let pinCode: string | undefined
+  if (plan.fingerprint.pin === false) {
+    pinFailure = "cap"
+  } else if (replaced !== "") {
+    try {
+      pinned = await ctx.deps.drive.keepRevision(ctx.account.alias, record.fileId, replaced, ctx.call.signal)
+      if (!pinned) pinFailure = "cap"
+    } catch (error) {
+      // An answer lost after the push (a 5xx, a timeout, a Stop, or the 200-revision cap in a shape the client does
+      // not recognise) is reported, never thrown: the bytes are in Drive and the record already names the new head.
+      pinFailure = "error"
+      pinCode = ColabError.is(error) ? error.code : undefined
+    }
+  }
   const warnings: WarningCode[] = pinned ? [] : ["REVISION_PIN_SKIPPED"]
   return {
     fileId: updated.id,
     name: updated.name,
     revision: updated.headRevisionId ?? "",
     replacedRevision: replaced,
+    landed: true,
     pinned,
+    ...(pinFailure !== undefined ? { pinFailure, ...(pinCode !== undefined ? { pinCode } : {}) } : {}),
     cells: notebook.cells.length,
     outputs: payload.outputs,
     sha256: hashBytes(bytes),

@@ -6,8 +6,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { OPERATIONS } from "../../src/domain/actions.js"
+import { ColabError } from "../../src/domain/errors.js"
+import type { PortEnv } from "../../src/deps.js"
 import { notebookHash, parseNotebook } from "../../src/notebooks/model.js"
 import { resolveWorkspacePath } from "../../src/notebooks/paths.js"
+import { createDriveSync } from "../../src/notebooks/pull.js"
 import { writeSyncRecord } from "../../src/notebooks/sync.js"
 import { hashBytes } from "../../src/notebooks/model.js"
 import { toolHandlers } from "../../src/tools/registry.js"
@@ -15,6 +18,7 @@ import { runTool, type Runner } from "../../src/tools/spec.js"
 import { fakeDeps, type Fakes, RecordingPermission } from "../fakes/index.js"
 
 const call = () => ({ sessionID: "ses_test", agent: "build", messageID: "msg_test", id: "call_1", signal: new AbortController().signal })
+const read = async () => undefined
 const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 const fixture = (): string =>
   JSON.stringify(
@@ -218,6 +222,21 @@ describe("the foreign-origin warning and the sync state", () => {
     const mine = (await runTool("notebook", { notebook: { path: "mine.ipynb" }, outputs: "none" }, call(), runner)) as { warnings?: string[] }
     expect(mine.warnings ?? []).not.toContain("FOREIGN_NOTEBOOK")
     expect(deps.options.workDir).toBe(".colab")
+  })
+
+  it("still reads a synced local notebook when Drive is unreachable (review probe P3)", async () => {
+    const { deps, fakes } = setup()
+    fakes.drive.files.set("f1", { file: { id: "f1", name: "synced.ipynb", mimeType: "application/vnd.google.colaboratory", headRevisionId: "rev-1", ownedByMe: true }, bytes: Buffer.from(fixture()) })
+    const env: PortEnv = { options: deps.options, directory: deps.directory, clock: deps.clock, auth: deps.auth, ledger: deps.ledger, fetch: (() => Promise.reject(new Error("no network"))) as unknown as typeof fetch }
+    await createDriveSync(env, fakes.drive).pull("default", { drive: "f1" }, new AbortController().signal, read)
+    fakes.drive.get = async () => {
+      throw new ColabError("UNAVAILABLE", "The request to Drive did not complete.")
+    }
+    const result = (await runTool("notebook", { notebook: { path: ".colab/files/synced.ipynb" }, outputs: "none" }, call(), runner)) as { state: string; sync?: string; hash: string; cells: unknown[] }
+    expect(result.state).toBe("ok")
+    expect(result.sync).toBeUndefined()
+    expect(result.hash).toBeTruthy()
+    expect(result.cells).toHaveLength(2)
   })
 
   it("reports the four sync states from the local hash and Drive's head", async () => {

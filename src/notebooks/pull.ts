@@ -8,7 +8,8 @@
 import { join } from "node:path"
 import { ColabError } from "../domain/errors.js"
 import type { PortEnv } from "../deps.js"
-import type { DriveApi, DriveFile, DriveSync } from "../ports.js"
+import { OPERATIONS } from "../domain/actions.js"
+import type { DriveApi, DriveFile, DriveSync, ProviderRead } from "../ports.js"
 import { hashBytes, notebookHash, parseNotebook } from "./model.js"
 import { readOptionalFile, refuseExisting, resolveWorkspacePath, writeWorkspaceFile } from "./paths.js"
 import { readSyncRecord, writeSyncRecord } from "./sync.js"
@@ -27,13 +28,15 @@ const headOf = (file: DriveFile) => file.headRevisionId ?? ""
 
 export function createDriveSync(env: PortEnv, drive: DriveApi): DriveSync {
   return {
-    async pull(account, input, signal) {
+    async pull(account, input, signal, read: ProviderRead) {
       const configured = env.options.accounts.find((entry) => entry.alias === account)
       if (configured && !configured.drive) {
         throw new ColabError("AUTH_SCOPE_MISSING", `The account "${account}" was not signed in with drive.file.`, {
           next: "Set drive: true on the account and sign in again, or pull the notebook with gws and colab_download.",
         })
       }
+      // The reader that owns the calls asserts them: the metadata read and the download are `drive.files.get`.
+      await read(OPERATIONS.driveFilesGet)
       const file = await drive.get(account, input.drive, signal)
       if (!file) throw new ColabError("NOT_FOUND", "Drive has no notebook the plugin may see with that id.", { next: 'colab_find({ where: "drive" }) lists the notebooks the plugin may see.' })
       const bytes = await drive.download(account, input.drive, signal)

@@ -122,8 +122,10 @@ export function refuseExisting(target: WorkspaceTarget, next = "Pass overwrite: 
 export async function writeWorkspaceFile(target: WorkspaceTarget, bytes: Uint8Array): Promise<void> {
   await mkdir(dirname(target.absolute), { recursive: true })
   const temporary = `${target.absolute}.${randomBytes(6).toString("hex")}.tmp`
+  // A rewrite keeps the file's own mode; a new file gets 0644, so the umask cannot make it unreadable.
+  const mode = await lstat(target.absolute).then((info) => info.mode & 0o777, () => 0o644)
   try {
-    await writeFile(temporary, bytes, { mode: 0o644 })
+    await writeFile(temporary, bytes, { mode })
     await rename(temporary, target.absolute)
   } catch (error) {
     await unlink(temporary).catch(() => undefined)

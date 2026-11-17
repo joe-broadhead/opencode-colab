@@ -8,6 +8,7 @@ import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { PortEnv } from "../../src/deps.js"
 import { PLAN_ACTIONS } from "../../src/domain/actions.js"
+import { ColabError } from "../../src/domain/errors.js"
 import { notebookHash, parseNotebook } from "../../src/notebooks/model.js"
 import { resolveWorkspacePath } from "../../src/notebooks/paths.js"
 import { createDriveSync, safeName } from "../../src/notebooks/pull.js"
@@ -47,6 +48,8 @@ function setup(options: unknown = {}): void {
 
 const env = (): PortEnv => ({ options: deps.options, directory: deps.directory, clock: deps.clock, auth: deps.auth, ledger: deps.ledger, fetch: (() => Promise.reject(new Error("tests never reach the network"))) as unknown as typeof fetch })
 const driveSync = () => createDriveSync(env(), fakes.drive)
+/** The provider-read callback the pull takes; the unit test records nothing through it. */
+const read = async () => undefined
 
 function seedDrive(input: { readonly id?: string; readonly name?: string; readonly head?: string; readonly bytes?: string; readonly ownedByMe?: boolean } = {}): string {
   const id = input.id ?? "f1"
@@ -68,7 +71,7 @@ const write = (path: string, text: string) => writeFileSync(join(directory, path
 describe("the Drive pull", () => {
   it("downloads to workDir/files by default and writes the sync record after the rename", async () => {
     seedDrive()
-    const result = (await driveSync().pull("default", { drive: "f1" }, new AbortController().signal)) as { state: string; path: string; bytes: number; sha256: string }
+    const result = (await driveSync().pull("default", { drive: "f1" }, new AbortController().signal, read)) as { state: string; path: string; bytes: number; sha256: string }
     expect(result.state).toBe("ok")
     expect(result.path).toBe(".colab/files/analysis.ipynb")
     expect(result.bytes).toBe(Buffer.byteLength(fixture()))
@@ -80,18 +83,18 @@ describe("the Drive pull", () => {
 
   it("needs overwrite for an existing file and refuses LOCAL_CHANGED over unpushed edits even with it", async () => {
     seedDrive()
-    await driveSync().pull("default", { drive: "f1" }, new AbortController().signal)
-    const again = await Promise.resolve(driveSync().pull("default", { drive: "f1" }, new AbortController().signal)).catch((error: unknown) => error)
+    await driveSync().pull("default", { drive: "f1" }, new AbortController().signal, read)
+    const again = await Promise.resolve(driveSync().pull("default", { drive: "f1" }, new AbortController().signal, read)).catch((error: unknown) => error)
     expect(again).toMatchObject({ code: "FILE_EXISTS" })
 
     writeFileSync(join(directory, ".colab/files/analysis.ipynb"), fixture().replace('print(1)\\n', 'print(2)\\n'))
-    const refused = await Promise.resolve(driveSync().pull("default", { drive: "f1", overwrite: true }, new AbortController().signal)).catch((error: unknown) => error)
+    const refused = await Promise.resolve(driveSync().pull("default", { drive: "f1", overwrite: true }, new AbortController().signal, read)).catch((error: unknown) => error)
     expect(refused).toMatchObject({ code: "LOCAL_CHANGED" })
   })
 
   it("refuses a Drive file that is not an nbformat 4 notebook", async () => {
     seedDrive({ bytes: "not a notebook" })
-    const refused = await Promise.resolve(driveSync().pull("default", { drive: "f1" }, new AbortController().signal)).catch((error: unknown) => error)
+    const refused = await Promise.resolve(driveSync().pull("default", { drive: "f1" }, new AbortController().signal, read)).catch((error: unknown) => error)
     expect(refused).toMatchObject({ code: "NOTEBOOK_INVALID" })
   })
 
@@ -106,7 +109,7 @@ describe("the Drive pull", () => {
   it("refuses Drive on an enterprise account that did not opt into drive.file", async () => {
     setup({ accounts: { ent: { backend: "enterprise", project: "p", region: "us-central1", outputBucket: "gs://bucket/out" } } })
     expect(await runTool("plan", { account: "ent", action: "drive.create", params: { path: "missing.ipynb" } }, call(), runner)).toMatchObject({ state: "refused", error: "AUTH_SCOPE_MISSING" })
-    const pulled = await Promise.resolve(driveSync().pull("ent", { drive: "f1" }, new AbortController().signal)).catch((error: unknown) => error)
+    const pulled = await Promise.resolve(driveSync().pull("ent", { drive: "f1" }, new AbortController().signal, read)).catch((error: unknown) => error)
     expect(pulled).toMatchObject({ code: "AUTH_SCOPE_MISSING" })
   })
 
@@ -135,6 +138,7 @@ describe("drive.create", () => {
       cells: 1,
       outputs: "strip",
       revisions: "A new file: no revision is replaced.",
+      driveId: "generated-1",
       colab: "If the notebook is open in Colab, Colab's autosave may overwrite this push.",
       trust: "untrusted",
     })
@@ -142,16 +146,18 @@ describe("drive.create", () => {
 
     const committed = (await runTool("write", { planId: planned.planId }, call(), runner)) as { state: string; result: { fileId: string; outputs: string; name: string; trust: string } }
     expect(committed.state).toBe("ok")
-    expect(committed.result).toMatchObject({ fileId: "file-1", outputs: "strip", name: "analysis.ipynb", trust: "untrusted" })
-    const uploaded = parseNotebook(fakes.drive.files.get("file-1")!.bytes)
+    expect(committed.result).toMatchObject({ fileId: "generated-1", outputs: "strip", name: "analysis.ipynb", trust: "untrusted" })
+    const uploaded = parseNotebook(fakes.drive.files.get("generated-1")!.bytes)
     expect(uploaded.cells[0]!.json.outputs).toEqual([])
     expect(uploaded.cells[0]!.json.execution_count).toBeNull()
     expect(uploaded.cells[0]!.json.source).toBe(source)
     // The local file keeps its outputs; the sync record names the new file.
     expect(parseNotebook(readFileSync(join(directory, "analysis.ipynb"))).cells[0]!.json.outputs).toHaveLength(1)
     const target = await resolveWorkspacePath("analysis.ipynb", { directory, allowedRoots: [] })
-    expect(await readSyncRecord(target, deps.directory, deps.options.workDir)).toMatchObject({ fileId: "file-1", baseRevision: "rev-1" })
-    expect(permission.requests.map((request) => request.action)).toEqual(["colab.plan", "colab.write", "colab.read"])
+    expect(await readSyncRecord(target, deps.directory, deps.options.workDir)).toMatchObject({ fileId: "generated-1", baseRevision: "rev-1" })
+    // A change commit asserts colab.write (the route) and no colab.read for create/update; the one read is the
+    // preview's files.generateIds.
+    expect(permission.requests.map((request) => request.action)).toEqual(["colab.plan", "colab.read", "colab.write"])
   })
 
   it("keeps outputs when the option says keep", async () => {
@@ -160,19 +166,20 @@ describe("drive.create", () => {
     const planned = (await runTool("plan", { action: "drive.create", params: { path: "analysis.ipynb", name: "renamed" } }, call(), runner)) as { planId: string; preview: Record<string, unknown> }
     expect(planned.preview).toMatchObject({ outputs: "keep", name: "renamed.ipynb" })
     await runTool("write", { planId: planned.planId }, call(), runner)
-    const uploaded = parseNotebook(fakes.drive.files.get("file-1")!.bytes)
+    const uploaded = parseNotebook(fakes.drive.files.get("generated-1")!.bytes)
     expect(uploaded.cells[0]!.json.outputs).toHaveLength(1)
     expect(uploaded.cells[0]!.json.execution_count).toBe(3)
   })
 
-  it("refuses a push over Drive's 5 MB upload limit at preview, before anything is planned", async () => {
+  it("refuses a push over maxUploadBytes at preview, before anything is planned", async () => {
+    setup({ maxUploadBytes: "1MiB" })
     const big = JSON.stringify({
       cells: Array.from({ length: 27 }, (_, index) => ({ cell_type: "code", execution_count: null, id: `c${index}`, metadata: {}, outputs: [], source: "x".repeat(200_000) })),
       metadata: {},
       nbformat: 4,
       nbformat_minor: 5,
     })
-    expect(Buffer.byteLength(big)).toBeGreaterThan(5 * 1024 * 1024)
+    expect(Buffer.byteLength(big)).toBeGreaterThan(1024 * 1024)
     write("big.ipynb", big)
     expect(await runTool("plan", { action: "drive.create", params: { path: "big.ipynb" } }, call(), runner)).toMatchObject({ state: "refused", error: "FILE_TOO_LARGE" })
     expect(fakes.drive.files.size).toBe(0)
@@ -180,9 +187,27 @@ describe("drive.create", () => {
 
   it("refuses a second create for a notebook that already has a sync record", async () => {
     seedDrive()
-    await driveSync().pull("default", { drive: "f1" }, new AbortController().signal)
+    await driveSync().pull("default", { drive: "f1" }, new AbortController().signal, read)
     const result = await runTool("plan", { action: "drive.create", params: { path: ".colab/files/analysis.ipynb" } }, call(), runner)
     expect(result).toMatchObject({ state: "refused", error: "FILE_EXISTS" })
+  })
+
+  it("joins the pre-generated id when the answer was lost, and says UNCERTAIN when the file is not there", async () => {
+    write("analysis.ipynb", fixture())
+    const planned = (await runTool("plan", { action: "drive.create", params: { path: "analysis.ipynb" } }, call(), runner)) as { planId: string }
+    // Drive made the file, but the create's answer was lost; the fixed id finds it.
+    fakes.drive.files.set("generated-1", { file: { id: "generated-1", name: "analysis.ipynb", mimeType: "application/vnd.google.colaboratory", headRevisionId: "rev-1", ownedByMe: true }, bytes: Buffer.from(fixture()) })
+    fakes.drive.create = async () => {
+      throw new ColabError("UNAVAILABLE", "Drive's upload did not complete.")
+    }
+    const committed = (await runTool("write", { planId: planned.planId }, call(), runner)) as { state: string; result: { fileId: string; joined: boolean } }
+    expect(committed.state).toBe("ok")
+    expect(committed.result).toMatchObject({ fileId: "generated-1", joined: true })
+
+    write("other.ipynb", fixture())
+    const second = (await runTool("plan", { action: "drive.create", params: { path: "other.ipynb" } }, call(), runner)) as { planId: string }
+    fakes.drive.files.clear()
+    expect(await runTool("write", { planId: second.planId }, call(), runner)).toMatchObject({ state: "failed", error: "UNCERTAIN" })
   })
 
   it("answers PLAN_CHANGED when the local notebook changed after the preview", async () => {
@@ -197,7 +222,7 @@ describe("drive.create", () => {
 describe("drive.update", () => {
   async function pulled(): Promise<string> {
     seedDrive()
-    await driveSync().pull("default", { drive: "f1" }, new AbortController().signal)
+    await driveSync().pull("default", { drive: "f1" }, new AbortController().signal, read)
     return ".colab/files/analysis.ipynb"
   }
 
@@ -223,14 +248,17 @@ describe("drive.update", () => {
     expect((await readSyncRecord(target, deps.directory, deps.options.workDir))!.baseRevision).toBe(fakes.drive.files.get("f1")!.file.headRevisionId)
   })
 
-  it("reports REVISION_PIN_SKIPPED when the file already keeps 200 revisions", async () => {
+  it("says not pinned at preview and skips the pin when the file already keeps 200 revisions", async () => {
     const path = await pulled()
-    fakes.drive.keptRevisions.set("f1", 200)
-    const planned = (await runTool("plan", { action: "drive.update", params: { path } }, call(), runner)) as { planId: string }
-    const committed = (await runTool("write", { planId: planned.planId }, call(), runner)) as { state: string; result: { pinned: boolean; warnings?: string[] }; warnings?: string[] }
+    fakes.drive.kept.set("f1", 200)
+    const planned = (await runTool("plan", { action: "drive.update", params: { path } }, call(), runner)) as { planId: string; preview: Record<string, unknown> }
+    expect(planned.preview).toMatchObject({ pin: false })
+    expect(String(planned.preview.revisions)).toContain("not pinned")
+    const committed = (await runTool("write", { planId: planned.planId }, call(), runner)) as { state: string; result: { pinned: boolean; pinFailure?: string; warnings?: string[] }; warnings?: string[] }
     expect(committed.state).toBe("ok")
-    expect(committed.result.pinned).toBe(false)
+    expect(committed.result).toMatchObject({ pinned: false, pinFailure: "cap" })
     expect(committed.result.warnings ?? committed.warnings).toContain("REVISION_PIN_SKIPPED")
+    expect(fakes.drive.calls.some((entry) => entry.method === "keepRevision")).toBe(false)
   })
 
   it("refuses DRIVE_CONFLICT when Drive's head moved after the pull", async () => {
@@ -238,6 +266,23 @@ describe("drive.update", () => {
     fakes.drive.files.set("f1", { ...fakes.drive.files.get("f1")!, file: { ...fakes.drive.files.get("f1")!.file, headRevisionId: "rev-2" } })
     const result = await runTool("plan", { action: "drive.update", params: { path } }, call(), runner)
     expect(result).toMatchObject({ state: "refused", error: "DRIVE_CONFLICT" })
+  })
+
+  it("reports a push that landed with a failed pin, and the next plan is not a conflict (review probe P2)", async () => {
+    const path = await pulled()
+    fakes.drive.keepRevision = async () => {
+      throw new ColabError("UNAVAILABLE", "Drive refused the call (HTTP 503).")
+    }
+    const planned = (await runTool("plan", { action: "drive.update", params: { path } }, call(), runner)) as { planId: string }
+    const committed = (await runTool("write", { planId: planned.planId }, call(), runner)) as { state: string; result: { landed: boolean; pinned: boolean; pinFailure?: string; warnings?: string[] } }
+    expect(committed.state).toBe("ok")
+    expect(committed.result).toMatchObject({ landed: true, pinned: false, pinFailure: "error" })
+    expect(committed.result.warnings).toContain("REVISION_PIN_SKIPPED")
+    // The bytes landed, and the record already names the new head: a retry plans cleanly.
+    const target = await resolveWorkspacePath(path, { directory, allowedRoots: [] })
+    const record = await readSyncRecord(target, deps.directory, deps.options.workDir)
+    expect(record!.baseRevision).toBe(fakes.drive.files.get("f1")!.file.headRevisionId)
+    expect(await runTool("plan", { action: "drive.update", params: { path } }, call(), runner)).toMatchObject({ state: "ok" })
   })
 
   it("answers PLAN_CHANGED when Drive moved between the preview and the commit", async () => {

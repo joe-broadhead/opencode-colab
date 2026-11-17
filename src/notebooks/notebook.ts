@@ -17,7 +17,7 @@ import { identityEmail, requireDrive, requireGcs } from "./account.js"
 import { notebookHash, notebookKernel, notebookOrigin, parseNotebook, selectCellIndices } from "./model.js"
 import { readWorkspaceFile, resolveWorkspacePath, workDirectory, type WorkspaceTarget } from "./paths.js"
 import { findSyncRecordByFileId, readSyncRecord, syncState, type SyncState } from "./sync.js"
-import { cellViews, secretsInView, type OutputsMode } from "./view.js"
+import { cellViews, cutWithMarker, sanitizeText, secretsInView, type OutputsMode } from "./view.js"
 
 type NotebookRef = NonNullable<Parameters<ToolHandler<"notebook">["run"]>[0]["notebook"]>
 
@@ -47,12 +47,8 @@ async function runNotebook(runId: string, ctx: HandlerContext): Promise<{ readon
   // A ledger record's runId is a plugin ULID; anything else cannot name a folder under the workDir.
   const folder = /^[A-Za-z0-9_-]{1,64}$/.test(runId) ? join(workDirectory(ctx.deps.directory, ctx.deps.options.workDir), "runs", runId) : undefined
   if (folder === undefined) throw new ColabError("NOT_FOUND", "This run has no output notebook on disk.")
-  const siblings = await readdir(folder).catch(() => [] as string[])
-  const candidates = [
-    ...run.outputPaths.filter((path) => /\.ipynb$/i.test(path)),
-    join(folder, "output.ipynb"),
-    ...siblings.filter((name) => /\.ipynb$/i.test(name)).sort().map((name) => join(folder, name)),
-  ]
+  // The ledger's paths, then the name colab_execution writes; never "the first .ipynb in the folder" (a guess).
+  const candidates = [...run.outputPaths.filter((path) => /\.ipynb$/i.test(path)), join(folder, "output.ipynb")]
   for (const candidate of candidates) {
     try {
       const target = await resolveWorkspacePath(candidate, { directory: ctx.deps.directory, allowedRoots: ctx.deps.options.allowedRoots })
@@ -62,7 +58,11 @@ async function runNotebook(runId: string, ctx: HandlerContext): Promise<{ readon
       throw error
     }
   }
-  throw new ColabError("NOT_FOUND", "This run has no output notebook on disk.", { next: "colab_execution({ job }) writes an Enterprise job's output notebook under the workDir, and colab_execution({ runId }) shows a run's outputs." })
+  // Several notebooks and none of them the run's: name what is there rather than picking one.
+  const siblings = (await readdir(folder).catch(() => [] as string[])).filter((name) => /\.ipynb$/i.test(name)).sort()
+  throw new ColabError("NOT_FOUND", siblings.length > 0 ? `The run's folder holds ${siblings.length} notebooks, and none is in the ledger or named output.ipynb.` : "This run has no output notebook on disk.", {
+    next: siblings.length > 0 ? `Pick one by path with colab_notebook; the folder is .colab/runs/${runId}.` : "colab_execution({ job }) writes an Enterprise job's output notebook under the workDir, and colab_execution({ runId }) shows a run's outputs.",
+  })
 }
 
 async function load(ref: NotebookRef, ctx: HandlerContext): Promise<Loaded> {
@@ -80,7 +80,7 @@ async function load(ref: NotebookRef, ctx: HandlerContext): Promise<Loaded> {
     requireDrive(ctx.account)
     await ctx.providerRead(OPERATIONS.driveFilesGet)
     const file = await deps.drive.get(ctx.account.alias, ref.drive, call.signal)
-    if (!file) throw new ColabError("NOT_FOUND", "Drive has no notebook the plugin may see with that id.", { next: 'colab_find({ where: "drive" }) lists the notebooks the plugin may see; one it never opened needs gws and colab_download.' })
+    if (!file) throw new ColabError("NOT_FOUND", "Drive has no notebook the plugin may see with that id.", { next: "colab_find({ where: \"drive\" }) lists the notebooks the plugin may see; one it never opened needs gws's export into the workspace, then colab_notebook({ path })." })
     const bytes = await deps.drive.download(ctx.account.alias, ref.drive, call.signal)
     if (bytes.length > maxBytes) throw new ColabError("FILE_TOO_LARGE", `The notebook is ${bytes.length} bytes, over the plugin's ${maxBytes}-byte cap.`)
     return { bytes, driveFile: file }
@@ -120,22 +120,29 @@ export const notebook: ToolHandler<"notebook"> = {
       const record = await readSyncRecord(loaded.target, ctx.deps.directory, ctx.deps.options.workDir)
       sync = "none"
       if (record) {
-        await ctx.providerRead(OPERATIONS.driveFilesGet)
-        const file = await ctx.deps.drive.get(ctx.account.alias, record.fileId, ctx.call.signal)
-        sync = syncState(record, hash, file?.headRevisionId)
-        if (file) foreign = driveIsForeign(file, email)
+        // The sync state is optional information about a file that is already in hand: a Drive failure, or a denied
+        // `colab.read`, leaves the local read working without it (review LOW 1).
+        try {
+          await ctx.providerRead(OPERATIONS.driveFilesGet)
+          const file = await ctx.deps.drive.get(ctx.account.alias, record.fileId, ctx.call.signal)
+          sync = syncState(record, hash, file?.headRevisionId)
+          if (file) foreign = driveIsForeign(file, email)
+        } catch {
+          sync = undefined
+        }
       }
     }
     if (originIsForeign(notebookOrigin(parsed), email)) foreign = true
     if (foreign) warnings.add("FOREIGN_NOTEBOOK")
 
     const kernel = notebookKernel(parsed)
+    const shownKernel = kernel ? { name: cutWithMarker(sanitizeText(kernel.name), 64), ...(kernel.language !== undefined ? { language: cutWithMarker(sanitizeText(kernel.language), 32) } : {}) } : undefined
     return {
       state: "ok" as const,
       trust: "untrusted" as const,
       hash,
       nbformat: `4.${parsed.nbformatMinor}`,
-      ...(kernel ? { kernel } : {}),
+      ...(shownKernel ? { kernel: shownKernel } : {}),
       cells,
       ...(sync !== undefined ? { sync } : {}),
       ...(warnings.size > 0 ? { warnings: [...warnings] } : {}),
