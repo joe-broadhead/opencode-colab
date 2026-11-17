@@ -8,12 +8,12 @@ const effects = { all: "allow", "ask-changes": "ask", "read-only": "deny" } as c
 
 describe("the default rules", () => {
   for (const [access, change] of Object.entries(effects) as [keyof typeof effects, string][]) {
-    it(`at ${access}: reads and the permission-only reads allow, changes ${change}, colab.cleanup asks`, () => {
+    it(`at ${access}: reads and the permission-only reads allow, changes ${change}, colab.cleanup ${access === "read-only" ? "denied" : "asks"}`, () => {
       const rules = [BASE, ...defaultRules(access)]
       for (const action of [...READ_TOOL_ACTIONS, ...PERMISSION_ONLY.map((entry) => entry.action)]) expect(effectOf(rules, action, "work:colaboratory.runtimes.list"), action).toBe("allow")
       for (const action of CHANGE_TOOL_ACTIONS) expect(effectOf(rules, action, "work:runtime:oc-01"), action).toBe(change)
       expect(effectOf(rules, "colab.some_later_tool")).toBe(change)
-      expect(effectOf(rules, CLEANUP_ACTION)).toBe("ask")
+      expect(effectOf(rules, CLEANUP_ACTION)).toBe(access === "read-only" ? "deny" : "ask")
     })
   }
 

@@ -1,7 +1,8 @@
 /**
  * In-memory fakes for every port in src/ports.ts, and a recording permission, so each package tests its handlers
- * without Google, a runtime or another package. Packages B, C and E add loopback fakes of the real wire protocols
- * under test/fake/ (design §15.2); these are the fast, typed doubles every unit test can use.
+ * without Google, a runtime or another package. This file is Day 0's and is not extended: a package that needs a
+ * richer double (the loopback fakes of design §15.2) adds test/fakes/<package>-*.ts and subclasses or composes these
+ * there (docs/v1-design.md, File ownership).
  *
  * Each fake keeps its state in plain fields a test can set and read, and records its calls.
  */

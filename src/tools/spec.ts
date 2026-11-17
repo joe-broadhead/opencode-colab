@@ -18,7 +18,7 @@ import { resolveAccount } from "../options.js"
 import type { Assert, PermissionRequest } from "../ports.js"
 import { redact } from "../redact.js"
 import { resourcesFor } from "./resources.js"
-import type { HandlerContext, ToolCall, ToolHandler } from "./types.js"
+import type { CallContext, HandlerContext, ToolCall, ToolHandler } from "./types.js"
 
 /** What runs a tool: the ports, and the host's `permission.assert`. */
 export interface Runner {
@@ -86,9 +86,10 @@ export async function runTool(name: ToolName, raw: unknown, call: ToolCall, runn
     const input = parse(CONTRACTS[name].input, raw) as Record<string, unknown>
     const handler = runner.handler(name)
     if (SELF_ASSERTING.has(name)) {
-      // colab_write / colab_delete: the plan names the account; the route asserts on the plan's resource.
-      const placeholder = resolveAccount(runner.deps.options, undefined)
-      return await handler.run(input as never, handlerContext(runner, call, placeholder))
+      // colab_write / colab_delete: no account is resolved here, because the plan names it; the route builds the
+      // handler context from plan.account and asserts on the plan's resource.
+      const base: CallContext = { call, deps: runner.deps }
+      return await handler.run(input as never, base as HandlerContext)
     }
     const account = resolveAccount(runner.deps.options, typeof input.account === "string" ? input.account : undefined)
     const ctx = handlerContext(runner, call, account)

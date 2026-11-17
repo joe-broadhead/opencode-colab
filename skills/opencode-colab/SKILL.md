@@ -33,8 +33,15 @@ This plugin is a pre-release: every colab tool answers `NOT_IMPLEMENTED` until i
 ## What is guaranteed
 
 - **Guaranteed:** the plugin never puts a credential on a runtime; runs code only on runtimes it created; declines
-  every credential request; refuses any runtime where it has observed a credential or another client, for good.
-- **Best effort:** detecting a credential or client that arrived and left between two checks, or one the check has no
-  marker for; a client reusing one of the plugin's own sessions while not attached; code that hides from the check.
-- **Cannot see:** a secret written into code or uploaded (screened, not prevented); what code reaches on the internet;
-  Google-side mechanisms that leave no trace on the runtime.
+  every credential request (`colab_request`, stdin); refuses any runtime where it has *observed* a credential or
+  another client, for good.
+- **Best effort:** detecting a credential or client that arrived and left between two probes, or one held in a form
+  the probe has no marker for. The session nonce is not a secret: session names, nonce included, are listed by
+  Jupyter and by Google's Colab MCP, and a client that opens a session with one of the plugin's session ids runs code
+  in that kernel without a new session — a session without the nonce is foreign, and a client using one of the
+  plugin's own sessions is seen only by the connections check, while attached. The probe shares the runtime with the
+  agent's own code, which runs as root and may keep processes running after a run; it detects other clients' traces
+  and accidents, not code written to hide from it. Only a release or a kernel restart ends such background processes;
+  nothing else does.
+- **Cannot see:** a secret the agent writes into code or uploads (screened, not prevented); what code reaches on the
+  internet; Google-side mechanisms that leave no trace on the runtime (L15–L17).

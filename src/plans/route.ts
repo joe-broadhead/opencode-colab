@@ -12,7 +12,7 @@ import { ColabError, type ErrorCode } from "../domain/errors.js"
 import type * as z from "zod"
 import { resolveAccount } from "../options.js"
 import { handlerContext, parse, request, type Runner } from "../tools/spec.js"
-import type { HandlerContext, PlanHandler, PlanHandlers, ToolCall, ToolHandler } from "../tools/types.js"
+import type { CallContext, HandlerContext, PlanHandler, PlanHandlers, ToolCall, ToolHandler } from "../tools/types.js"
 
 const isPlanAction = (action: string): action is PlanAction => Object.hasOwn(PLAN_ACTIONS, action)
 
@@ -72,7 +72,7 @@ export function planTool(handlers: PlanHandlers): ToolHandler<"plan"> {
  */
 export function commitTool(category: PlanCategory, handlers: PlanHandlers, runner: () => Runner): ToolHandler<"write"> {
   return {
-    async run(input: z.output<typeof CommitInput>, base: HandlerContext) {
+    async run(input: z.output<typeof CommitInput>, base: CallContext) {
       const call: ToolCall = base.call
       const binding = { sessionId: call.sessionID, agentId: call.agent, category }
       const store = base.deps.plans

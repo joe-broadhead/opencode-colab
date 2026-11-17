@@ -19,7 +19,8 @@ describe("skills", () => {
 
     it(`${id} names only tools the plugin registers`, () => {
       const named = parseSkill(id, text(id)).content.match(/\bcolab_[a-z][a-z0-9_]*/g) ?? []
-      const known = new Set(TOOLS.map((tool) => toolId(tool.name)))
+      // `colab_request` is the Jupyter message the plugin declines, not a tool.
+      const known = new Set([...TOOLS.map((tool) => toolId(tool.name)), "colab_request"])
       expect(named.filter((name) => !known.has(name))).toEqual([])
     })
   }

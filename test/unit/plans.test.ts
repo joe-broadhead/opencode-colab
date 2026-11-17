@@ -109,6 +109,18 @@ describe("the routing", () => {
     }
   })
 
+  it("commits with colab_write and colab_delete when there are two named accounts and none is default", async () => {
+    const { runner, permission } = setup(handlers, { accounts: { home: {}, work: { backend: "enterprise", project: "p", region: "us-central1" } } })
+    const created = (await runTool("plan", { action: "runtime.create", account: "home", params: { spec: CPU } }, call(), runner)) as { planId: string }
+    expect(await runTool("write", { planId: created.planId }, call(), runner)).toMatchObject({ state: "ok", result: { created: "NONE" } })
+    const released = (await runTool("plan", { action: "runtime.delete", account: "home", params: { runtime: "oc-01" } }, call(), runner)) as { planId: string }
+    expect(await runTool("delete", { planId: released.planId }, call(), runner)).toMatchObject({ state: "ok", result: { released: true } })
+    expect(permission.requests.filter((request) => request.action !== "colab.plan").map((request) => [request.action, request.resources])).toEqual([
+      ["colab.write", ["home:colaboratory.runtimes.create"]],
+      ["colab.delete", ["home:colaboratory.runtimes.delete"]],
+    ])
+  })
+
   it("gives a commit's handler the plan's account, not the caller's", async () => {
     const seen: string[] = []
     const local: PlanHandlers = { "drive.trash": { enterprise: { preview: async () => ({ preview: {}, payload: {}, fingerprint: {} }), commit: async (_plan, ctx) => (seen.push(ctx.account.alias), {}) } } }

@@ -21,11 +21,15 @@ export interface ToolCall {
   readonly signal: AbortSignal
 }
 
-export interface HandlerContext {
+/** What every handler gets: the call and the ports. colab_write and colab_delete get only this: the plan names the account. */
+export interface CallContext {
   readonly call: ToolCall
-  /** The account the call named, or the default one. Absent only for colab_write and colab_delete before the plan is read. */
-  readonly account: ResolvedAccount
   readonly deps: Deps
+}
+
+export interface HandlerContext extends CallContext {
+  /** The account the call named, or the default one. */
+  readonly account: ResolvedAccount
   /** Asserts `colab.read` on `<account>:<operation>`: call it before each provider read, once per operation and call. */
   providerRead(operation: Operation): Promise<void>
 }

@@ -68,7 +68,7 @@ export const PERMISSION_ONLY: readonly { readonly action: string; readonly note:
   { action: READ_ACTION, note: "The provider reads every read tool makes" },
   { action: PROBE_ACTION, note: "Names the signed-in account for sources; reads no content" },
 ]
-/** `/colab-cleanup`'s action (design §8.5). Not a tool, so not declared in jelly; the default rules ask for it. */
+/** `/colab-cleanup`'s action (design §8.5). Not a tool, so not declared in jelly; the default rules ask for it, and deny it at read-only. */
 export const CLEANUP_ACTION = "colab.cleanup"
 /** A later tool in the namespace gets this rule's effect: a change's. */
 export const NAMESPACE_ACTION = "colab.*"

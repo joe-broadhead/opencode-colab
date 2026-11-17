@@ -192,10 +192,10 @@ describe("Jelly's access rules, simulated over every action the plugin can asser
       expect(jellyEffect(access, CLEANUP_ACTION)).toBe(expected[access]!.change)
     })
 
-    it(`at ${access}: the plugin's own default rules agree with Jelly for every tool action, and ask for colab.cleanup`, () => {
+    it(`at ${access}: the plugin's own default rules agree with Jelly for every tool action; colab.cleanup asks, and is denied at read-only as in Jelly`, () => {
       const rules = [{ action: "*", resource: "*", effect: "allow" as const }, ...defaultRules(access)]
       for (const action of DECLARED_ACTIONS) expect(effectOf(rules, action), `${action} at ${access}`).toBe(jellyEffect(access, action))
-      expect(effectOf(rules, CLEANUP_ACTION)).toBe("ask")
+      expect(effectOf(rules, CLEANUP_ACTION)).toBe(access === "read-only" ? "deny" : "ask")
     })
   }
 })
