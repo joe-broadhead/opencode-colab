@@ -15,3 +15,11 @@ All notable changes to this project are documented here. The format follows [Kee
   cell id), `colab_find`, `colab_notebook`, `colab_edit`, the Drive pull with sync records, the `drive.create`,
   `drive.update` and `drive.trash` plans with outputs stripped by default, the foreign-origin warning and the source
   secret screen.
+- The runtime transport (package B): the Colab API v1beta client with its create LRO, `requestId` join and Google's
+  answers as the plugin's codes; the runtime protocol over Jupyter's REST API and the kernel WebSocket, with the
+  proxy-token and runtime-URL checks, the one-owning-process lease, `allow_stdin: false`, the `colab_request` decline,
+  chunked contents writes and the run watchdog; the agent-only check, whose probe kernel keeps its own calibrated
+  snapshot (mounts, credential files, a scoped and bounded digest of gcloud's credential-bearing config, a restart
+  epoch) and reports only changes, a transient failure refusing without tainting; the loopback Colab API and the
+  token-checking proxy in front of a Jupyter fake; and the weekly drift job over Google's discovery documents and
+  colabtools.
