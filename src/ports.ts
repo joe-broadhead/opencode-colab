@@ -138,6 +138,12 @@ export interface KernelSession {
   execute(code: string, options: ExecuteOptions, signal: AbortSignal): AsyncIterable<IopubMessage>
   interrupt(signal: AbortSignal): Promise<void>
   restart(signal: AbortSignal): Promise<void>
+  /**
+   * Starts (`seconds`) or cancels (`null`) the kernel-side run bound with silent requests (`allow_stdin: false`);
+   * `seconds` is the plugin's own number, never cell text. A session method rather than an execute option, because
+   * one bound spans a multi-cell run (design §8.2).
+   */
+  watchdog(seconds: number | null, signal: AbortSignal): Promise<void>
   close(): Promise<void>
 }
 
@@ -151,14 +157,20 @@ export interface RuntimeTarget {
  * `X-Colab-Runtime-Proxy-Token` header (design §1, H6). Package B builds it; the probe and the watchdog run through it.
  */
 export interface RuntimeProtocol {
-  /** Opens or reuses the kernel session `name` (already nonce-prefixed by the caller). */
+  /**
+   * Opens or reuses the kernel session `name` (already nonce-prefixed by the caller). The signal bounds opening only;
+   * the session lives until `close()` or the runtime ends, and a closed socket is re-opened by the next `openSession`.
+   */
   openSession(target: RuntimeTarget, input: { readonly name: string; readonly path: string }, signal: AbortSignal): Promise<KernelSession>
   kernels(target: RuntimeTarget, signal: AbortSignal): Promise<readonly KernelInfo[]>
   sessions(target: RuntimeTarget, signal: AbortSignal): Promise<readonly SessionInfo[]>
   files: {
     list(target: RuntimeTarget, path: string, signal: AbortSignal): Promise<readonly ContentEntry[] | undefined>
-    /** `GET {url}/files/{path}` with Range; streamed to a temp file by the caller. */
-    read(target: RuntimeTarget, path: string, signal: AbortSignal): Promise<AsyncIterable<Uint8Array>>
+    /**
+     * `GET {url}/files/{path}`; streamed to a temp file by the caller. A `Range` header is sent only when `range` is
+     * given: `bytes=<start>-<end>`, `end` inclusive, and to the end of the file when `end` is omitted.
+     */
+    read(target: RuntimeTarget, path: string, signal: AbortSignal, options?: { readonly range?: { readonly start: number; readonly end?: number } }): Promise<AsyncIterable<Uint8Array>>
     /** `PUT /api/contents` in ≤ 50 MB chunks. */
     write(target: RuntimeTarget, path: string, bytes: AsyncIterable<Uint8Array>, signal: AbortSignal): Promise<{ readonly bytes: number }>
   }
@@ -321,6 +333,10 @@ export interface RuntimeRecord {
   readonly nonce: string
   readonly keep: readonly string[]
   readonly lease: { readonly releaseAfterIdleMinutes: number; readonly maxHours: number }
+  /**
+   * `ready` once the create LRO reports done; only `ready` records pass the transport fence, and only when untainted.
+   * A `creating` record never does (it has no `connectionInfo` yet).
+   */
   readonly state: "creating" | "ready" | "released" | "gone"
   readonly calibration?: Calibration
   readonly tainted?: Taint

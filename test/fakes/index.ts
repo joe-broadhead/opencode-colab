@@ -165,6 +165,8 @@ export class FakeKernelSession implements KernelSession {
   readonly executed: { code: string; allowStdin: false; silent: boolean }[] = []
   interrupts = 0
   restarts = 0
+  /** Every watchdog call, in order: a number starts the bound, null cancels it. */
+  readonly watchdogs: (number | null)[] = []
   closed = false
   constructor(
     readonly session: SessionInfo,
@@ -182,6 +184,9 @@ export class FakeKernelSession implements KernelSession {
   async restart() {
     this.restarts++
   }
+  async watchdog(seconds: number | null) {
+    this.watchdogs.push(seconds)
+  }
   async close() {
     this.closed = true
   }
@@ -196,7 +201,7 @@ export class FakeRuntimeProtocol implements RuntimeProtocol {
   readonly opened: FakeKernelSession[] = []
   respond: (code: string) => readonly Omit<IopubMessage, "parentMsgId">[] = () => [{ msgType: "stream", content: { name: "stdout", text: "ok\n" } }]
 
-  async openSession(target: { account: string; runtimeId: string }, input: { name: string; path: string }) {
+  async openSession(target: { account: string; runtimeId: string }, input: { name: string; path: string }, _signal?: AbortSignal) {
     this.calls.push({ method: "openSession", args: [target, input] })
     const session: SessionInfo = { id: randomUUID(), name: input.name, path: input.path, kernelId: randomUUID() }
     this.sessions_.set(target.runtimeId, [...(this.sessions_.get(target.runtimeId) ?? []), session])
@@ -217,11 +222,16 @@ export class FakeRuntimeProtocol implements RuntimeProtocol {
       const prefix = path.endsWith("/") ? path : `${path}/`
       return [...files.entries()].filter(([name]) => name.startsWith(prefix)).map(([name, bytes]) => ({ path: name, type: "file" as const, size: bytes.length }))
     },
-    read: async (target: { runtimeId: string }, path: string) => {
+    /** Records each read with its range; a range slices as HTTP Range does (`end` inclusive). */
+    reads: [] as { runtimeId: string; path: string; range?: { readonly start: number; readonly end?: number } }[],
+    read: async (target: { runtimeId: string }, path: string, _signal?: AbortSignal, options: { readonly range?: { readonly start: number; readonly end?: number } } = {}) => {
+      this.files.reads.push({ runtimeId: target.runtimeId, path, ...(options.range ? { range: options.range } : {}) })
       const bytes = this.contents.get(target.runtimeId)?.get(path)
       if (!bytes) throw new ColabError("NOT_FOUND")
+      const range = options.range
+      const slice = range ? bytes.subarray(range.start, range.end === undefined ? undefined : range.end + 1) : bytes
       return (async function* () {
-        yield bytes
+        yield slice
       })()
     },
     write: async (target: { runtimeId: string }, path: string, chunks: AsyncIterable<Uint8Array>) => {

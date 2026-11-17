@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest"
 import * as z from "zod"
 import { PLAN_ACTION_NAMES } from "../../src/domain/actions.js"
 import { CONTRACTS, Failure, PLAN_PARAMS } from "../../src/domain/contract.js"
+import type { KernelSession, RuntimeProtocol } from "../../src/ports.js"
+import { FakeRuntimeProtocol } from "../fakes/index.js"
 
 const ok = (schema: z.ZodType, value: unknown) => schema.safeParse(value).success
 const HASH = `sha256:${"a".repeat(64)}`
@@ -78,5 +80,33 @@ describe("results", () => {
       expect(() => z.toJSONSchema(contract.input, { io: "input", unrepresentable: "any" }), name).not.toThrow()
       expect(() => z.toJSONSchema(contract.output, { io: "output", unrepresentable: "any" }), name).not.toThrow()
     }
+  })
+})
+
+describe("the runtime protocol port, as its fake implements it", () => {
+  const target = { account: "default", runtimeId: "oc-01" }
+  const signal = new AbortController().signal
+
+  it("a kernel session starts and cancels the watchdog with the plugin's own number", async () => {
+    const protocol = new FakeRuntimeProtocol()
+    const session: KernelSession = await protocol.openSession(target, { name: "oc-n0nce-main", path: "a.ipynb" }, signal)
+    await session.watchdog(1800, signal)
+    await session.watchdog(null, signal)
+    expect(protocol.opened[0]!.watchdogs).toEqual([1800, null])
+  })
+
+  it("files.read reads the whole file without a range, and a byte range with one, end inclusive", async () => {
+    const protocol = new FakeRuntimeProtocol()
+    protocol.contents.set("oc-01", new Map([["/content/outputs/x.csv", new TextEncoder().encode("0123456789")]]))
+    const text = async (stream: AsyncIterable<Uint8Array>) => {
+      let out = ""
+      for await (const chunk of stream) out += new TextDecoder().decode(chunk)
+      return out
+    }
+    const read: RuntimeProtocol["files"]["read"] = protocol.files.read
+    expect(await text(await read(target, "/content/outputs/x.csv", signal))).toBe("0123456789")
+    expect(await text(await read(target, "/content/outputs/x.csv", signal, { range: { start: 2, end: 4 } }))).toBe("234")
+    expect(await text(await read(target, "/content/outputs/x.csv", signal, { range: { start: 7 } }))).toBe("789")
+    expect(protocol.files.reads.map((entry) => entry.range)).toEqual([undefined, { start: 2, end: 4 }, { start: 7 }])
   })
 })
