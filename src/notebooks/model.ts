@@ -449,7 +449,8 @@ export function setCellMetadata(notebook: Notebook, index: number, metadata: Jso
  * where the host's `edit` ask belongs.
  */
 export function mergeRunOutputs(notebook: Notebook, cells: readonly RunCell[], outputDir: string): void {
-  for (const run of cells) {
+  // Check every run cell first, so a failure leaves the model exactly as it was.
+  const targets = cells.map((run) => {
     const index = notebook.cells.findIndex((cell) => cell.id === run.id)
     const cell = index === -1 ? undefined : notebook.cells[index]
     if (!cell || cellType(cell) !== "code" || cellSource(cell) !== run.source) {
@@ -457,6 +458,9 @@ export function mergeRunOutputs(notebook: Notebook, cells: readonly RunCell[], o
         next: `The outputs are kept in ${outputDir}; read the notebook again with colab_notebook, then run again.`,
       })
     }
+    return { cell, run }
+  })
+  for (const { cell, run } of targets) {
     cell.json.outputs = run.outputs.map((output) => cloneJson(output) as JsonObject)
     cell.json.execution_count = run.executionCount
     notebook.changed = true

@@ -191,7 +191,8 @@ describe("nbformat 4", () => {
     const later = parseNotebook(bytes(v45))
     let failure: ColabError | undefined
     try {
-      mergeRunOutputs(later, [{ id, source: "print('changed')", outputs: [], executionCount: 8 }], ".colab/runs/r2")
+      // A valid first cell and a changed second one: the whole merge is refused and the model stays untouched.
+      mergeRunOutputs(later, [{ id, source: "print('hi')", outputs: [{ output_type: "stream", name: "stdout", text: "x" }], executionCount: 8 }, { id: "missing", source: "x", outputs: [], executionCount: 1 }], ".colab/runs/r2")
     } catch (error) {
       failure = error as ColabError
     }

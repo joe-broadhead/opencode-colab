@@ -142,7 +142,14 @@ export class HttpDriveApi implements DriveApi {
         })
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw error
-        throw new ColabError("UNAVAILABLE", "The request to Drive did not complete.")
+        // A network failure is retried on an idempotent GET; a timeout is not retried on top of its own 60 s.
+        if (retry && !(error instanceof Error && error.name === "TimeoutError") && attempt < RETRY_DELAYS_MS.length) {
+          await sleep(RETRY_DELAYS_MS[attempt]! + Math.floor(Math.random() * 50))
+          continue
+        }
+        throw new ColabError("UNAVAILABLE", "The request to Drive did not complete.", {
+          next: "Check the network, then make the same call again.",
+        })
       }
       if (response.ok) return response
       if (!retry || !retryable(response.status) || attempt >= RETRY_DELAYS_MS.length) throw await failureOf(response)
