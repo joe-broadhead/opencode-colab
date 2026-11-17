@@ -36,7 +36,7 @@ One command, `scripts/check.mjs`, runs every stage in order and stops at the fir
 | --- | --- |
 | `typecheck` | `tsc` over `src/` and the tests. |
 | `unit` | Vitest over `test/unit/`. |
-| `conformance` | The source contract's conformance kit, under Bun. A placeholder until the plugin declares a source. |
+| `conformance` | The `sources` declaration against the source contract's `assertDeclaration`, under Bun; package G adds the kit run. |
 | `kit` | The release kit's own tests. |
 | `build` | esbuild bundles `dist/index.js` and `dist/tui.js`, and checks `NOTICE`. |
 | `icons` | The family icon contract. |
@@ -46,6 +46,11 @@ One command, `scripts/check.mjs`, runs every stage in order and stops at the fir
 | `copies` | The shared kit files against their pinned hashes. |
 | `whitelist` | `package.json` and `dist/` against the approved package shape. |
 | `actionlint` | The workflows, when `actionlint` is on PATH. |
+
+## Packages
+
+v0.1.0 is built in packages A–G on the Day 0 contract. Before you change a file, find its owner in
+[docs/v1-design.md](docs/v1-design.md#file-ownership); a package changes only its own files.
 
 ## Errors
 

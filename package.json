@@ -110,7 +110,144 @@
     "icon": "assets/icon.svg",
     "cost": "Colab spends your compute units (free tier without them); Colab Enterprise bills your Cloud project, about $0.20-$5/hour. Enterprise jobs have a compute cost cap and a 1-hour limit. At Allowed, idle runtimes it started are released after 20 min and their files outside /content/outputs are deleted.",
     "admin": "allow this OAuth client if your organisation restricts Google sign-ins, and for Colab Enterprise grant you Colab Enterprise User and Service Account User on a billed project",
-    "tools": [],
+    "tools": [
+      {
+        "name": "colab.status",
+        "permission": "colab.status",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.specs",
+        "permission": "colab.specs",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.runtimes",
+        "permission": "colab.runtimes",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.find",
+        "permission": "colab.find",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.notebook",
+        "permission": "colab.notebook",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.files",
+        "permission": "colab.files",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.execution",
+        "permission": "colab.execution",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.jobs",
+        "permission": "colab.jobs",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.schedules",
+        "permission": "colab.schedules",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.plan",
+        "permission": "colab.plan",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.events_list",
+        "permission": "colab.events_list",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.runtimes_read",
+        "permission": "colab.runtimes_read",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "colab.read",
+        "permission": "colab.read",
+        "effect": "allow",
+        "readOnly": true,
+        "note": "The provider reads every read tool makes"
+      },
+      {
+        "name": "colab.probe",
+        "permission": "colab.probe",
+        "effect": "allow",
+        "readOnly": true,
+        "note": "Names the signed-in account for sources; reads no content"
+      },
+      {
+        "name": "colab.edit",
+        "permission": "colab.edit",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "colab.run",
+        "permission": "colab.run",
+        "effect": "allow",
+        "readOnly": false,
+        "note": "Runs code only on runtimes it created; refuses any where it sees your credentials or another client (best effort)"
+      },
+      {
+        "name": "colab.cancel",
+        "permission": "colab.cancel",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "colab.upload",
+        "permission": "colab.upload",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "colab.download",
+        "permission": "colab.download",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "colab.pause",
+        "permission": "colab.pause",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "colab.write",
+        "permission": "colab.write",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "colab.delete",
+        "permission": "colab.delete",
+        "effect": "allow",
+        "readOnly": false,
+        "note": "Releases runtimes (files and memory lost) and deletes jobs and schedules"
+      }
+    ],
     "skills": [
       "opencode-colab",
       "opencode-colab-notebooks"
@@ -184,5 +321,63 @@
         }
       ]
     }
+  },
+  "sources": {
+    "contractVersion": 1,
+    "rpc": "google-colab.tools",
+    "probe": {
+      "action": "colab.probe"
+    },
+    "items": [
+      {
+        "id": "colab.runs",
+        "kind": "events",
+        "reads": "x-colab/run",
+        "tool": "events_list",
+        "accounts": {
+          "named": true
+        },
+        "permission": {
+          "events": "colab.events_list",
+          "operations": [
+            "colab.ledger.list"
+          ],
+          "identity": []
+        },
+        "private": true,
+        "cost": {
+          "class": "free"
+        },
+        "maxBytes": 131072,
+        "retentionDays": 90
+      },
+      {
+        "id": "colab.runtimes",
+        "kind": "snapshot",
+        "tool": "runtimes_read",
+        "output": "list",
+        "accounts": {
+          "named": true
+        },
+        "permission": {
+          "tool": "colab.runtimes_read",
+          "operations": [
+            "colaboratory.runtimes.list",
+            "aiplatform.projects.locations.notebookRuntimes.list"
+          ],
+          "identity": []
+        },
+        "private": true,
+        "cost": {
+          "class": "free"
+        },
+        "maxAgeSec": 60,
+        "maxBytes": 32768,
+        "urlHosts": [
+          "colab.research.google.com",
+          "console.cloud.google.com"
+        ]
+      }
+    ]
   }
 }

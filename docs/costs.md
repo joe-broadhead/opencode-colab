@@ -1,6 +1,6 @@
 # What Colab costs
 
-Facts as of 17 November 2026.
+Facts as of 17 November 2026; package F keeps this page.
 
 - **Colab** spends the person's compute units. Per-accelerator unit rates are not published and vary over time, and no
   documented API reports a balance or a burn rate, so the plugin counts runtime-hours and accelerators instead.

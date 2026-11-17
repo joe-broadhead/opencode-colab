@@ -5,7 +5,8 @@ description: Notebook and Colab runtime facts for writing cells that run well on
 
 # Notebooks on Colab
 
-- A notebook is an nbformat 4 file. Cells have an `id` (nbformat 4.5); older files have none.
+- A notebook is an nbformat 4 file. Cells have an `id` (nbformat 4.5); `colab_notebook` shows derived ids for older
+  files without writing them.
 - The runtime's working folder is `/content`. Files there are lost when the runtime is released; save what matters to
   `/content/outputs`, which is harvested before release.
 - `!cmd` runs a shell command; `%pip install -q pkg` installs into the kernel's environment.

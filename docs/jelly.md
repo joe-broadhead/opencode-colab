@@ -9,8 +9,11 @@ tile, not Google's or Colab's logo.
 
 ## Tools and permissions
 
-0 tools are declared (0 read-only). Nothing is declared until the Day 0 contract defines the tools. A tool that is not
-declared still follows the access choice, as the block below says.
+22 tools are declared (14 read-only): the twenty tools, `colab.status` to `colab.delete`, each with the permission
+it asserts (`colab.<tool>`), and two permission-only reads with no tool of their own: `colab.read`, which every
+provider read asserts, and `colab.probe`, which the source contract's probe asserts. Declared read-only, both run at
+every access choice, so a read tool never asks or fails because of the reads it makes. `test/unit/jelly.test.ts` checks
+that every action the plugin asserts is declared, and simulates Jelly's rules at each choice.
 
 The family's shared rules, word for word from Jelly's guide:
 
@@ -28,6 +31,10 @@ The family's shared rules, word for word from Jelly's guide:
 - jelly refuses the plugin for a key it does not know inside anything it reads, such as a tool, a sign-in or a setting.
 - jelly refuses the plugin, with one plain line, when `requires` names a field or a feature it does not read.
 <!-- family-block:end -->
+
+`/colab-cleanup`'s action, `colab.cleanup`, is a command's, not a tool's, so it is not declared: Jelly's namespace rule
+decides it. At Allowed it runs each action the person confirmed in the command without a second prompt; the person
+typed the command, and its report lists every action first.
 
 ## Skills
 

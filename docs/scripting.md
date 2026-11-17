@@ -2,7 +2,7 @@
 
 Unofficial plugin. Not affiliated with Google.
 
-A script can call the plugin's read tools with no model, once they exist: a cron job, a shell script, or any program that can reach the
+A script can call the plugin's read tools with no model: a cron job, a shell script, or any program that can reach the
 OpenCode server. It uses the tools RPC, `google-colab.tools`, through `opencode api` or an OpenCode client:
 
 ```sh
@@ -14,9 +14,11 @@ The transport is the source contract's (`@we-the-rebel-alliance/source-contract`
 | Method | Class | What it does |
 | --- | --- | --- |
 | `describe` | none | Lists every method with its class, its permission action and whether it can run now. |
+| `status`, `specs`, `runtimes`, `find`, `notebook`, `files`, `execution`, `jobs`, `schedules`, `plan`, `events_list`, `runtimes_read` | read | The read tool of the same name, with the same input and result. |
+| `probe` | read | The source contract's probe: names the signed-in account, reads no content. |
 
-No other method exists yet: the read tools become methods when they exist. Changes are never methods: each is a step
-a person sees.
+Changes — running code, uploads, downloads, edits, pauses and commits — are never methods: each is a step a person
+sees.
 
 ## A script runs as a session
 
@@ -41,7 +43,8 @@ and `data: { code, next }`.
 | `SESSION_AGENT_REQUIRED` | The session names no agent, or an agent that does not exist. |
 | `CANCELLED` | The request was cancelled. |
 
-A plugin method reports the plugin's own errors, listed in [Errors](errors.md).
+A method's own refusal or failure is its result, `{ state, error, message, next }`, with a code from
+[Errors](errors.md).
 
 ## Status
 
