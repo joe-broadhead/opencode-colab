@@ -20,9 +20,12 @@ export const schedulesHandler: ToolHandler<"schedules"> = {
   async run(input, ctx): Promise<OutputOf<"schedules">> {
     const settings = settingsFor(ctx, "colab_schedules")
     let schedules: readonly EnterpriseSchedule[]
+    let truncated = false
     if (input.schedule === undefined) {
       await ctx.providerRead(OPERATIONS.schedulesList)
-      schedules = await ctx.deps.vertex.listSchedules(ctx.account.alias, ctx.call.signal)
+      const listed = await ctx.deps.vertex.listSchedules(ctx.account.alias, {}, ctx.call.signal)
+      schedules = listed
+      truncated = listed.truncated === true
     } else {
       await ctx.providerRead(OPERATIONS.schedulesGet)
       const schedule = await ctx.deps.vertex.getSchedule(ctx.account.alias, scheduleNameOf(settings, input.schedule), ctx.call.signal)
@@ -58,6 +61,6 @@ export const schedulesHandler: ToolHandler<"schedules"> = {
         ...(cost.perMonth !== undefined ? { worstCaseUsdPerMonth: Number(cost.perMonth.toFixed(2)) } : {}),
       })
     }
-    return { state: "ok", schedules: rows, trust: "untrusted" }
+    return { state: "ok", schedules: rows, trust: "untrusted", ...(truncated ? { warnings: ["OUTPUT_TRUNCATED" as const] } : {}) }
   },
 }

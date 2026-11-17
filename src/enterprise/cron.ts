@@ -161,13 +161,17 @@ function offsetAt(zone:string, utcMs: number): number {
 
 const sameWall = (left: Wall, right: Wall) => left.year === right.year && left.month === right.month && left.day === right.day && left.hour === right.hour && left.minute === right.minute
 
-/** The first UTC instant whose local wall clock is `wall`, or undefined when that local time does not exist. */
-function zonedToUtc(zone: string, wall: Wall): number | undefined {
+/** Every UTC instant whose local wall clock is `wall`: none for a spring-forward gap, two in a fall-back fold. */
+function zonedToUtcAll(zone: string, wall: Wall): number[] {
   const asIfUtc = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, 0)
   const candidates = new Set<number>()
   for (const probe of [asIfUtc - 26 * 3_600_000, asIfUtc, asIfUtc + 26 * 3_600_000]) candidates.add(asIfUtc - offsetAt(zone, probe))
-  const found = [...candidates].filter((utc) => sameWall(wallIn(zone, new Date(utc)), wall)).sort((a, b) => a - b)
-  return found[0]
+  return [...candidates].filter((utc) => sameWall(wallIn(zone, new Date(utc)), wall)).sort((a, b) => a - b)
+}
+
+/** The first UTC instant whose local wall clock is `wall`, or undefined when that local time does not exist. */
+function zonedToUtc(zone: string, wall: Wall): number | undefined {
+  return zonedToUtcAll(zone, wall)[0]
 }
 
 // ── Occurrences ─────────────────────────────────────────────────────────
@@ -215,24 +219,45 @@ export function nextRuns(cron: Cron, after: Date, count: number): Date[] {
 }
 
 /**
+ * Every instant a schedule could fire, with both fold instants of a repeated local time: the conservative reading until
+ * L10 records which one Google fires (review LOW 7). Spring-forward gaps stay skipped.
+ */
+function allInstants(cron: Cron, afterMs: number, horizonDays: number, limit: number): number[] {
+  const zone = cron.timeZone
+  const horizon = afterMs + horizonDays * 86_400_000
+  const startWall = wallIn(zone, new Date(afterMs))
+  let day = dayStart(Date.UTC(startWall.year, startWall.month - 1, startWall.day))
+  const found: number[] = []
+  for (let index = 0; index <= horizonDays; index += 1, day += 86_400_000) {
+    const date = new Date(day)
+    const noon = wallIn(zone, new Date(day + 12 * 3_600_000))
+    const dayWall = { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate(), hour: 0, minute: 0, weekday: noon.weekday }
+    if (!matchesDay(cron, dayWall)) continue
+    for (const hour of cron.hours) {
+      for (const minute of cron.minutes) {
+        for (const utc of zonedToUtcAll(zone, { year: dayWall.year, month: dayWall.month, day: dayWall.day, hour, minute })) {
+          if (utc <= afterMs || utc > horizon) continue
+          found.push(utc)
+          if (found.length >= limit) return found.sort((a, b) => a - b)
+        }
+      }
+    }
+  }
+  return found.sort((a, b) => a - b)
+}
+
+/**
  * The shortest gap between consecutive occurrences, measured over `runs` occurrences when a bound gives one, or over
  * a year otherwise (review round 2, LOW 1). `Infinity` when the cron has fewer than two occurrences in the window.
+ * Both fold instants count (review LOW 7), so a repeated local time is judged as the 1 h pair it may be.
  */
 export function minimumGap(cron: Cron, after: Date, input: { readonly runs?: number; readonly horizonDays?: number } = {}): { readonly gapMs: number; readonly occurrences: number } {
   const count = Math.min(Math.max(input.runs ?? 366, 1), 1000)
   const horizonDays = Math.min(Math.max(input.horizonDays ?? 366, 1), HORIZON_DAYS)
-  const window = new Date(after.getTime() + horizonDays * 86_400_000)
-  const occurrences: Date[] = []
-  let cursor = after
-  while (occurrences.length < count) {
-    const next = nextRuns(cron, cursor, 1)[0]
-    if (!next || next > window) break
-    occurrences.push(next)
-    cursor = next
-  }
+  const instants = allInstants(cron, after.getTime(), horizonDays, count)
   let gapMs = Number.POSITIVE_INFINITY
-  for (let index = 1; index < occurrences.length; index += 1) gapMs = Math.min(gapMs, occurrences[index]!.getTime() - occurrences[index - 1]!.getTime())
-  return { gapMs, occurrences: occurrences.length }
+  for (let index = 1; index < instants.length; index += 1) gapMs = Math.min(gapMs, instants[index]! - instants[index - 1]!)
+  return { gapMs, occurrences: instants.length }
 }
 
 /** How many occurrences fall in `[after, until]`, at most `cap`; used for a schedule's worst-case monthly cost. */

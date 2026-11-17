@@ -17,10 +17,10 @@ export interface EnterpriseSettings {
   readonly alias: string
   readonly project: string
   readonly region: string
-  /** `gs://bucket`, the form `gcsOutputUri` takes ("Format: `gs://bucket-name`"). */
+  /** `gs://bucket`: the account's output bucket alone. */
   readonly outputBucket?: string
-  /** The prefix a result is listed under; the configured bucket with its path, or the bucket root. */
-  readonly outputPrefix?: string
+  /** The configured `outputBucket` with its path and a trailing slash: every result goes in a folder under it. */
+  readonly outputBase?: string
   readonly serviceAccount?: string
   readonly runAsUser: boolean
   readonly budget?: ResolvedAccount["budget"]
@@ -32,6 +32,20 @@ export interface EnterpriseEnv {
 }
 
 export const parentOf = (settings: EnterpriseSettings) => `projects/${settings.project}/locations/${settings.region}`
+
+/**
+ * The locational Vertex AI endpoint for an account's region. Google says to "specify the location for an Agent Platform
+ * API request by using the appropriate locational endpoint … to make a request in the us-central1 region, use
+ * https://us-central1-aiplatform.googleapis.com" (https://docs.cloud.google.com/vertex-ai/docs/general/locations), and
+ * its Colab Enterprise sample sets `{LOCATION}-aiplatform.googleapis.com`
+ * (https://docs.cloud.google.com/colab/docs/schedule-notebook-run). The REST reference lists the global host and each
+ * regional host as service endpoints
+ * (https://docs.cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.notebookExecutionJobs/create).
+ */
+export const vertexHost = (settings: EnterpriseSettings) => `https://${settings.region}-aiplatform.googleapis.com/v1/`
+
+/** A location such as us-central1, europe-west4 or asia-east1. */
+const LOCATION = /^[a-z]+(?:-[a-z]+)*\d+$/
 
 /** Asserts the account is an Enterprise one with a project and region; `what` names the call for the message. */
 export function enterpriseSettings(env: EnterpriseEnv, alias: string, what: string, options: { readonly bucket?: boolean } = {}): EnterpriseSettings {
@@ -47,13 +61,17 @@ export function enterpriseSettings(env: EnterpriseEnv, alias: string, what: stri
       next: `Set accounts.${alias}.project and accounts.${alias}.region in opencode.json.`,
     })
   }
+  if (!LOCATION.test(account.region)) {
+    throw new ColabError("OPTIONS_INVALID", `The enterprise account "${alias}" has the region "${account.region}", which is not a location such as us-central1.`, {
+      next: `Set accounts.${alias}.region to a location whose endpoint is <region>-aiplatform.googleapis.com.`,
+    })
+  }
   let outputBucket: string | undefined
-  let outputPrefix: string | undefined
+  let outputBase: string | undefined
   if (account.outputBucket) {
     const parts = gcsParts(account.outputBucket)
-    // The API's field takes a bucket ("Format: gs://bucket-name"); a path stays the prefix the plugin lists under.
     outputBucket = `gs://${parts.bucket}`
-    outputPrefix = account.outputBucket.endsWith("/") ? account.outputBucket : `${account.outputBucket}/`
+    outputBase = account.outputBucket.endsWith("/") ? account.outputBucket : `${account.outputBucket}/`
   } else if (options.bucket) {
     throw new ColabError("BUCKET_REQUIRED", `The enterprise account "${alias}" has no outputBucket, so a job's results have nowhere to go.`, {
       next: `Set accounts.${alias}.outputBucket to a gs:// bucket you can read, such as gs://my-colab-results.`,
@@ -64,7 +82,7 @@ export function enterpriseSettings(env: EnterpriseEnv, alias: string, what: stri
     project: account.project,
     region: account.region,
     ...(outputBucket !== undefined ? { outputBucket } : {}),
-    ...(outputPrefix !== undefined ? { outputPrefix } : {}),
+    ...(outputBase !== undefined ? { outputBase } : {}),
     ...(account.serviceAccount !== undefined ? { serviceAccount: account.serviceAccount } : {}),
     runAsUser: account.runAsUser,
     ...(account.budget !== undefined ? { budget: account.budget } : {}),

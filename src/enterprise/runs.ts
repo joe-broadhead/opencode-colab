@@ -2,15 +2,14 @@
  * The Enterprise branches of package D's tools (design §6, §9.4): `colab_execution({ job })`, `colab_cancel({ job })` and
  * `colab_download({ gcs })`, behind the `EnterpriseRuns` seam in `src/ports.ts`.
  *
- * A job is polled with `notebookExecutionJobs.get`; when it finishes, its result notebook is listed and read from the
- * bucket and captured like a consumer run (src/enterprise/capture.ts). Cancel goes through the create LRO's
+ * A job is polled with `notebookExecutionJobs.get`; when it finishes, its result notebook is read from its own output
+ * folder and captured like a consumer run (src/enterprise/capture.ts). Cancel goes through the create LRO's
  * `operations.cancel` — the job resource has no cancel method (Vertex v1 discovery revision 20261107; design §9.4, L11).
- * Only a job this process created has its LRO remembered; for any other job (a scheduled run, or one created before an
- * OpenCode restart) there is no documented way to find the LRO, so `JOB_UNCANCELLABLE` names what remains, and a
- * contract request asks for the operation to be recorded with the run.
+ * The LRO is found in this process's map, then the ledger's `RunRecord.operation` (which survives a restart), then
+ * `notebookExecutionJobs.operations.list`; a job with none of those is `JOB_UNCANCELLABLE` with what remains.
  *
- * `gcsOutputUri` names a bucket; where the output notebook sits inside it is undocumented, so capture picks the newest
- * `.ipynb` written at or after the job's create time. TODO(L10): replace that with the documented layout once recorded.
+ * Every provider read asserts `colab.read` through the `read` callback D passes (design §10): jobs.get before a poll,
+ * storage.objects.list before a folder listing, storage.objects.get before a read, operations.list before the fallback.
  */
 import { readFileSync } from "node:fs"
 import { basename, extname, join } from "node:path"
@@ -18,12 +17,15 @@ import type * as z from "zod"
 import type { PortEnv } from "../deps.js"
 import { ColabError } from "../domain/errors.js"
 import { CellResult } from "../domain/contract.js"
+import { OPERATIONS } from "../domain/actions.js"
 import type { EnterpriseJob, EnterpriseRuns, GcsApi, Ledger, RunRecord, VertexApi } from "../ports.js"
 import { projectPath, resolveLocal, writeAtomic } from "./paths.js"
 import { captureNotebook } from "./capture.js"
 import { enterpriseSettings, type EnterpriseEnv, type EnterpriseSettings } from "./account.js"
-import { isTerminal, type JobDetail } from "./detail.js"
+import { isTerminal } from "./detail.js"
+import type { ProviderRead } from "../ports.js"
 import { sleep } from "./http.js"
+import { cut, redact } from "../redact.js"
 import { lastSegment } from "./ids.js"
 import { parseNotebook, sha256Of } from "./notebook.js"
 
@@ -54,26 +56,41 @@ const terminalRunState = (state: string): RunRecord["state"] =>
 
 const jobResource = (settings: EnterpriseSettings, job: string) => (job.startsWith("projects/") ? job : `projects/${settings.project}/locations/${settings.region}/notebookExecutionJobs/${job}`)
 
-/** What a finished job's result notebook says, saved under `<workDir>/runs/<jobId>/`; RESULTS_UNAVAILABLE when none. */
-async function captureJob(env: EnterpriseRunsEnv, account: string, settings: EnterpriseSettings, job: JobDetail, input: { readonly full?: boolean; readonly signal: AbortSignal }): Promise<{ readonly cells: readonly z.output<typeof CellResult>[]; readonly files: readonly string[]; readonly truncated: boolean; readonly path: string }> {
+const withSlash = (uri: string) => (uri.endsWith("/") ? uri : `${uri}/`)
+
+/**
+ * What a finished job's result notebook says, saved under `<workDir>/runs/<jobId>/`.
+ *
+ * Each job the plugin creates writes into its own folder (`gcsOutputUri = gs://<bucket>/<prefix>/<jobId>/`, review M2),
+ * so capture reads only that folder. A job the plugin did not create (a scheduled run, or a pre-existing one) is read
+ * only under its per-job folder inside its own `gcsOutputUri`; when nothing is there the answer is RESULTS_UNAVAILABLE,
+ * never "the newest notebook in the bucket", which could be another job's. L10 records Google's layout inside a folder.
+ */
+async function captureJob(env: EnterpriseRunsEnv, account: string, settings: EnterpriseSettings, job: EnterpriseJob, input: { readonly full?: boolean; readonly signal: AbortSignal; readonly read: ProviderRead }): Promise<{ readonly cells: readonly z.output<typeof CellResult>[]; readonly files: readonly string[]; readonly truncated: boolean; readonly path: string }> {
   const runId = lastSegment(job.name)
-  const prefix = job.gcsOutputUri ? `gs://${job.gcsOutputUri.replace(/^gs:\/\//, "").replace(/\/+$/, "")}/` : settings.outputPrefix
+  const folder = job.gcsOutputUri ? withSlash(job.gcsOutputUri) : undefined
+  const ours = (await env.ledger.getRun(runId)) !== undefined || (folder !== undefined && folder.endsWith(`/${runId}/`))
+  const prefix = ours ? folder : folder !== undefined ? `${folder}${runId}/` : settings.outputBase !== undefined ? `${settings.outputBase}${runId}/` : undefined
   if (!prefix) {
-    throw new ColabError("BUCKET_REQUIRED", "The job names no output bucket, and the account has none to look in.", { next: "Set accounts.<alias>.outputBucket, or check the job in colab_jobs." })
+    throw new ColabError("BUCKET_REQUIRED", "The job names no output folder, and the account has none to look in.", { next: "Set accounts.<alias>.outputBucket, or check the job in colab_jobs." })
   }
+  await input.read(OPERATIONS.storageObjectsList)
   const objects = await env.gcs.list(account, prefix, input.signal)
-  const created = job.createTime ? Date.parse(job.createTime) : Number.NaN
-  const candidates = objects
-    .filter((object) => object.uri.toLowerCase().endsWith(".ipynb"))
-    .filter((object) => Number.isNaN(created) || object.updated === undefined || Date.parse(object.updated) >= created - 300_000)
-    .sort((a, b) => (b.updated === undefined ? 0 : Date.parse(b.updated)) - (a.updated === undefined ? 0 : Date.parse(a.updated)))
+  const candidates = objects.filter((object) => object.uri.toLowerCase().endsWith(".ipynb"))
+  if (candidates.length > 1) {
+    const names = candidates.slice(0, 5).map((object) => object.uri).join(", ")
+    throw new ColabError("RESULTS_UNAVAILABLE", `The job's output folder holds ${candidates.length} notebooks, so the result is ambiguous: ${cut(redact(names), 300)}.`, {
+      next: "L10 records the layout Google uses inside a folder; until then read the notebook you expect with colab_download and its gcs uri.",
+    })
+  }
   const object = candidates[0]
   if (!object) {
-    throw new ColabError("RESULTS_UNAVAILABLE", "No output notebook was found in the bucket for this job.", {
-      next: "colab_jobs shows the job's state; check that the bucket is the one the job wrote to, and that the run identity can write it.",
+    throw new ColabError("RESULTS_UNAVAILABLE", "No output notebook was found in the job's own output folder.", {
+      next: "colab_jobs shows the job's state; check that the run identity can write the folder, and that the job wrote one.",
     })
   }
   if (object.size > env.options.maxDownloadBytes) throw new ColabError("FILE_TOO_LARGE", "The job's output notebook is over maxDownloadBytes.")
+  await input.read(OPERATIONS.storageObjectsGet)
   const bytes = await env.gcs.read(account, object.uri, input.signal)
   const runDir = resolveLocal(env.directory, join(env.options.workDir, "runs", runId), env.options.allowedRoots)
   const notebookPath = join(runDir, "output.ipynb")
@@ -90,7 +107,7 @@ async function captureJob(env: EnterpriseRunsEnv, account: string, settings: Ent
 }
 
 /** Record what the ledger knows about a job: its create, and its end once observed (design §5, §11). */
-async function record(env: EnterpriseRunsEnv, account: string, job: JobDetail, input: { readonly outputPaths?: readonly string[] } = {}): Promise<void> {
+async function record(env: EnterpriseRunsEnv, account: string, job: EnterpriseJob, input: { readonly outputPaths?: readonly string[] } = {}): Promise<void> {
   const runId = lastSegment(job.name)
   const existing = await env.ledger.getRun(runId)
   // The source lists the plugin's own runs; a job somebody else started is read, not recorded (design §11).
@@ -116,7 +133,7 @@ async function record(env: EnterpriseRunsEnv, account: string, job: JobDetail, i
 }
 
 /** The create half: a job this plugin started, recorded while it runs (design §5). */
-export async function recordCreate(env: { readonly ledger: Ledger; readonly clock: { now(): Date } }, account: string, job: JobDetail, summary: string): Promise<void> {
+export async function recordCreate(env: { readonly ledger: Ledger; readonly clock: { now(): Date } }, account: string, job: EnterpriseJob, summary: string, operation?: string): Promise<void> {
   const runId = lastSegment(job.name)
   if (await env.ledger.getRun(runId)) return
   await env.ledger.putRun({
@@ -128,14 +145,16 @@ export async function recordCreate(env: { readonly ledger: Ledger; readonly cloc
     state: "running",
     cellIds: [],
     outputPaths: [],
+    ...(operation !== undefined && operation !== "" ? { operation } : {}),
     summary,
   })
 }
 
-async function poll(env: EnterpriseRunsEnv, account: string, name: string, waitSeconds: number, options: RunsOptions, signal: AbortSignal): Promise<JobDetail> {
+async function poll(env: EnterpriseRunsEnv, account: string, name: string, waitSeconds: number, options: RunsOptions, signal: AbortSignal, read: ProviderRead): Promise<EnterpriseJob> {
   const deadline = Date.now() + Math.max(0, waitSeconds) * 1000
   const pollMs = options.pollMs ?? 2_000
   for (;;) {
+    await read(OPERATIONS.jobsGet)
     const job = await env.vertex.getJob(account, name, signal)
     if (!job) throw new ColabError("NOT_FOUND", "The job was not found.", { next: "colab_jobs lists the account's jobs; the job may have been deleted." })
     if (isTerminal(job.state) || Date.now() >= deadline) return job
@@ -143,7 +162,7 @@ async function poll(env: EnterpriseRunsEnv, account: string, name: string, waitS
   }
 }
 
-const remaining = (job: JobDetail, now: Date) => {
+const remaining = (job: EnterpriseJob, now: Date) => {
   const timeout = job.executionTimeoutSeconds ?? 86_400
   const started = job.createTime ? Date.parse(job.createTime) : Number.NaN
   if (Number.isNaN(started)) return timeout
@@ -154,10 +173,10 @@ const chartsHint = (path: string): string | undefined => [".csv", ".tsv", ".json
 
 export function createEnterpriseRuns(env: EnterpriseRunsEnv, options: RunsOptions = {}): EnterpriseRuns {
   return {
-    async execution(account, input, signal) {
+    async execution(account, input, signal, read) {
       const settings = enterpriseSettings(env, account, "colab_execution")
       const name = jobResource(settings, input.job)
-      const job = await poll(env, account, name, input.wait ?? 0, options, signal)
+      const job = await poll(env, account, name, input.wait ?? 0, options, signal, read)
       const id = lastSegment(job.name)
       if (!isTerminal(job.state)) {
         return { state: "running", runId: id, job: job.name, cells: [], files: [], next: `colab_execution({ job: "${id}", wait: 60 })` }
@@ -165,7 +184,7 @@ export function createEnterpriseRuns(env: EnterpriseRunsEnv, options: RunsOption
       const cancelled = job.state === "JOB_STATE_CANCELLED"
       let captured: Awaited<ReturnType<typeof captureJob>>
       try {
-        captured = await captureJob(env, account, settings, job, { ...(input.full !== undefined ? { full: input.full } : {}), signal })
+        captured = await captureJob(env, account, settings, job, { ...(input.full !== undefined ? { full: input.full } : {}), signal, read })
       } catch (error) {
         if (error instanceof ColabError && (error.code === "RESULTS_UNAVAILABLE" || error.code === "FILE_TOO_LARGE") && cancelled) {
           await record(env, account, job)
@@ -173,6 +192,9 @@ export function createEnterpriseRuns(env: EnterpriseRunsEnv, options: RunsOption
         }
         if (error instanceof ColabError && error.code === "RESULTS_UNAVAILABLE") {
           await record(env, account, job)
+          // A job that succeeded has results; if its folder has none or several, that is RESULTS_UNAVAILABLE, not a
+          // failure of the job (review M2). A job that failed with nothing to read is its own failure.
+          if (job.state === "JOB_STATE_SUCCEEDED" || job.state === "JOB_STATE_PARTIALLY_SUCCEEDED") throw error
           const code = remaining(job, env.clock.now()) === 0 ? "JOB_TIMEOUT" : "JOB_FAILED"
           throw new ColabError(code, `The job ended ${job.state} and no output notebook was found.`, { next: "colab_jobs shows the job's state and error; check the bucket the job wrote to." })
         }
@@ -187,17 +209,25 @@ export function createEnterpriseRuns(env: EnterpriseRunsEnv, options: RunsOption
       return { state: "ok", ...base, message: `The job ended ${job.state}; its output notebook is saved at ${captured.path}.`, trust: "untrusted" }
     },
 
-    async cancel(account, jobName, signal) {
+    async cancel(account, jobName, signal, read) {
       const settings = enterpriseSettings(env, account, "colab_cancel")
       const name = jobResource(settings, jobName)
+      await read(OPERATIONS.jobsGet)
       const job = await env.vertex.getJob(account, name, signal)
       if (!job) throw new ColabError("NOT_FOUND", "The job was not found.", { next: "colab_jobs lists the account's jobs; it may have been deleted." })
       const id = lastSegment(job.name)
       if (isTerminal(job.state)) return { state: "ok", job: id, action: "cancelled", remainingSec: 0, message: `The job had already finished (${job.state}).` }
-      const operation = operationOf(name)
+      // The create LRO: this process's map, then the ledger (which survives a restart), then the operations list.
+      const recorded = (await env.ledger.getRun(id))?.operation
+      let operation = operationOf(name) ?? recorded
       if (!operation) {
-        throw new ColabError("JOB_UNCANCELLABLE", "This job has no create operation in this process, and the API has no cancel method on a job itself.", {
-          next: `Wait for the timeout (${remaining(job, env.clock.now())} s left); cancellation goes through the create LRO, which only a job this process created remembers (L11).`,
+        await read(OPERATIONS.jobOperationsList)
+        const listed = await env.vertex.listJobOperations(account, name, signal)
+        operation = listed.find((entry) => !entry.done)?.name ?? listed[0]?.name
+      }
+      if (!operation) {
+        throw new ColabError("JOB_UNCANCELLABLE", "This job has no create operation in this process or the ledger, and none is listed for the job.", {
+          next: `Wait for the timeout (${remaining(job, env.clock.now())} s left); cancellation goes through the create LRO (L11).`,
         })
       }
       await env.vertex.cancelOperation(account, operation, signal)
@@ -205,6 +235,7 @@ export function createEnterpriseRuns(env: EnterpriseRunsEnv, options: RunsOption
       let observed = job
       // One read after the cancel — it is asynchronous — then poll until the wait is spent.
       for (;;) {
+        await read(OPERATIONS.jobsGet)
         const next = await env.vertex.getJob(account, name, signal)
         if (next) observed = next
         if (isTerminal(observed.state) || observed.state === "JOB_STATE_CANCELLING" || Date.now() >= deadline) break
@@ -218,9 +249,10 @@ export function createEnterpriseRuns(env: EnterpriseRunsEnv, options: RunsOption
       return { state: "ok", job: id, action: "cancelled", remainingSec: remaining(observed, env.clock.now()), message: `Cancellation requested; the job is still ${observed.state}.` }
     },
 
-    async downloadGcs(account, input, signal) {
+    async downloadGcs(account, input, signal, read) {
       enterpriseSettings(env, account, "colab_download with a gcs source")
       if (input.gcs.endsWith("/")) throw new ColabError("INPUT_INVALID", "The gcs source is a prefix, not an object.", { next: "Pass the object's full gs:// uri." })
+      await read(OPERATIONS.storageObjectsGet)
       const bytes = await env.gcs.read(account, input.gcs, signal)
       if (bytes.length > env.options.maxDownloadBytes) throw new ColabError("FILE_TOO_LARGE", "The object is over maxDownloadBytes.", { next: "Raise maxDownloadBytes, or read the object another way." })
       const relative = input.to ?? join(env.options.workDir, "files", basename(input.gcs))

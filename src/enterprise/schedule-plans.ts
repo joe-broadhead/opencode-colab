@@ -16,13 +16,29 @@ import type { HandlerContext, PlanHandler } from "../tools/types.js"
 import { OPERATIONS } from "../domain/actions.js"
 import { ColabError } from "../domain/errors.js"
 import type { EnterpriseSchedule } from "../ports.js"
-import { PRICES_AS_OF, acceleratorShort, priceOf, usd } from "./prices.js"
+import { PRICES_AS_OF, PRICES_REGION, acceleratorShort, priceOf, usd } from "./prices.js"
 import { runIdentity, type RunIdentity } from "./account.js"
-import { checkCost, chooseCompute, describeNotebook, labelsFor, notebookForJob, notebookParam, payloadOf, scheduleCompute, scheduleCost, scheduleNameOf, settingsFor } from "./common.js"
+import { budgetCheck, checkCost, checkScheduleCost, chooseCompute, describeNotebook, labelsFor, notebookForJob, notebookParam, payloadOf, scheduleCompute, scheduleCost, scheduleNameOf, runsUntil, settingsFor } from "./common.js"
 import { cronWithZone, minimumGap, nextRuns, occurrencesBetween, parseCron } from "./cron.js"
 import { lastSegment, scheduleToken } from "./ids.js"
 import { nextRunsOf } from "./common.js"
 import { jobBody } from "./plans.js"
+import { overlapOf } from "./detail.js"
+import { GOOGLE_DEFAULT_TIMEOUT_SECONDS } from "./common.js"
+
+/**
+ * A schedule another client made may start more than one run at once (`maxConcurrentRunCount`) or queue runs
+ * (`allowQueueing`), which the plugin's overlap check cannot bound (review LOW 8). Plans refuse it rather than resume it.
+ */
+function refuseOverlapping(schedule: EnterpriseSchedule) {
+  const detail = overlapOf(schedule)
+  const concurrency = detail.maxConcurrentRunCount ?? 1
+  if (concurrency > 1 || detail.allowQueueing === true) {
+    throw new ColabError("SCHEDULE_OVERLAP", `The schedule starts up to ${concurrency} run${concurrency === 1 ? "" : "s"} at once${detail.allowQueueing === true ? " and queues runs" : ""}, so its runs can overlap and the plugin cannot bound them.`, {
+      next: "Set maxConcurrentRunCount to 1 and turn queueing off for it in the console, or plan a new schedule.",
+    })
+  }
+}
 
 const identityKey = (identity: RunIdentity) => `${identity.as}:${identity.serviceAccount ?? identity.executionUser ?? ""}`
 
@@ -87,7 +103,8 @@ interface SchedulePayload {
   readonly template?: string
   readonly timeoutMinutes: number
   readonly estimateUsd: number
-  readonly outputBucket: string
+  readonly maxUsd: number
+  readonly outputUri: string
   readonly identity: { readonly as: "serviceAccount" | "user"; readonly serviceAccount?: string; readonly executionUser?: string }
 }
 
@@ -101,13 +118,14 @@ interface ScheduleFingerprint {
   readonly template: string
   readonly timeoutMinutes: number
   readonly estimateUsd: number
-  readonly outputBucket: string
+  readonly maxUsd: number
+  readonly outputUri: string
   readonly identity: string
 }
 
 async function recheck(ctx: HandlerContext, payload: SchedulePayload, fingerprint: ScheduleFingerprint): Promise<{ readonly bytes: Uint8Array; readonly settings: ReturnType<typeof settingsFor>; readonly identity: RunIdentity }> {
   const settings = settingsFor(ctx, "a schedule plan", { bucket: true })
-  if (settings.outputBucket !== payload.outputBucket) throw new ColabError("PLAN_CHANGED", "The account's output bucket changed since the preview.")
+  if (settings.outputBase === undefined || !payload.outputUri.startsWith(settings.outputBase)) throw new ColabError("PLAN_CHANGED", "The account's output bucket changed since the preview.")
   const identity = await runIdentity(ctx.deps, settings, "schedule", ctx.call.signal)
   if (identityKey(identity) !== fingerprint.identity) throw new ColabError("PLAN_CHANGED", "The run identity changed since the preview.")
   const notebook = await notebookForJob(ctx, payload.notebook)
@@ -119,9 +137,12 @@ async function recheck(ctx: HandlerContext, payload: SchedulePayload, fingerprin
     const machineSpec = (found?.machineSpec ?? {}) as Record<string, unknown>
     if (!found || machineSpec.machineType !== payload.machine) throw new ColabError("PLAN_CHANGED", "The template's compute changed or the template is gone since the preview.")
   }
-  const price = priceOf({ machine: payload.machine, ...(payload.accelerator !== undefined ? { accelerator: payload.accelerator } : {}), ...(payload.acceleratorCount !== undefined ? { acceleratorCount: payload.acceleratorCount } : {}), ...(ctx.deps.options.rates !== undefined ? { rates: ctx.deps.options.rates } : {}) })
+  const price = priceOf({ machine: payload.machine, ...(payload.accelerator !== undefined ? { accelerator: payload.accelerator } : {}), ...(payload.acceleratorCount !== undefined ? { acceleratorCount: payload.acceleratorCount } : {}), region: ctx.account.region, ...(ctx.deps.options.rates !== undefined ? { rates: ctx.deps.options.rates } : {}) })
   if (!price) throw new ColabError("PLAN_CHANGED", "The price of this compute is no longer known.")
-  if (price.usdPerHour * (payload.timeoutMinutes / 60) > fingerprint.estimateUsd * 1.1) throw new ColabError("PLAN_CHANGED", "The cost estimate rose by more than 10 % since the preview.", { next: "Plan again and show the new estimate." })
+  const estimate = price.usdPerHour * (payload.timeoutMinutes / 60)
+  if (estimate > fingerprint.estimateUsd * 1.1) throw new ColabError("PLAN_CHANGED", "The cost estimate rose by more than 10 % since the preview.", { next: "Plan again and show the new estimate." })
+  // The cap holds even when `rates` changed between the preview and now (review LOW 5).
+  if (estimate > payload.maxUsd) throw new ColabError("COST_CAP", `Each run's worst case is now $${estimate.toFixed(2)}, over the $${payload.maxUsd.toFixed(2)} cap set at the preview.`, { next: "Plan again with a smaller machine or a shorter timeout." })
   return { bytes: notebook.bytes, settings, identity }
 }
 
@@ -132,13 +153,17 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
     const notebookRef = notebookParam(params.notebook)
     const notebook = await notebookForJob(ctx, notebookRef)
     const choice = await chooseCompute(ctx, params, "schedule")
-    const cost = checkCost(choice, undefined, ctx)
+    const cost = checkCost(choice, params.maxUsd, ctx)
+    const budget = await budgetCheck(ctx, "schedule.create", cost.maxComputeUsd)
     requireBound(params.maxRunCount, params.endTime, ctx.deps.clock.now())
     const cronText = cronWithZone(params.cron, params.timeZone)
     const overlap = checkOverlap(cronText, choice.timeoutMinutes, params.maxRunCount, ctx)
     const token = scheduleToken()
     const displayName = uniqueName(params.displayName, token)
+    // Every run of this schedule writes into its own folder under the account's bucket (review M2).
+    const outputUri = `${settings.outputBase!}${token}/`
     const cron = parseCron(cronText)
+    const allowedRuns = params.maxRunCount ?? runsUntil(cronText, ctx, params.endTime)
     const runsPerMonth = monthlyRuns(cronText, ctx, { ...(params.maxRunCount !== undefined ? { maxRunCount: params.maxRunCount } : {}), ...(params.endTime !== undefined ? { endTime: params.endTime } : {}) })
     const payload: SchedulePayload = {
       token,
@@ -153,7 +178,8 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
       ...(choice.template !== undefined ? { template: choice.template } : {}),
       timeoutMinutes: choice.timeoutMinutes,
       estimateUsd: cost.maxComputeUsd,
-      outputBucket: settings.outputBucket!,
+      maxUsd: cost.capUsd,
+      outputUri,
       identity: { as: identity.as, ...(identity.serviceAccount !== undefined ? { serviceAccount: identity.serviceAccount } : {}), ...(identity.executionUser !== undefined ? { executionUser: identity.executionUser } : {}) },
     }
     const fingerprint: ScheduleFingerprint = {
@@ -166,7 +192,8 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
       template: choice.template ?? "",
       timeoutMinutes: choice.timeoutMinutes,
       estimateUsd: cost.maxComputeUsd,
-      outputBucket: settings.outputBucket!,
+      maxUsd: cost.capUsd,
+      outputUri,
       identity: identityKey(identity),
     }
     return {
@@ -194,12 +221,24 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
         executionTimeout: { minutes: choice.timeoutMinutes, seconds: choice.timeoutMinutes * 60 },
         identity: { as: identity.as, label: identity.label },
         outputBucket: settings.outputBucket,
-        cost: { perRunUsd: usd(cost.maxComputeUsd), perMonthUsd: usd(cost.maxComputeUsd * runsPerMonth), runsPerMonth, capUsd: usd(cost.capUsd) },
+        output: { folder: outputUri, pricesRegion: cost.pricesRegion },
+        cost: {
+          perRunUsd: usd(cost.maxComputeUsd),
+          perMonthUsd: usd(cost.maxComputeUsd * runsPerMonth),
+          runsPerMonth,
+          totalUsd: usd(cost.maxComputeUsd * allowedRuns),
+          totalRuns: allowedRuns,
+          capUsd: usd(cost.capUsd),
+          ceilingUsd: usd(cost.ceilingUsd),
+          pricesRegion: cost.pricesRegion,
+          note: "excludes provisioning time and a template's own disk",
+        },
         concurrency: { maxConcurrentRunCount: 1, allowQueueing: false },
         labels: labelsFor(ctx.call.sessionID),
       },
       payload: payload as unknown as Readonly<Record<string, unknown>>,
       fingerprint: fingerprint as unknown as Readonly<Record<string, unknown>>,
+      ...(budget.length > 0 ? { warnings: budget } : {}),
     }
   },
 
@@ -207,6 +246,7 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
     const payload = payloadOf<SchedulePayload>(plan)
     const fingerprint = plan.fingerprint as unknown as ScheduleFingerprint
     const { bytes, settings, identity } = await recheck(ctx, payload, fingerprint)
+    await budgetCheck(ctx, "schedule.create", payload.estimateUsd)
     requireBound(payload.maxRunCount, payload.endTime, ctx.deps.clock.now())
     const body = {
       displayName: payload.displayName,
@@ -226,7 +266,7 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
           ...(payload.acceleratorCount !== undefined ? { acceleratorCount: payload.acceleratorCount } : {}),
           ...(payload.template !== undefined ? { template: payload.template } : {}),
           timeoutMinutes: payload.timeoutMinutes,
-          outputBucket: payload.outputBucket,
+          outputUri: payload.outputUri,
           identity,
           sessionId: ctx.call.sessionID,
         }),
@@ -237,10 +277,13 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
     try {
       created = await ctx.deps.vertex.createSchedule(ctx.account.alias, body, ctx.call.signal)
     } catch (error) {
-      const uncertain = error instanceof ColabError && (error.code === "UNAVAILABLE" || error.code === "RATE_LIMITED")
-      if (!uncertain) throw error
+      // A create has no client-chosen id: an unanswered create may have landed, so look for its token with a fresh
+      // short signal before answering (review M1). The create itself is never retried.
+      const uncertain = ColabError.is(error) && ["UNAVAILABLE", "RATE_LIMITED", "CANCELLED", "UNCERTAIN"].includes(error.code)
+      const aborted = error instanceof Error && error.name === "AbortError"
+      if (!uncertain && !aborted) throw error
       await ctx.providerRead(OPERATIONS.schedulesList)
-      const schedules = await ctx.deps.vertex.listSchedules(ctx.account.alias, ctx.call.signal)
+      const schedules = await ctx.deps.vertex.listSchedules(ctx.account.alias, { filter: `display_name="${payload.displayName}"` }, AbortSignal.timeout(5_000))
       const found = schedules.find((schedule) => schedule.displayName.includes(payload.token))
       if (!found) {
         throw new ColabError("UNCERTAIN", "The create's answer was lost, and no schedule with this plan's token was found.", { next: "colab_schedules lists the account's schedules before planning again." })
@@ -278,8 +321,10 @@ const scheduleUpdate: PlanHandler<"schedule.update"> = {
     const endTime = params.endTime ?? schedule.endTime
     requireBound(maxRunCount, endTime, ctx.deps.clock.now())
     const cron = parseCron(cronText)
-    const cost = await costOf(ctx, schedule)
-    const timeoutMinutes = cost.timeoutMinutes ?? ctx.deps.options.jobTimeoutMinutes
+    refuseOverlapping(schedule)
+    const cost = checkScheduleCost(await costOf(ctx, schedule), undefined, ctx)
+    // A foreign schedule without its own timeout runs to Google's 24 h default, not the plugin's option (review M4b).
+    const timeoutMinutes = cost.timeoutMinutes ?? GOOGLE_DEFAULT_TIMEOUT_SECONDS / 60
     const overlap = checkOverlap(cronText, timeoutMinutes, maxRunCount, ctx)
     const runsPerMonth = monthlyRuns(cronText, ctx, { ...(maxRunCount !== undefined ? { maxRunCount } : {}), ...(endTime !== undefined ? { endTime } : {}), ...(schedule.startedRunCount !== undefined ? { startedRunCount: schedule.startedRunCount } : {}) })
     const changes = {
@@ -297,7 +342,16 @@ const scheduleUpdate: PlanHandler<"schedule.update"> = {
         bounds: { ...(maxRunCount !== undefined ? { maxRunCount } : {}), ...(endTime !== undefined ? { endTime } : {}) },
         ...(overlap.minimumGapMinutes !== undefined ? { minimumGapMinutes: overlap.minimumGapMinutes } : {}),
         requiredGapMinutes: overlap.requiredGapMinutes,
-        cost: { perRunUsd: usd(cost.perRun), perMonthUsd: usd(cost.perRun !== undefined ? cost.perRun * runsPerMonth : undefined), runsPerMonth },
+        cost: {
+          perRunUsd: usd(cost.perRun),
+          perMonthUsd: usd(cost.perRun !== undefined ? cost.perRun * runsPerMonth : undefined),
+          runsPerMonth,
+          timeoutMinutes: cost.timeoutMinutes,
+          timeoutSource: cost.timeoutSource,
+          capUsd: usd(cost.capUsd),
+          pricesRegion: cost.pricesRegion,
+          note: "excludes provisioning time and a template's own disk",
+        },
       },
       payload: { schedule: schedule.name, changes } as Readonly<Record<string, unknown>>,
       fingerprint: { schedule: schedule.name, state: schedule.state, cron: schedule.cron, maxRunCount: schedule.maxRunCount === undefined ? "" : String(schedule.maxRunCount), endTime: schedule.endTime ?? "" },
@@ -316,6 +370,8 @@ const scheduleUpdate: PlanHandler<"schedule.update"> = {
     const maxRunCount = payload.changes.maxRunCount ?? schedule.maxRunCount
     const endTime = payload.changes.endTime ?? schedule.endTime
     requireBound(maxRunCount, endTime, ctx.deps.clock.now())
+    refuseOverlapping(schedule)
+    checkScheduleCost(await costOf(ctx, schedule), undefined, ctx)
     const fields = [
       ...(payload.changes.cron !== undefined ? ["cron"] : []),
       ...(payload.changes.maxRunCount !== undefined ? ["maxRunCount"] : []),
@@ -346,19 +402,33 @@ const scheduleResume: PlanHandler<"schedule.resume"> = {
     if (schedule.state === "COMPLETED") throw new ColabError("ACTION_UNSUPPORTED", "The schedule has completed; resuming it would start nothing.", { next: "Plan schedule.create for a new one." })
     if (schedule.state !== "PAUSED") throw new ColabError("ACTION_UNSUPPORTED", `The schedule is ${schedule.state}, so there is nothing to resume.`, { next: "colab_schedules lists its next runs." })
     requireBound(schedule.maxRunCount, schedule.endTime, ctx.deps.clock.now())
-    const cost = await costOf(ctx, schedule)
+    refuseOverlapping(schedule)
+    const cost = checkScheduleCost(await costOf(ctx, schedule), undefined, ctx)
+    const budget = await budgetCheck(ctx, "schedule.resume", cost.perRun)
     const cron = parseCron(schedule.cron)
+    // The overlap check runs on resume too, against the schedule's own timeout or Google's 24 h default (review M4b).
+    checkOverlap(schedule.cron, cost.timeoutMinutes ?? GOOGLE_DEFAULT_TIMEOUT_SECONDS / 60, schedule.maxRunCount, ctx)
     const runsPerMonth = monthlyRuns(schedule.cron, ctx, schedule)
     return {
       preview: {
         action: "schedule.resume",
         schedule: { id: lastSegment(schedule.name), name: schedule.name, displayName: schedule.displayName, state: schedule.state, cron: schedule.cron, ...(schedule.maxRunCount !== undefined ? { maxRunCount: schedule.maxRunCount } : {}), ...(schedule.endTime !== undefined ? { endTime: schedule.endTime } : {}), ...(schedule.startedRunCount !== undefined ? { runsStarted: schedule.startedRunCount } : {}) },
         nextRuns: nextRuns(cron, ctx.deps.clock.now(), 5).map((date) => date.toISOString()),
-        cost: { perRunUsd: usd(cost.perRun), perMonthUsd: usd(cost.perRun !== undefined ? cost.perRun * runsPerMonth : undefined), runsPerMonth },
+        cost: {
+          perRunUsd: usd(cost.perRun),
+          perMonthUsd: usd(cost.perRun !== undefined ? cost.perRun * runsPerMonth : undefined),
+          runsPerMonth,
+          timeoutMinutes: cost.timeoutMinutes,
+          timeoutSource: cost.timeoutSource,
+          capUsd: usd(cost.capUsd),
+          pricesRegion: cost.pricesRegion,
+          note: "excludes provisioning time and a template's own disk",
+        },
         catchUp: "missed runs are not backfilled (`catchUp` is output-only and false)",
       },
       payload: { schedule: schedule.name } as Readonly<Record<string, unknown>>,
       fingerprint: { schedule: schedule.name, state: schedule.state, cron: schedule.cron, maxRunCount: schedule.maxRunCount === undefined ? "" : String(schedule.maxRunCount), endTime: schedule.endTime ?? "" },
+      ...(budget.length > 0 ? { warnings: budget } : {}),
     }
   },
 
@@ -369,6 +439,9 @@ const scheduleResume: PlanHandler<"schedule.resume"> = {
     await ctx.providerRead(OPERATIONS.schedulesGet)
     const schedule = await ctx.deps.vertex.getSchedule(ctx.account.alias, payload.schedule, ctx.call.signal)
     if (!schedule || schedule.state !== "PAUSED" || schedule.cron !== fingerprint.cron) throw new ColabError("PLAN_CHANGED", "The schedule changed since the preview.", { next: "Plan again and show the new state." })
+    refuseOverlapping(schedule)
+    const cost = checkScheduleCost(await costOf(ctx, schedule), undefined, ctx)
+    await budgetCheck(ctx, "schedule.resume", cost.perRun)
     await ctx.deps.vertex.resumeSchedule(ctx.account.alias, schedule.name, ctx.call.signal)
     return { schedule: schedule.name, id: lastSegment(schedule.name), state: "ACTIVE", nextRuns: nextRunsOf(schedule, ctx).map((date) => date.toISOString()) }
   },

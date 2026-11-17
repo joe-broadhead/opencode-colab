@@ -11,7 +11,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import type { Deps } from "../../src/deps.js"
-import { MACHINES, PRICES_AS_OF, priceOf } from "../../src/enterprise/prices.js"
+import { MACHINES, PRICES_AS_OF, createPrices, priceOf } from "../../src/enterprise/prices.js"
 import { parseCron } from "../../src/enterprise/cron.js"
 import { runTool, type Runner } from "../../src/tools/spec.js"
 import { toolHandlers } from "../../src/tools/registry.js"
@@ -21,7 +21,7 @@ import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 
 const call = () => ({ sessionID: "ses_enterprise", agent: "build", messageID: "msg", id: "call", signal: new AbortController().signal })
 const ENTERPRISE = {
-  accounts: { work: { backend: "enterprise", project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" } },
+  accounts: { work: { backend: "enterprise", access: "write", project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" } },
 }
 
 const directories: string[] = []
@@ -197,5 +197,117 @@ describe("cron arithmetic", () => {
     expect(parseCron("*/15 9-17 * * MON-FRI").minutes).toEqual([0, 15, 30, 45])
     expect(parseCron("0 0 1 JAN,jul *").months).toEqual([1, 7])
     expect(parseCron("0 0 * * 7").daysOfWeek).toEqual([0])
+  })
+})
+
+describe("the worst case is an upper bound (review M4)", () => {
+  const foreign = (overrides: Record<string, unknown> = {}) => ({
+    name: "projects/proj/locations/us-central1/schedules/9",
+    displayName: "foreign",
+    cron: "0 9 * * *",
+    state: "PAUSED",
+    maxRunCount: 10,
+    startedRunCount: 0,
+    jobRequest: {
+      parent: "projects/proj/locations/us-central1",
+      notebookExecutionJob: { customEnvironmentSpec: { machineSpec: { machineType: "e2-standard-4" } } },
+    },
+    ...overrides,
+  })
+
+  it("P3: schedule.create honours the maxUsd the call passes", async () => {
+    const { directory, path } = notebookAt()
+    const { runner } = setup(ENTERPRISE, directory)
+    expect(await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "n", cron: "0 9 * * *", maxRunCount: 3, maxUsd: 0.05 } }, call(), runner)).toMatchObject({
+      state: "refused",
+      error: "COST_CAP",
+      message: expect.stringContaining("0.05"),
+    })
+    expect(await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "n", cron: "0 9 * * *", maxRunCount: 3, maxUsd: 10 } }, call(), runner)).toMatchObject({ state: "ok", preview: { cost: { capUsd: 10 } } })
+  })
+
+  it("refuses a region the us-central1 table does not price, unless rates prices its machine", async () => {
+    const { directory, path } = notebookAt()
+    const regional = { accounts: { work: { ...ENTERPRISE.accounts.work, region: "europe-west4" } } }
+    const plain = setup(regional, directory)
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), plain.runner)).toMatchObject({
+      state: "refused",
+      error: "ESTIMATE_UNKNOWN",
+      message: expect.stringContaining("europe-west4"),
+    })
+    const priced = setup({ ...regional, rates: { "e2-standard-4": 0.3 } }, directory)
+    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), priced.runner)) as { preview: Record<string, any> }
+    expect(planned).toMatchObject({ state: "ok", preview: { cost: { pricesRegion: "us-central1" }, output: { pricesRegion: "us-central1" } } })
+  })
+
+  it("costs a schedule with no timeout at Google's 24 h default, and the cap applies", async () => {
+    const { directory } = notebookAt()
+    const { runner, vertex } = setup(ENTERPRISE, directory)
+    vertex.schedules.set("projects/proj/locations/us-central1/schedules/9", foreign() as never)
+    const listed = (await runTool("schedules", { account: "work" }, call(), runner)) as { schedules: Record<string, any>[] }
+    // e2-standard-4 at $0.2202/h for 24 h, not for the plugin's 1 h default.
+    expect(listed.schedules[0]!.worstCaseUsdPerRun).toBeCloseTo(5.29, 1)
+    // Resuming it would commit 24 h runs over the $5 per-run cap.
+    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ state: "refused", error: "COST_CAP" })
+  })
+
+  it("refuses an update or resume whose machine cannot be priced", async () => {
+    const { directory } = notebookAt()
+    const { runner, vertex } = setup(ENTERPRISE, directory)
+    vertex.schedules.set("projects/proj/locations/us-central1/schedules/9", foreign({ jobRequest: { parent: "projects/proj/locations/us-central1", notebookExecutionJob: { customEnvironmentSpec: { machineSpec: { machineType: "n9-unknown" } } } } }) as never)
+    expect(await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "9", maxRunCount: 4 } }, call(), runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN" })
+    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN" })
+  })
+
+  it("does not let an n2 machine claim a GPU it cannot carry", async () => {
+    const { directory, path } = notebookAt()
+    const { runner } = setup(ENTERPRISE, directory)
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n2-standard-4", accelerator: "T4" } }, call(), runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN" })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n1-standard-4", accelerator: "T4" } }, call(), runner)).toMatchObject({ state: "ok" })
+  })
+})
+
+describe("the Day 0 seams package E builds (Budget, Prices) and read accounts", () => {
+  it("stops a job.create plan and its commit when the budget refuses, and warns when it warns", async () => {
+    const { directory, path } = notebookAt()
+    const refusing = setup(ENTERPRISE, directory)
+    refusing.fakes.budget.verdict = "refuse"
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), refusing.runner)).toMatchObject({ state: "refused", error: "BUDGET_REACHED" })
+    expect(refusing.fakes.budget.checks).toMatchObject([{ account: "work", action: "job.create", usd: expect.any(Number) }])
+    const warning = setup(ENTERPRISE, directory)
+    warning.fakes.budget.verdict = "warn"
+    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), warning.runner)) as { planId: string; warnings?: string[] }
+    expect(planned.warnings).toEqual(["BUDGET_WARN"])
+    warning.fakes.budget.verdict = "ok"
+    expect(await runTool("write", { planId: planned.planId }, call(), warning.runner)).toMatchObject({ state: "ok" })
+    expect(warning.fakes.budget.checks.map((check) => check.action)).toEqual(["job.create", "job.create"])
+  })
+
+  it("asks the budget before resuming a schedule", async () => {
+    const { directory } = notebookAt()
+    const { runner, vertex, fakes } = setup(ENTERPRISE, directory)
+    vertex.schedules.set("projects/proj/locations/us-central1/schedules/9", { name: "projects/proj/locations/us-central1/schedules/9", displayName: "paused", cron: "0 9 * * *", state: "PAUSED", maxRunCount: 5, startedRunCount: 0, jobRequest: { parent: "projects/proj/locations/us-central1", notebookExecutionJob: { customEnvironmentSpec: { machineSpec: { machineType: "e2-standard-4" } }, executionTimeout: "3600s" } } } as never)
+    fakes.budget.verdict = "refuse"
+    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ error: "BUDGET_REACHED" })
+    expect(fakes.budget.checks).toMatchObject([{ account: "work", action: "schedule.resume", usd: 0.220235 }])
+  })
+
+  it("prices through the Prices seam for package D and F, with the table's region and date", () => {
+    const { deps } = setup(ENTERPRISE)
+    const prices = createPrices(deps)
+    expect(prices.asOf).toBe("2026-11-17")
+    expect(prices.region).toBe("us-central1")
+    expect(prices.usdPerHour({ machine: "e2-standard-4" })).toBeCloseTo(0.220235, 6)
+    expect(prices.usdPerHour({ machine: "e2-standard-4", region: "europe-west4" })).toBeUndefined()
+    expect(prices.usdPerHour({ machine: "n1-standard-4", accelerator: "T4" })!).toBeGreaterThan(0.7)
+  })
+
+  it("makes no Enterprise change on an account whose access is read", async () => {
+    const { directory, path } = notebookAt()
+    const readOnly = { accounts: { work: { ...ENTERPRISE.accounts.work, access: "read" } } }
+    const { runner } = setup(readOnly, directory)
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)).toMatchObject({ state: "refused", error: "ACCOUNT_READ_ONLY" })
+    // Reads still work.
+    expect(await runTool("jobs", { account: "work" }, call(), runner)).toMatchObject({ state: "ok" })
   })
 })

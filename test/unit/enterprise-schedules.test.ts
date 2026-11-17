@@ -10,6 +10,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import type { Deps } from "../../src/deps.js"
 import { CONTRACTS } from "../../src/domain/contract.js"
+import { ColabError } from "../../src/domain/errors.js"
 import { runTool, type Runner } from "../../src/tools/spec.js"
 import { toolHandlers } from "../../src/tools/registry.js"
 import { fakeDeps, RecordingPermission } from "../fakes/index.js"
@@ -17,7 +18,7 @@ import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 
 const call = () => ({ sessionID: "ses_schedules", agent: "build", messageID: "msg", id: "call", signal: new AbortController().signal })
-const WORK = { backend: "enterprise" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" }
+const WORK = { backend: "enterprise" as const, access: "write" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" }
 const OPTIONS = { accounts: { work: WORK } }
 
 const directories: string[] = []
@@ -88,7 +89,7 @@ describe("schedule.create", () => {
           customEnvironmentSpec: { machineSpec: { machineType: "e2-standard-4" } },
           serviceAccount: "runner@proj.iam.gserviceaccount.com",
           labels: { oc_plugin: "colab" },
-          gcsOutputUri: "gs://results",
+          gcsOutputUri: `gs://results/${planned.preview.scheduleToken}/`,
         },
       },
     })
@@ -125,7 +126,7 @@ describe("colab_pause", () => {
     const { runner, vertex, permission } = setup()
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/1", schedule({}))
     const result = await runTool("pause", { account: "work", schedule: "1" }, call(), runner)
-    expect(result).toMatchObject({ state: "PAUSED", schedule: "1" })
+    expect(result).toMatchObject({ state: "ok", schedule: "1", scheduleState: "PAUSED" })
     // The contract's PauseOutput reuses `state` for the schedule's state; its own schema accepts this result.
     expect(CONTRACTS.pause.output.safeParse(result).success).toBe(true)
     expect(vertex.schedules.get("projects/proj/locations/us-central1/schedules/1")!.state).toBe("PAUSED")
@@ -133,7 +134,7 @@ describe("colab_pause", () => {
       ["colab.pause", ["work:aiplatform.projects.locations.schedules.pause"]],
       ["colab.read", ["work:aiplatform.projects.locations.schedules.get"]],
     ])
-    expect(await runTool("pause", { account: "work", schedule: "1" }, call(), runner)).toMatchObject({ state: "PAUSED", message: expect.stringContaining("already paused") })
+    expect(await runTool("pause", { account: "work", schedule: "1" }, call(), runner)).toMatchObject({ state: "ok", scheduleState: "PAUSED", message: expect.stringContaining("already paused") })
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/1", schedule({ state: "COMPLETED" }))
     expect(await runTool("pause", { account: "work", schedule: "1" }, call(), runner)).toMatchObject({ error: "ACTION_UNSUPPORTED" })
   })
@@ -176,5 +177,29 @@ describe("schedule.resume and schedule.delete", () => {
     expect(deleted.preview).toMatchObject({ deletes: expect.stringContaining("no new runs"), keeps: expect.stringContaining("runs it already started") })
     expect(await runTool("delete", { planId: deleted.planId }, call(), runner)).toMatchObject({ state: "ok", result: { deleted: true } })
     expect(vertex.schedules.size).toBe(0)
+  })
+})
+
+describe("foreign schedules and lost answers (review LOW 8, M1)", () => {
+  it("refuses to update or resume a schedule that starts several runs at once or queues them", async () => {
+    const { runner, vertex } = setup()
+    vertex.schedules.set("projects/proj/locations/us-central1/schedules/9", {
+      ...schedule({ state: "PAUSED", maxRunCount: 5 }),
+      maxConcurrentRunCount: 2,
+      allowQueueing: true,
+    } as never)
+    expect(await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "9", maxRunCount: 6 } }, call(), runner)).toMatchObject({ error: "SCHEDULE_OVERLAP", message: expect.stringContaining("2 runs at once") })
+    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ error: "SCHEDULE_OVERLAP" })
+  })
+
+  it("reconciles a create stopped with CANCELLED by its display-name token", async () => {
+    const { directory, path } = workspace()
+    const { runner, vertex } = setup(OPTIONS, directory)
+    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 5 } }, call(), runner)) as { planId: string; preview: Record<string, any> }
+    vertex.schedules.set("projects/proj/locations/us-central1/schedules/1", schedule({ displayName: `nightly [oc-${planned.preview.scheduleToken}]` }))
+    vertex.failNextScheduleCreate = new ColabError("CANCELLED", "The call stopped before the create's answer.")
+    const committed = (await runTool("write", { planId: planned.planId }, call(), runner)) as { state: string; result: Record<string, unknown> }
+    expect(committed).toMatchObject({ state: "ok", result: { message: expect.stringContaining("display-name token") } })
+    expect(vertex.scheduleBodies).toHaveLength(1)
   })
 })

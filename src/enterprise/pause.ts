@@ -20,13 +20,11 @@ export const pauseHandler: ToolHandler<"pause"> = {
     const schedule = await ctx.deps.vertex.getSchedule(ctx.account.alias, scheduleNameOf(settings, input.schedule), ctx.call.signal)
     if (!schedule) throw new ColabError("NOT_FOUND", "The schedule was not found.", { next: "colab_schedules lists the account's schedules." })
     const id = lastSegment(schedule.name)
-    // The contract's PauseOutput reuses `state` for the schedule's state, so the runtime schema wants "PAUSED"; the
-    // inferred type sees `state?: undefined` (a Day 0 schema quirk recorded as a contract request).
-    if (schedule.state === "PAUSED") return { state: "PAUSED", schedule: id, message: "The schedule was already paused." } as unknown as OutputOf<"pause">
+    if (schedule.state === "PAUSED") return { state: "ok", schedule: id, scheduleState: "PAUSED", message: "The schedule was already paused." }
     if (schedule.state === "COMPLETED") {
       throw new ColabError("ACTION_UNSUPPORTED", "The schedule has completed, so there is nothing to pause.", { next: "colab_schedules lists its runs; plan schedule.create for a new one." })
     }
     await ctx.deps.vertex.pauseSchedule(ctx.account.alias, schedule.name, ctx.call.signal)
-    return { state: "PAUSED", schedule: id } as unknown as OutputOf<"pause">
+    return { state: "ok", schedule: id, scheduleState: "PAUSED" }
   },
 }

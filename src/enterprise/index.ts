@@ -3,9 +3,10 @@
 // table and estimates, colab_jobs / colab_schedules, and the Enterprise branches of colab_execution, colab_cancel and
 // colab_download (EnterpriseRuns). The Vertex and Cloud Storage clients are here too, over `fetch`; every test uses fakes.
 import type { PortEnv } from "../deps.js"
-import type { EnterpriseRuns, GcsApi, VertexApi } from "../ports.js"
+import type { EnterpriseRuns, GcsApi, Prices, VertexApi } from "../ports.js"
 import type { PlanHandlers, ToolHandlers } from "../tools/types.js"
 import { createGcs } from "./gcs.js"
+import { createPrices } from "./prices.js"
 import { jobsHandler } from "./jobs.js"
 import { pauseHandler } from "./pause.js"
 import { PLAN_HANDLERS as JOB_PLAN_HANDLERS } from "./plans.js"
@@ -25,9 +26,9 @@ export const PLAN_HANDLERS: PlanHandlers = {
   ...SCHEDULE_PLAN_HANDLERS,
 }
 
-export function createEnterprisePorts(env: PortEnv): { readonly vertex: VertexApi; readonly gcs: GcsApi; readonly enterprise: EnterpriseRuns } {
+export function createEnterprisePorts(env: PortEnv): { readonly vertex: VertexApi; readonly gcs: GcsApi; readonly enterprise: EnterpriseRuns; readonly prices: Prices } {
   const vertex = createVertex(env)
   const gcs = createGcs(env)
   const runs: EnterpriseRunsEnv = { ...env, vertex, gcs }
-  return { vertex, gcs, enterprise: createEnterpriseRuns(runs) }
+  return { vertex, gcs, enterprise: createEnterpriseRuns(runs), prices: createPrices(env) }
 }

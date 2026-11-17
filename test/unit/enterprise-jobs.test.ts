@@ -1,8 +1,8 @@
 /**
  * `colab_jobs` and the `job.create` / `job.delete` plans (design §6, §7.2): the direct-source body, the client-chosen
  * job id, compute from customEnvironmentSpec or a template, the run identity (Q9), the bucket (BUCKET_REQUIRED), the
- * secret screen, the ledger record, and a commit that re-reads the notebook. L10's shapes (directNotebookSource,
- * executionTimeout, customEnvironmentSpec with e2-standard-4) are the fake's fixtures; no Google call.
+ * secret screen, the ledger record, and a commit that re-reads the notebook. The fakes reproduce the shapes L10 will
+ * confirm (directNotebookSource, executionTimeout, customEnvironmentSpec with e2-standard-4); L10 itself remains unrun.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -16,7 +16,7 @@ import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 
 const call = (sessionID = "ses_enterprise") => ({ sessionID, agent: "build", messageID: "msg", id: "call", signal: new AbortController().signal })
-const WORK = { backend: "enterprise" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" }
+const WORK = { backend: "enterprise" as const, access: "write" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" }
 const OPTIONS = { accounts: { work: WORK } }
 
 const directories: string[] = []
@@ -53,11 +53,11 @@ describe("the account's prerequisites", () => {
     const { directory, path } = workspace()
     const consumer = setup({ accounts: { default: {} } }, directory)
     expect(await runTool("plan", { action: "job.create", params: { notebook: { path } } }, call(), consumer.runner)).toMatchObject({ state: "refused", error: "ACTION_UNSUPPORTED" })
-    const noProject = setup({ accounts: { work: { backend: "enterprise" } } }, directory)
+    const noProject = setup({ accounts: { work: { backend: "enterprise", access: "write" } } }, directory)
     expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), noProject.runner)).toMatchObject({ error: "PROJECT_REQUIRED" })
-    const noBucket = setup({ accounts: { work: { backend: "enterprise", project: "proj", region: "us-central1", serviceAccount: "s@proj.iam.gserviceaccount.com" } } }, directory)
+    const noBucket = setup({ accounts: { work: { backend: "enterprise", access: "write", project: "proj", region: "us-central1", serviceAccount: "s@proj.iam.gserviceaccount.com" } } }, directory)
     expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), noBucket.runner)).toMatchObject({ error: "BUCKET_REQUIRED" })
-    const noIdentity = setup({ accounts: { work: { backend: "enterprise", project: "proj", region: "us-central1", outputBucket: "gs://b" } } }, directory)
+    const noIdentity = setup({ accounts: { work: { backend: "enterprise", access: "write", project: "proj", region: "us-central1", outputBucket: "gs://b" } } }, directory)
     expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), noIdentity.runner)).toMatchObject({ error: "RUN_IDENTITY_REQUIRED", next: expect.stringContaining("serviceAccount") })
   })
 
@@ -86,7 +86,7 @@ describe("job.create", () => {
     expect(body).toMatchObject({
       displayName: "analysis.ipynb",
       customEnvironmentSpec: { machineSpec: { machineType: "e2-standard-4" } },
-      gcsOutputUri: "gs://results",
+      gcsOutputUri: `gs://results/${jobId}/`,
       executionTimeout: "3600s",
       serviceAccount: "runner@proj.iam.gserviceaccount.com",
       labels: { oc_plugin: "colab" },
@@ -204,5 +204,14 @@ describe("job.delete", () => {
       ["colab.read", ["work:aiplatform.projects.locations.notebookExecutionJobs.get"]],
     ])
     expect(await runTool("plan", { action: "job.delete", account: "work", params: { job: "oc-job-1" } }, call(), runner)).toMatchObject({ error: "NOT_FOUND" })
+  })
+
+  it("says that deleting a running job may not stop it, until L11 records it", async () => {
+    const { runner, vertex } = setup()
+    const name = "projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-running"
+    vertex.putJob({ name, displayName: "running", state: "JOB_STATE_RUNNING", createTime: "2026-11-17T09:00:00Z", updateTime: "2026-11-17T09:00:00Z" })
+    const planned = (await runTool("plan", { action: "job.delete", account: "work", params: { job: "oc-job-running" } }, call(), runner)) as { preview: Record<string, any> }
+    expect(planned.preview.note).toContain("unverified")
+    expect(planned.preview.note).toContain("colab_cancel")
   })
 })

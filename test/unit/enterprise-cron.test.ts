@@ -88,6 +88,8 @@ describe("the minimum gap", () => {
     expect(minimumGap(parseCron("0 9 1,2 * *"), at("2026-11-02T00:00:00Z"), { runs: 1 }).gapMs).toBe(Number.POSITIVE_INFINITY)
     // A single occurrence in the window has no gap to measure.
     expect(minimumGap(parseCron("0 0 1 1 *"), at("2026-11-17T00:00:00Z")).gapMs).toBe(Number.POSITIVE_INFINITY)
+    // A repeated local time is judged as the 1 h pair it may be until L10 records which instant Google fires.
+    expect(minimumGap(parseCron("TZ=America/New_York 30 1 * * *"), at("2026-10-30T12:00:00Z")).gapMs).toBe(60 * 60_000)
   })
 
   it("counts the runs in a window, for a schedule's monthly worst case", () => {

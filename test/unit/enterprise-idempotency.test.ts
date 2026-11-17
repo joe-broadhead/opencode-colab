@@ -17,7 +17,7 @@ import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 
 const call = () => ({ sessionID: "ses_idempotency", agent: "build", messageID: "msg", id: "call", signal: new AbortController().signal })
-const OPTIONS = { accounts: { work: { backend: "enterprise" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" } } }
+const OPTIONS = { accounts: { work: { backend: "enterprise" as const, access: "write" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" } } }
 
 const directories: string[] = []
 afterEach(() => {
@@ -75,7 +75,7 @@ describe("a job's client-chosen id", () => {
     await runTool("write", { planId: planned.planId }, call(), runner)
     expect(vertex.jobBodies[0]!.jobId).toBe(planned.preview.jobId)
     expect((vertex.calls.find((entry) => entry.method === "createJob")!.args[1] as { jobId: string }).jobId).toBe(planned.preview.jobId)
-    expect(await fakes.ledger.getRun(planned.preview.jobId)).toBeDefined()
+    expect(await fakes.ledger.getRun(planned.preview.jobId)).toMatchObject({ operation: vertex.operationNames[0] })
   })
 
   it("joins a job that already exists instead of creating a second one", async () => {
@@ -91,7 +91,7 @@ describe("a job's client-chosen id", () => {
     expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ error: "PLAN_ALREADY_USED" })
   })
 
-  it("joins at the client when Google answers ALREADY_EXISTS, and never retries a create", async () => {
+  it("joins at the client on ALREADY_EXISTS, and retries a lost create with the same id before looking it up", async () => {
     const job = { name: "projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-1", displayName: "first", jobState: "JOB_STATE_RUNNING", createTime: "2026-11-17T09:00:00Z" }
     const { fetch: fetchImpl, calls } = scriptedFetch([
       { status: 409, body: { error: { code: 409, status: "ALREADY_EXISTS", message: "already exists" } } },
@@ -99,15 +99,24 @@ describe("a job's client-chosen id", () => {
     ])
     const { vertex } = client(fetchImpl)
     const joined = await vertex.createJob("work", { jobId: "oc-job-1", body: { displayName: "first" } }, new AbortController().signal)
-    expect(joined).toMatchObject({ job: { name: job.name, state: "JOB_STATE_RUNNING" }, operation: "" })
+    expect(joined.job).toMatchObject({ name: job.name, state: "JOB_STATE_RUNNING" })
+    expect(joined.operation).toBeUndefined()
     expect(calls.map((entry) => entry.method)).toEqual(["POST", "GET"])
     expect(calls[0]!.url).toContain("notebookExecutionJobId=oc-job-1")
     expect(calls[0]!.authorization).toBe("Bearer fake-token-work")
-    // A server error on a create is not retried: schedules have no id, and a job join is the client's own step.
-    const failed = scriptedFetch([{ status: 500, body: { error: { code: 500, message: "boom" } } }])
+    // A server error is retried with the same id (a retry joins the first job), then looked up; a create that never
+    // landed is UNCERTAIN, so the next plan knows to check before making another.
+    const failed = scriptedFetch([
+      { status: 500, body: { error: { code: 500, message: "boom" } } },
+      { status: 500, body: { error: { code: 500, message: "boom" } } },
+      { status: 500, body: { error: { code: 500, message: "boom" } } },
+      { status: 404, body: { error: { code: 404, status: "NOT_FOUND", message: "no job" } } },
+    ])
     const second = client(failed.fetch)
-    await expect(second.vertex.createJob("work", { jobId: "oc-job-2", body: {} }, new AbortController().signal)).rejects.toMatchObject({ code: "UNAVAILABLE" })
-    expect(failed.calls).toHaveLength(1)
+    await expect(second.vertex.createJob("work", { jobId: "oc-job-2", body: {} }, new AbortController().signal)).rejects.toMatchObject({ code: "UNCERTAIN" })
+    expect(failed.calls.filter((call) => call.method === "POST")).toHaveLength(3)
+    expect(failed.calls.every((call) => call.method === "POST" ? call.url.includes("notebookExecutionJobId=oc-job-2") : true)).toBe(true)
+    expect(failed.calls.at(-1)!.url).toContain("/notebookExecutionJobs/oc-job-2")
   })
 })
 
@@ -140,5 +149,86 @@ describe("a schedule's display-name token", () => {
     expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ state: "failed", error: "UNCERTAIN", next: expect.stringContaining("colab_schedules") })
     expect(vertex.scheduleBodies).toHaveLength(1)
     expect(vertex.schedules.size).toBe(0)
+  })
+})
+
+describe("a lost create answer (review M1)", () => {
+  it("P1: a 5xx is retried with the same job id, and the retry's job is joined", async () => {
+    const job = { name: "projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-x", displayName: "x", jobState: "JOB_STATE_RUNNING", createTime: "2026-11-17T09:00:00Z" }
+    const { fetch: fetchImpl, calls } = scriptedFetch([
+      { status: 503, body: { error: { code: 503, status: "UNAVAILABLE", message: "backend" } } },
+      { status: 200, body: { name: "projects/proj/locations/us-central1/operations/op-1", response: job } },
+    ])
+    const { vertex } = client(fetchImpl)
+    const created = await vertex.createJob("work", { jobId: "oc-job-x", body: {} }, new AbortController().signal)
+    expect(created).toMatchObject({ job: { name: job.name }, operation: "projects/proj/locations/us-central1/operations/op-1" })
+    expect(calls.map((call) => call.method)).toEqual(["POST", "POST"])
+    expect(calls.every((call) => call.url.includes("notebookExecutionJobId=oc-job-x"))).toBe(true)
+  })
+
+  it("P1: a 5xx that never landed is looked up by id and answers UNCERTAIN, not UNAVAILABLE", async () => {
+    const { fetch: fetchImpl, calls } = scriptedFetch([
+      { status: 503, body: { error: { code: 503, message: "backend" } } },
+      { status: 503, body: { error: { code: 503, message: "backend" } } },
+      { status: 503, body: { error: { code: 503, message: "backend" } } },
+      { status: 404, body: { error: { code: 404, status: "NOT_FOUND", message: "no job" } } },
+    ])
+    const { vertex } = client(fetchImpl)
+    await expect(vertex.createJob("work", { jobId: "oc-job-y", body: {} }, new AbortController().signal)).rejects.toMatchObject({ code: "UNCERTAIN", next: "colab_jobs lists the account's jobs before planning again." })
+    expect(calls.at(-1)!.url).toContain("/notebookExecutionJobs/oc-job-y")
+  })
+
+  it("looks through the operations list and answers UNCERTAIN while the create operation still runs", async () => {
+    const { fetch: fetchImpl, calls } = scriptedFetch([
+      { status: 503, body: { error: { code: 503, message: "backend" } } },
+      { status: 503, body: { error: { code: 503, message: "backend" } } },
+      { status: 503, body: { error: { code: 503, message: "backend" } } },
+      { status: 404, body: { error: { code: 404, status: "NOT_FOUND", message: "no job yet" } } },
+      { status: 200, body: { operations: [{ name: "projects/proj/locations/us-central1/operations/op-5", done: false }] } },
+    ])
+    const { vertex } = client(fetchImpl)
+    await expect(vertex.createJob("work", { jobId: "oc-job-op", body: {} }, new AbortController().signal)).rejects.toMatchObject({ code: "UNCERTAIN", message: expect.stringContaining("still running") })
+    expect(calls.at(-1)!.url).toContain("/notebookExecutionJobs/oc-job-op/operations")
+  })
+
+  it("P1b: a 409 ALREADY_EXISTS with an ErrorInfo reason joins by HTTP status", async () => {
+    const job = { name: "projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-z", displayName: "z", jobState: "JOB_STATE_RUNNING" }
+    const { fetch: fetchImpl, calls } = scriptedFetch([
+      { status: 409, body: { error: { code: 409, status: "ALREADY_EXISTS", message: "exists", details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "RESOURCE_EXISTS", domain: "aiplatform.googleapis.com" }] } } },
+      { status: 200, body: job },
+    ])
+    const { vertex } = client(fetchImpl)
+    const joined = await vertex.createJob("work", { jobId: "oc-job-z", body: {} }, new AbortController().signal)
+    expect(joined.job).toMatchObject({ name: job.name })
+    expect(joined.operation).toBeUndefined()
+    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"])
+  })
+
+  it("reconciles an aborted create with a fresh signal and names the job the Stop left behind", async () => {
+    const controller = new AbortController()
+    const job = { name: "projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-stop", displayName: "stop", jobState: "JOB_STATE_RUNNING" }
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        controller.abort()
+        throw Object.assign(new Error("aborted"), { name: "AbortError" })
+      }
+      return new Response(JSON.stringify(job), { status: 200 })
+    }) as typeof fetch
+    const { vertex } = client(fetchImpl)
+    await expect(vertex.createJob("work", { jobId: "oc-job-stop", body: {} }, controller.signal)).rejects.toMatchObject({
+      code: "CANCELLED",
+      next: expect.stringContaining('colab_execution({ job: "oc-job-stop" })'),
+    })
+  })
+
+  it("answers UNCERTAIN when the client cannot confirm a committed job create", async () => {
+    const { directory, path } = workspace()
+    const { vertex, runner, fakes } = setup(directory)
+    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { planId: string }
+    vertex.failNextCreate = new ColabError("UNCERTAIN", "The job create's answer was lost, and no job with its id exists.", { next: "colab_jobs lists the account's jobs before planning again." })
+    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ state: "failed", error: "UNCERTAIN", next: "colab_jobs lists the account's jobs before planning again." })
+    // The plan is spent (a failed commit expires it), and nothing was recorded as a run.
+    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ state: "refused", error: "PLAN_EXPIRED" })
+    expect(fakes.ledger.runs.size).toBe(0)
   })
 })

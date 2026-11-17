@@ -24,8 +24,8 @@ export class ScriptedVertex extends FakeVertex {
   readonly jobBodies: { readonly account: string; readonly jobId: string; readonly body: Readonly<Record<string, unknown>> }[] = []
   /** Every schedule create body, in order; one entry is one call (a create is never retried). */
   readonly scheduleBodies: Readonly<Record<string, unknown>>[] = []
-  /** The create LRO names, in order. */
-  readonly operations: string[] = []
+  /** The create LRO names, in order (the base fake keeps them in `operations`, by job). */
+  readonly operationNames: string[] = []
   /** False models L11's bad answer: cancel is accepted but the job keeps running. */
   cancelStops = true
   failNextCreate?: ColabError
@@ -54,7 +54,7 @@ export class ScriptedVertex extends FakeVertex {
     const name = `projects/proj/locations/us-central1/notebookExecutionJobs/${input.jobId}`
     const existing = this.jobs.get(name) as ScriptedJob | undefined
     // A client-chosen id makes the create idempotent: the second call joins the first (design §7.2).
-    if (existing) return { job: existing, operation: "" }
+    if (existing) return { job: existing }
     const body = input.body
     const custom = (body.customEnvironmentSpec as { machineSpec?: Record<string, unknown> } | undefined)?.machineSpec
     const timeout = typeof body.executionTimeout === "string" ? Number(body.executionTimeout.replace(/s$/, "")) : undefined
@@ -72,8 +72,9 @@ export class ScriptedVertex extends FakeVertex {
     }
     this.jobs.set(name, job)
     const operation = `projects/proj/locations/us-central1/operations/op-${++this.counter}`
-    this.operations.push(operation)
+    this.operationNames.push(operation)
     this.operationJobs.set(operation, name)
+    this.operations.set(name, [...(this.operations.get(name) ?? []), { name: operation, done: false }])
     return { job, operation }
   }
 
@@ -117,6 +118,8 @@ export class ScriptedVertex extends FakeVertex {
       ...(typeof body.endTime === "string" ? { endTime: body.endTime } : {}),
       startedRunCount: 0,
       jobRequest: body.createNotebookExecutionJobRequest as Readonly<Record<string, unknown>>,
+      ...(body.maxConcurrentRunCount !== undefined ? { maxConcurrentRunCount: Number(body.maxConcurrentRunCount) } : {}),
+      ...(body.allowQueueing !== undefined ? { allowQueueing: body.allowQueueing === true } : {}),
     }
     this.schedules.set(name, schedule)
     if (lost) throw new ColabError("UNAVAILABLE", "The create's answer was lost.")

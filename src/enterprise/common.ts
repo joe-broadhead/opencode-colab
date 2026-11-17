@@ -9,11 +9,12 @@
  */
 import { readFileSync } from "node:fs"
 import type { HandlerContext } from "../tools/types.js"
-import { ColabError } from "../domain/errors.js"
+import { ColabError, type WarningCode } from "../domain/errors.js"
 import { OPERATIONS } from "../domain/actions.js"
-import { acceleratorShort, acceleratorType, PRICES_AS_OF, priceOf, type Price } from "./prices.js"
+import { screenSecrets } from "../redact.js"
+import { acceleratorShort, acceleratorType, PRICES_AS_OF, PRICES_REGION, priceOf, type Price } from "./prices.js"
 import { enterpriseSettings, type EnterpriseSettings } from "./account.js"
-import { parseNotebook, secretScreen, sha256Of, type Notebook, type SecretScreen } from "./notebook.js"
+import { parseNotebook, sha256Of, type Notebook, type SecretScreen } from "./notebook.js"
 import { nextRuns, occurrencesBetween, parseCron } from "./cron.js"
 import { computeOfSchedule, type ComputeSpec } from "./detail.js"
 import { sessionLabel } from "./ids.js"
@@ -30,6 +31,33 @@ export const scheduleNameOf = (settings: EnterpriseSettings, schedule: string) =
 
 const parentOfName = (settings: EnterpriseSettings) => `projects/${settings.project}/locations/${settings.region}`
 
+/** The kinds of secret-shaped text in a notebook's cell sources, and how many cells carry one (design §7.5). */
+function screenNotebook(notebook: Notebook): SecretScreen {
+  const kinds = new Set<string>()
+  let found = 0
+  for (const cell of notebook.cells) {
+    const screen = screenSecrets(cell.source)
+    if (!screen.found) continue
+    found += 1
+    for (const kind of screen.kinds) kinds.add(kind)
+  }
+  return { found, kinds: [...kinds].sort() }
+}
+
+/**
+ * The opt-in budget (design §8.5), asked at a plan's preview and again at its commit: `refuse` stops the change with
+ * BUDGET_REACHED, `warn` rides back as BUDGET_WARN. Package F owns the answer; Day 0's stub says ok.
+ */
+export async function budgetCheck(ctx: HandlerContext, action: "job.create" | "schedule.create" | "schedule.resume", usd: number | undefined): Promise<readonly WarningCode[]> {
+  const answer = await ctx.deps.budget.check(ctx.account.alias, { action, ...(usd !== undefined ? { usd } : {}) }, ctx.call.signal)
+  if (answer.verdict === "refuse") {
+    throw new ColabError("BUDGET_REACHED", `The account's budget refuses ${action}${answer.limitUsd !== undefined ? ` (limit $${answer.limitUsd.toFixed(2)})` : ""}.`, {
+      next: "Wait for the daily reset, or raise the account's budget.",
+    })
+  }
+  return answer.verdict === "warn" ? ["BUDGET_WARN"] : []
+}
+
 /** The plan params give a notebook as a union of {path} and {gcs}; one shape the handlers read. */
 export function notebookParam(notebook: { readonly path: string } | { readonly gcs: string }): { readonly path?: string; readonly gcs?: string } {
   return "path" in notebook ? { path: notebook.path } : { gcs: notebook.gcs }
@@ -43,6 +71,8 @@ export interface ComputeChoice {
   readonly timeoutMinutes: number
   readonly price: Price
   readonly source: "template" | "customEnvironmentSpec"
+  /** The account's region, which decides the endpoint and whether the us-central1 table can price it. */
+  readonly region: string
 }
 
 export interface ComputeParams {
@@ -106,10 +136,13 @@ export async function chooseCompute(ctx: HandlerContext, params: ComputeParams, 
       throw new ColabError("INPUT_INVALID", `"${params.accelerator}" is not an accelerator the price table knows.`, { next: "Use NONE, T4, L4, A100, A100_80GB, V100, H100 or H100_MEGA, or a full Vertex accelerator type." })
     }
   }
-  const price = priceOf({ machine, ...(accelerator !== undefined ? { accelerator } : {}), ...(acceleratorCount !== undefined ? { acceleratorCount } : {}), ...(options.rates !== undefined ? { rates: options.rates } : {}) })
+  const region = ctx.account.region
+  if (!region) throw new ColabError("PROJECT_REQUIRED", "The enterprise account has no region, so its endpoint and price region are unknown.", { next: "Set accounts.<alias>.region in opencode.json." })
+  const price = priceOf({ machine, ...(accelerator !== undefined ? { accelerator } : {}), ...(acceleratorCount !== undefined ? { acceleratorCount } : {}), region, ...(options.rates !== undefined ? { rates: options.rates } : {}) })
   if (!price) {
-    throw new ColabError("ESTIMATE_UNKNOWN", `The machine "${machine}"${accelerator !== undefined ? ` with ${accelerator}` : ""} is not in the price table of ${PRICES_AS_OF}.`, {
-      next: `Pick a priced machine (e2-standard-4, n1-standard-4, n2-standard-4, g2-standard-8, a2-highgpu-1g or a3-highgpu-1g) and an accelerator it carries, or add them to the rates option.`,
+    const where = region === PRICES_REGION ? "" : ` The table prices ${PRICES_REGION}; ${region} needs its own rate.`
+    throw new ColabError("ESTIMATE_UNKNOWN", `The machine "${machine}"${accelerator !== undefined ? ` with ${accelerator}` : ""} is not in the price table of ${PRICES_AS_OF} for ${region}.${where}`, {
+      next: `Pick a priced machine (e2-standard-4, n1-standard-4, n2-standard-4, g2-standard-8, a2-highgpu-1g or a3-highgpu-1g) and an accelerator it carries, add "${machine}" to the rates option at the ${region} rate, or use a ${PRICES_REGION} account.`,
     })
   }
   // The allow-list covers a machine's own GPU (g2's L4, a2's A100) as well as a named one (design §8.6).
@@ -119,7 +152,7 @@ export async function chooseCompute(ctx: HandlerContext, params: ComputeParams, 
       next: `Pick an allowed machine, or the person may add ${short} to accelerators in the plugin's options.`,
     })
   }
-  return { machine, accelerator: price.accelerator, acceleratorCount: price.acceleratorCount, template, timeoutMinutes, price, source }
+  return { machine, accelerator: price.accelerator, acceleratorCount: price.acceleratorCount, template, timeoutMinutes, price, source, region }
 }
 
 export interface CostCheck {
@@ -128,6 +161,7 @@ export interface CostCheck {
   readonly maxComputeUsd: number
   readonly capUsd: number
   readonly ceilingUsd: number
+  readonly pricesRegion: string
 }
 
 /** The estimate against the call's `maxUsd`, the account cap and the ceiling (design §8.6: COST_CAP). */
@@ -143,7 +177,7 @@ export function checkCost(choice: ComputeChoice, maxUsd: number | undefined, ctx
       next: `Use a smaller machine or a shorter timeout, or pass maxUsd up to $${options.maxJobUsdCeiling}.`,
     })
   }
-  return { usdPerHour: choice.price.usdPerHour, timeoutMinutes: choice.timeoutMinutes, maxComputeUsd, capUsd, ceilingUsd: options.maxJobUsdCeiling }
+  return { usdPerHour: choice.price.usdPerHour, timeoutMinutes: choice.timeoutMinutes, maxComputeUsd, capUsd, ceilingUsd: options.maxJobUsdCeiling, pricesRegion: PRICES_REGION }
 }
 
 export interface NotebookForJob {
@@ -169,14 +203,14 @@ export async function notebookForJob(ctx: HandlerContext, notebook: { readonly p
     }
     if (bytes.length > ctx.deps.options.maxDownloadBytes) throw new ColabError("FILE_TOO_LARGE", "The notebook file is over maxDownloadBytes.")
     const parsed = parseNotebook(bytes)
-    return { source: "path", ref: projectPath(ctx.deps.directory, target), cells: parsed.cells.length, hash: sha256Of(bytes), secrets: secretScreen(parsed), bytes, notebook: parsed }
+    return { source: "path", ref: projectPath(ctx.deps.directory, target), cells: parsed.cells.length, hash: sha256Of(bytes), secrets: screenNotebook(parsed), bytes, notebook: parsed }
   }
   if (notebook.gcs === undefined) throw new ColabError("INPUT_INVALID", "A job needs a notebook: a local path, or a gcs uri.")
   await ctx.providerRead(OPERATIONS.storageObjectsGet)
   const bytes = await ctx.deps.gcs.read(ctx.account.alias, notebook.gcs, ctx.call.signal)
   if (bytes.length > ctx.deps.options.maxDownloadBytes) throw new ColabError("FILE_TOO_LARGE", "The notebook object is over maxDownloadBytes.")
   const parsed = parseNotebook(bytes)
-  return { source: "gcs", ref: notebook.gcs, cells: parsed.cells.length, hash: sha256Of(bytes), secrets: secretScreen(parsed), bytes, notebook: parsed }
+  return { source: "gcs", ref: notebook.gcs, cells: parsed.cells.length, hash: sha256Of(bytes), secrets: screenNotebook(parsed), bytes, notebook: parsed }
 }
 
 /** The preview's notebook field: counts, the hash and the screen — never cell text (design §7.2, §7.5). */
@@ -210,14 +244,32 @@ export async function scheduleCompute(ctx: HandlerContext, schedule: EnterpriseS
   return { ...compute, ...resolved }
 }
 
-/** A schedule's worst case: $/h × its own timeout, and that per run times the runs in the next 30 days. */
-export function scheduleCost(schedule: EnterpriseSchedule, ctx: HandlerContext, compute: ComputeSpec | undefined): { readonly usdPerHour?: number; readonly perRun?: number; readonly perMonth?: number; readonly timeoutMinutes?: number } {
+/** Google's default when a job or schedule names no `executionTimeout` (Vertex v1 discovery: 86400 s). */
+export const GOOGLE_DEFAULT_TIMEOUT_SECONDS = 86_400
+
+export interface ScheduleCost {
+  readonly usdPerHour?: number
+  readonly perRun?: number
+  readonly perMonth?: number
+  readonly timeoutMinutes?: number
+  /** "job request" when the schedule names its own timeout; "google-default" for Google's 24 h. */
+  readonly timeoutSource?: "job request" | "google-default"
+  readonly pricesRegion: string
+  readonly machine?: string
+}
+
+/**
+ * A schedule's worst case: $/h × its own timeout (or Google's 24 h default when it names none), per run, and that
+ * times the runs in the next 30 days. Priced from the us-central1 table for a us-central1 account, or by `rates`.
+ */
+export function scheduleCost(schedule: EnterpriseSchedule, ctx: HandlerContext, compute: ComputeSpec | undefined): ScheduleCost {
   const spec = compute ?? computeOfSchedule(schedule)
-  if (!spec.machine) return {}
-  const price = priceOf({ machine: spec.machine, ...(spec.accelerator !== undefined ? { accelerator: spec.accelerator } : {}), ...(spec.acceleratorCount !== undefined ? { acceleratorCount: spec.acceleratorCount } : {}), ...(ctx.deps.options.rates !== undefined ? { rates: ctx.deps.options.rates } : {}) })
-  if (!price) return {}
-  const timeoutMinutes = Math.round((spec.timeoutSeconds ?? ctx.deps.options.jobTimeoutMinutes * 60) / 60)
-  const perRun = price.usdPerHour * (timeoutMinutes / 60)
+  if (!spec.machine) return { pricesRegion: PRICES_REGION }
+  const price = priceOf({ machine: spec.machine, ...(spec.accelerator !== undefined ? { accelerator: spec.accelerator } : {}), ...(spec.acceleratorCount !== undefined ? { acceleratorCount: spec.acceleratorCount } : {}), region: ctx.account.region, ...(ctx.deps.options.rates !== undefined ? { rates: ctx.deps.options.rates } : {}) })
+  if (!price) return { pricesRegion: PRICES_REGION, machine: spec.machine }
+  const timeoutSeconds = spec.timeoutSeconds ?? GOOGLE_DEFAULT_TIMEOUT_SECONDS
+  const timeoutMinutes = Math.round(timeoutSeconds / 60)
+  const perRun = price.usdPerHour * (timeoutSeconds / 3600)
   let perMonth = perRun
   try {
     const cron = parseCron(schedule.cron)
@@ -227,7 +279,36 @@ export function scheduleCost(schedule: EnterpriseSchedule, ctx: HandlerContext, 
     // A cron another client wrote may not parse; the per-run worst case still holds.
     perMonth = perRun
   }
-  return { usdPerHour: price.usdPerHour, perRun, perMonth, timeoutMinutes }
+  return { usdPerHour: price.usdPerHour, perRun, perMonth, timeoutMinutes, timeoutSource: spec.timeoutSeconds !== undefined ? "job request" : "google-default", pricesRegion: PRICES_REGION, machine: spec.machine }
+}
+
+/**
+ * A schedule plan's cap check (review M4): the per-run worst case against `maxJobUsd`, with `ESTIMATE_UNKNOWN` when the
+ * compute cannot be priced (a foreign machine, or a region the table does not cover). Used on create, update and resume.
+ */
+export function checkScheduleCost(cost: ScheduleCost, maxUsd: number | undefined, ctx: HandlerContext): ScheduleCost & { readonly capUsd: number } {
+  const options = ctx.deps.options
+  const capUsd = maxUsd ?? options.maxJobUsd
+  if (capUsd > options.maxJobUsdCeiling) throw new ColabError("COST_CAP", `maxUsd ($${capUsd}) is over maxJobUsdCeiling ($${options.maxJobUsdCeiling}).`, { next: `Pass maxUsd of $${options.maxJobUsdCeiling} or less.` })
+  if (cost.perRun === undefined) {
+    throw new ColabError("ESTIMATE_UNKNOWN", `The schedule's machine${cost.machine !== undefined ? ` "${cost.machine}"` : ""} cannot be priced from the ${PRICES_REGION} table for ${ctx.account.region}.`, {
+      next: "Use a priced machine in the price table's region, or add the machine to the rates option at the account's region rate.",
+    })
+  }
+  if (cost.perRun > capUsd) {
+    throw new ColabError("COST_CAP", `Each run's worst case is $${cost.perRun.toFixed(2)} (${cost.timeoutMinutes} min, ${cost.timeoutSource}), over the $${capUsd.toFixed(2)} cap.`, {
+      next: `Shorten the schedule's executionTimeout, use a smaller machine, or raise maxJobUsd up to $${options.maxJobUsdCeiling}.`,
+    })
+  }
+  return { ...cost, capUsd }
+}
+
+/** How many runs a bound allows between now and its `endTime`, at most `cap`. */
+export function runsUntil(cronText: string, ctx: HandlerContext, endTime: string | undefined, cap = 1000): number {
+  if (endTime === undefined) return 1
+  const until = new Date(Date.parse(endTime))
+  if (!Number.isFinite(until.getTime())) return 1
+  return occurrencesBetween(parseCron(cronText), ctx.deps.clock.now(), until, cap)
 }
 
 /** The next five runs, or none when the cron is not one the plugin can read. */

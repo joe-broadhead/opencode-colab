@@ -19,9 +19,9 @@ import { ColabError } from "../domain/errors.js"
 import type { EnterpriseRuntime } from "../ports.js"
 import { PRICES_AS_OF, priceOf, acceleratorShort, usd } from "./prices.js"
 import { runIdentity, type RunIdentity, type EnterpriseSettings } from "./account.js"
-import { checkCost, chooseCompute, describeNotebook, jobNameOf, labelsFor, notebookForJob, notebookParam, payloadOf, settingsFor } from "./common.js"
+import { budgetCheck, checkCost, chooseCompute, describeNotebook, jobNameOf, labelsFor, notebookForJob, notebookParam, payloadOf, settingsFor } from "./common.js"
 import { jobId as newJobId, lastSegment } from "./ids.js"
-import type { JobDetail } from "./detail.js"
+import type { EnterpriseJob } from "../ports.js"
 import { recordCreate, rememberOperation } from "./runs.js"
 
 /** The exact words the person sees before an Enterprise runtime is stopped or deleted (design §7.2, §3 principle 2). */
@@ -47,7 +47,7 @@ interface JobPayload {
   readonly timeoutMinutes: number
   readonly estimateUsd: number
   readonly maxUsd: number
-  readonly outputBucket: string
+  readonly outputUri: string
   readonly identity: { readonly as: "serviceAccount" | "user"; readonly serviceAccount?: string; readonly executionUser?: string }
 }
 
@@ -60,7 +60,7 @@ interface JobFingerprint {
   readonly timeoutMinutes: number
   readonly estimateUsd: number
   readonly maxUsd: number
-  readonly outputBucket: string
+  readonly outputUri: string
   readonly identity: string
 }
 
@@ -74,7 +74,8 @@ export function jobBody(input: {
   readonly acceleratorCount?: number
   readonly template?: string
   readonly timeoutMinutes: number
-  readonly outputBucket: string
+  /** The job's own output folder, `gs://<bucket>/<prefix>/<jobId>/` (review M2). */
+  readonly outputUri: string
   readonly identity: RunIdentity
   readonly sessionId: string
 }): Record<string, unknown> {
@@ -86,7 +87,7 @@ export function jobBody(input: {
     displayName: input.displayName,
     ...(input.template !== undefined ? { notebookRuntimeTemplateResourceName: input.template } : { customEnvironmentSpec: { machineSpec } }),
     ...(input.notebook.path !== undefined ? { directNotebookSource: { content: Buffer.from(input.bytes).toString("base64") } } : { gcsNotebookSource: { uri: input.notebook.gcs } }),
-    gcsOutputUri: input.outputBucket,
+    gcsOutputUri: input.outputUri,
     executionTimeout: `${input.timeoutMinutes * 60}s`,
     ...(input.identity.serviceAccount !== undefined ? { serviceAccount: input.identity.serviceAccount } : { executionUser: input.identity.executionUser }),
     labels: labelsFor(input.sessionId),
@@ -95,7 +96,7 @@ export function jobBody(input: {
 
 /** Re-read what the plan previewed; any move is PLAN_CHANGED (design §7.2). */
 async function recheckJob(ctx: HandlerContext, payload: JobPayload, fingerprint: JobFingerprint, settings: EnterpriseSettings): Promise<{ readonly bytes: Uint8Array }> {
-  if (settings.outputBucket !== payload.outputBucket) throw new ColabError("PLAN_CHANGED", "The account's output bucket changed since the preview.")
+  if (settings.outputBase === undefined || !payload.outputUri.startsWith(settings.outputBase)) throw new ColabError("PLAN_CHANGED", "The account's output bucket changed since the preview.")
   const identity = await runIdentity(ctx.deps, settings, "job", ctx.call.signal)
   if (identityKey(identity) !== fingerprint.identity) throw new ColabError("PLAN_CHANGED", "The run identity changed since the preview.")
   const notebook = await notebookForJob(ctx, payload.notebook)
@@ -111,6 +112,8 @@ async function recheckJob(ctx: HandlerContext, payload: JobPayload, fingerprint:
   if (!price) throw new ColabError("PLAN_CHANGED", "The price of this compute is no longer known.")
   const estimate = price.usdPerHour * (payload.timeoutMinutes / 60)
   if (estimate > payload.estimateUsd * 1.1) throw new ColabError("PLAN_CHANGED", "The cost estimate rose by more than 10 % since the preview.", { next: "Plan again and show the new estimate." })
+  // The cap holds even when `rates` changed between the preview and now (review LOW 5).
+  if (estimate > payload.maxUsd) throw new ColabError("COST_CAP", `The worst case is now $${estimate.toFixed(2)}, over the $${payload.maxUsd.toFixed(2)} cap set at the preview.`, { next: "Plan again with a smaller machine or a shorter timeout." })
   return { bytes: notebook.bytes }
 }
 
@@ -122,8 +125,10 @@ const jobCreate: PlanHandler<"job.create"> = {
     const notebook = await notebookForJob(ctx, notebookRef)
     const choice = await chooseCompute(ctx, params, "job")
     const cost = checkCost(choice, params.maxUsd, ctx)
+    const budget = await budgetCheck(ctx, "job.create", cost.maxComputeUsd)
     const id = newJobId(ctx.deps.clock.now().getTime())
     const displayName = displayNameFor(params.displayName, basenameOf(notebook.ref))
+    const outputUri = `${settings.outputBase!}${id}/`
     const payload: JobPayload = {
       jobId: id,
       displayName,
@@ -135,7 +140,7 @@ const jobCreate: PlanHandler<"job.create"> = {
       timeoutMinutes: choice.timeoutMinutes,
       estimateUsd: cost.maxComputeUsd,
       maxUsd: cost.capUsd,
-      outputBucket: settings.outputBucket!,
+      outputUri,
       identity: { as: identity.as, ...(identity.serviceAccount !== undefined ? { serviceAccount: identity.serviceAccount } : {}), ...(identity.executionUser !== undefined ? { executionUser: identity.executionUser } : {}) },
     }
     const fingerprint: JobFingerprint = {
@@ -147,7 +152,7 @@ const jobCreate: PlanHandler<"job.create"> = {
       timeoutMinutes: choice.timeoutMinutes,
       estimateUsd: cost.maxComputeUsd,
       maxUsd: cost.capUsd,
-      outputBucket: settings.outputBucket!,
+      outputUri,
       identity: identityKey(identity),
     }
     return {
@@ -168,17 +173,21 @@ const jobCreate: PlanHandler<"job.create"> = {
         executionTimeout: { minutes: choice.timeoutMinutes, seconds: choice.timeoutMinutes * 60 },
         identity: { as: identity.as, label: identity.label },
         outputBucket: settings.outputBucket,
+        output: { folder: outputUri, pricesRegion: cost.pricesRegion },
         cost: {
           usdPerHour: usd(choice.price.usdPerHour),
           maxComputeUsd: usd(cost.maxComputeUsd),
           capUsd: usd(cost.capUsd),
           ceilingUsd: usd(cost.ceilingUsd),
           timeoutMinutes: cost.timeoutMinutes,
+          pricesRegion: cost.pricesRegion,
+          note: "excludes provisioning time and a template's own disk",
         },
         labels: labelsFor(ctx.call.sessionID),
       },
       payload: payload as unknown as Readonly<Record<string, unknown>>,
       fingerprint: fingerprint as unknown as Readonly<Record<string, unknown>>,
+      ...(budget.length > 0 ? { warnings: budget } : {}),
     }
   },
 
@@ -188,6 +197,7 @@ const jobCreate: PlanHandler<"job.create"> = {
     const settings = settingsFor(ctx, "a job plan", { bucket: true })
     const identity = await runIdentity(ctx.deps, settings, "job", ctx.call.signal)
     const { bytes } = await recheckJob(ctx, payload, fingerprint, settings)
+    await budgetCheck(ctx, "job.create", payload.estimateUsd)
     const body = jobBody({
       displayName: payload.displayName,
       notebook: payload.notebook,
@@ -197,13 +207,13 @@ const jobCreate: PlanHandler<"job.create"> = {
       ...(payload.acceleratorCount !== undefined ? { acceleratorCount: payload.acceleratorCount } : {}),
       ...(payload.template !== undefined ? { template: payload.template } : {}),
       timeoutMinutes: payload.timeoutMinutes,
-      outputBucket: payload.outputBucket,
+      outputUri: payload.outputUri,
       identity,
       sessionId: ctx.call.sessionID,
     })
     const created = await ctx.deps.vertex.createJob(ctx.account.alias, { jobId: payload.jobId, body }, ctx.call.signal)
-    rememberOperation(created.job.name, created.operation)
-    await recordCreate(ctx.deps, ctx.account.alias, created.job as JobDetail, `Colab Enterprise job ${payload.jobId}`)
+    rememberOperation(created.job.name, created.operation ?? "")
+    await recordCreate(ctx.deps, ctx.account.alias, created.job as EnterpriseJob, `Colab Enterprise job ${payload.jobId}`, created.operation)
     return {
       job: created.job.name,
       id: lastSegment(created.job.name),
@@ -236,6 +246,9 @@ const jobDelete: PlanHandler<"job.delete"> = {
         },
         deletes: "the job record",
         keeps: "its output notebook and any other files it wrote to the bucket",
+        ...(job.state === "JOB_STATE_SUCCEEDED" || job.state === "JOB_STATE_FAILED" || job.state === "JOB_STATE_CANCELLED" || job.state === "JOB_STATE_EXPIRED" || job.state === "JOB_STATE_PARTIALLY_SUCCEEDED"
+          ? {}
+          : { note: "whether deleting a running job stops it is unverified; L11 records it, and colab_cancel is the documented stop" }),
       },
       payload: { job: job.name },
       fingerprint: { job: job.name, state: job.state, ended: job.endTime ?? "" },

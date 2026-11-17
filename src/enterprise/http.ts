@@ -36,7 +36,8 @@ export class GoogleHttpError extends Error {
   }
 }
 
-const retryable = (status: number) => status === 0 || status === 429 || status >= 500
+/** A status worth retrying: a network failure, a timeout (0), quota (429) or a server fault. */
+export const retryableStatus = (status: number) => status === 0 || status === 429 || status >= 500
 
 export interface GoogleCall {
   readonly fetch: typeof fetch
@@ -71,7 +72,7 @@ export async function googleJson<T = Record<string, unknown>>(call: GoogleCall):
       const text = await response.text().catch(() => "")
       const envelope = envelopeOf(text)
       last = new GoogleHttpError(response.status, envelope.reason, envelope.detail, envelope.retryAfterSec ?? retryAfterOf(response.headers.get("retry-after")))
-      if (!retryable(response.status) || attempt === call.retry.attempts - 1) throw last
+      if (!retryableStatus(response.status) || attempt === call.retry.attempts - 1) throw last
     } catch (error) {
       if (error instanceof GoogleHttpError) throw error
       if (error instanceof Error && error.name === "AbortError") throw error
@@ -129,8 +130,13 @@ export function googleError(error: unknown, next?: string): ColabError {
 
 function codeOf(http: GoogleHttpError): ErrorCode {
   if (http.status === 401) return "AUTH_REQUIRED"
-  // A 403 whose ErrorInfo reason ends in DISABLED names an API or billing problem, not IAM (API Design Guide, errors).
-  if (http.status === 403) return http.reason !== undefined && /_DISABLED$/.test(http.reason) ? "API_DISABLED" : "PERMISSION_DENIED"
+  if (http.status === 403) {
+    // A 403 whose ErrorInfo reason ends in DISABLED names an API or billing problem, not IAM (API Design Guide, errors);
+    // an insufficient access-token scope is the sign-in's scope, not an IAM grant.
+    if (http.reason !== undefined && /_DISABLED$/.test(http.reason)) return "API_DISABLED"
+    if (http.reason !== undefined && /_SCOPE_INSUFFICIENT$/.test(http.reason)) return "AUTH_SCOPE_MISSING"
+    return "PERMISSION_DENIED"
+  }
   if (http.status === 404) return "NOT_FOUND"
   if (http.status === 429) return "RATE_LIMITED"
   if (http.status === 400 || http.status === 409) return "INPUT_INVALID"

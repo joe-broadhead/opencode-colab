@@ -1,7 +1,8 @@
 /**
  * Enterprise runtimes (design §6, §7.2, Q3): they are listed and stopped or deleted only by an explicit plan that says
- * what is lost. No creation, no start, no templates, no automation. L12's idle-shutdown setting is shown, and a runtime
- * whose template has idle shutdown off carries IDLE_SHUTDOWN_OFF.
+ * what is lost. No creation, no start, no templates, no automation. The idle-shutdown setting is shown, and a runtime
+ * whose template has idle shutdown off carries IDLE_SHUTDOWN_OFF. This is the plugin's side of L12; the live check
+ * remains unrun.
  */
 import { describe, expect, it } from "vitest"
 import type { Deps } from "../../src/deps.js"
@@ -13,7 +14,7 @@ import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 
 const call = () => ({ sessionID: "ses_runtimes", agent: "build", messageID: "msg", id: "call", signal: new AbortController().signal })
-const OPTIONS = { accounts: { work: { backend: "enterprise" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" } } }
+const OPTIONS = { accounts: { work: { backend: "enterprise" as const, access: "write" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" } } }
 
 function setup() {
   const { deps: base, fakes } = fakeDeps({ options: OPTIONS })

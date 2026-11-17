@@ -1,30 +1,11 @@
 /**
- * The extra detail package E needs beyond the port's fields, and nothing more.
+ * The compute a job or a schedule runs on, read from Google's own fields, plus the two `Schedule` fields the plugin's
+ * overlap guard still reads on their own (`maxConcurrentRunCount`, `allowQueueing`) until the port carries them.
  *
- * `EnterpriseJob` and `EnterpriseSchedule` in `src/ports.ts` are the contract's subset of Google's resources. Two
- * things the design's tools show are not in that subset: an execution job's compute and timeout (`colab_jobs` shows
- * "compute"; a schedule's worst case is $/h × its own timeout), and a schedule's embedded job request (the only place
- * its timeout and template live). Package E's client passes both through as optional properties, E's fake supplies
- * them, and every reader guards for their absence: with any other implementation the fields are simply omitted.
- *
- * A contract request asks for these in `src/ports.ts`
- * (`EnterpriseJob.machineType/acceleratorType/executionTimeoutSeconds`, `EnterpriseSchedule.jobRequest`).
+ * `EnterpriseJob` and `EnterpriseSchedule` now hold the fields the design's reads show (Day 0 amendment): a job's
+ * machine, accelerator, timeout and template, and a schedule's job request and next run time.
  */
-import type { EnterpriseJob, EnterpriseSchedule } from "../ports.js"
-
-export interface JobDetail extends EnterpriseJob {
-  readonly machineType?: string
-  readonly acceleratorType?: string
-  readonly acceleratorCount?: number
-  readonly executionTimeoutSeconds?: number
-  readonly template?: string
-}
-
-export interface ScheduleDetail extends EnterpriseSchedule {
-  /** `Schedule.createNotebookExecutionJobRequest`, as Google returns it. */
-  readonly jobRequest?: Readonly<Record<string, unknown>>
-  readonly nextRunTime?: string
-}
+import type { EnterpriseSchedule } from "../ports.js"
 
 export interface ComputeSpec {
   readonly machine?: string
@@ -33,6 +14,14 @@ export interface ComputeSpec {
   readonly template?: string
   readonly timeoutSeconds?: number
 }
+
+/** A schedule that can start more than one run at once, or queue runs: its runs can overlap (review LOW 8). */
+export interface ScheduleOverlap {
+  readonly maxConcurrentRunCount?: number
+  readonly allowQueueing?: boolean
+}
+
+export const overlapOf = (schedule: EnterpriseSchedule) => schedule as EnterpriseSchedule & ScheduleOverlap
 
 export const TERMINAL_STATES: ReadonlySet<string> = new Set(["JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED", "JOB_STATE_PARTIALLY_SUCCEEDED"])
 
@@ -69,7 +58,5 @@ export function computeOfJobBody(body: Readonly<Record<string, unknown>> | undef
 
 /** The compute a schedule's runs use, from `createNotebookExecutionJobRequest.notebookExecutionJob`. */
 export function computeOfSchedule(schedule: EnterpriseSchedule): ComputeSpec {
-  const detail = schedule as ScheduleDetail
-  const request = record(detail.jobRequest)
-  return computeOfJobBody(record(request?.notebookExecutionJob))
+  return computeOfJobBody(record(schedule.jobRequest?.notebookExecutionJob))
 }

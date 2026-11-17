@@ -50,7 +50,7 @@ describe("the Vertex client", () => {
     expect(created.job).toMatchObject({ name: JOB.name, state: "JOB_STATE_SUCCEEDED", endTime: "2026-11-17T09:30:00Z", machineType: "e2-standard-4", acceleratorType: "NVIDIA_TESLA_T4", executionTimeoutSeconds: 3600, schedule: "projects/proj/locations/us-central1/schedules/7" })
     expect(created.operation).toBe("projects/proj/locations/us-central1/operations/op-1")
     expect(calls[0]).toEqual({
-      url: "https://aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/notebookExecutionJobs?notebookExecutionJobId=oc-job-1",
+      url: "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/notebookExecutionJobs?notebookExecutionJobId=oc-job-1",
       method: "POST",
       body: { displayName: "run", gcsOutputUri: "gs://results" },
     })
@@ -81,18 +81,18 @@ describe("the Vertex client", () => {
     const vertex = createVertex(env(fetchImpl).base, { retryDelayMs: 0 })
     const created = await vertex.createSchedule("work", { displayName: SCHEDULE.displayName, cron: SCHEDULE.cron }, new AbortController().signal)
     expect(created).toMatchObject({ name: SCHEDULE.name, maxRunCount: 30, startedRunCount: 2, jobRequest: { parent: "projects/proj/locations/us-central1" } })
-    expect(calls[0]!.url).toBe("https://aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/schedules")
+    expect(calls[0]!.url).toBe("https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/schedules")
     await vertex.updateSchedule("work", "1", { updateMask: "cron,maxRunCount", cron: "0 9 * * *", maxRunCount: "8" }, new AbortController().signal)
     expect(calls[1]!.method).toBe("PATCH")
-    expect(calls[1]!.url).toBe("https://aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/schedules/1?updateMask=cron%2CmaxRunCount")
+    expect(calls[1]!.url).toBe("https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/schedules/1?updateMask=cron%2CmaxRunCount")
     expect(calls[1]!.body).toEqual({ cron: "0 9 * * *", maxRunCount: "8" })
     await vertex.pauseSchedule("work", "1", new AbortController().signal)
     await vertex.resumeSchedule("work", "1", new AbortController().signal)
     await vertex.deleteSchedule("work", "1", new AbortController().signal)
     expect(calls.slice(2).map((entry) => [entry.method, entry.url])).toEqual([
-      ["POST", "https://aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/schedules/1:pause"],
-      ["POST", "https://aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/schedules/1:resume"],
-      ["DELETE", "https://aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/schedules/1"],
+      ["POST", "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/schedules/1:pause"],
+      ["POST", "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/schedules/1:resume"],
+      ["DELETE", "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/schedules/1"],
     ])
   })
 
@@ -113,14 +113,14 @@ describe("the Vertex client", () => {
     ])
     const vertex = createVertex(env(fetchImpl).base, { retryDelayMs: 0 })
     await vertex.cancelOperation("work", "projects/proj/locations/us-central1/operations/op-1", new AbortController().signal)
-    expect(calls[0]!.url).toBe("https://aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/operations/op-1:cancel")
+    expect(calls[0]!.url).toBe("https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/operations/op-1:cancel")
     const runtimes = await vertex.listRuntimes("work", new AbortController().signal)
     expect(runtimes[0]).toMatchObject({ name: "projects/proj/locations/us-central1/notebookRuntimes/rt-1", state: "RUNNING", machineType: "n1-standard-4", accelerator: "NVIDIA_TESLA_T4", template: "projects/proj/locations/us-central1/notebookRuntimeTemplates/tpl-1", idleShutdownMinutes: 180, euc: true })
     expect(runtimes[1]).toMatchObject({ idleShutdownMinutes: null, euc: false })
     const templates = await vertex.listTemplates("work", new AbortController().signal)
     expect(templates[0]).toMatchObject({ name: "projects/proj/locations/us-central1/notebookRuntimeTemplates/tpl-1" })
     await vertex.stopRuntime("work", "rt-1", new AbortController().signal)
-    expect(calls.at(-1)!.url).toBe("https://aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/notebookRuntimes/rt-1:stop")
+    expect(calls.at(-1)!.url).toBe("https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/notebookRuntimes/rt-1:stop")
   })
 
   it("maps Google's error envelope: a disabled API, permission, not found, quota with its retry delay, and 5xx after retries", async () => {
@@ -175,5 +175,66 @@ describe("the Cloud Storage client", () => {
     const gcs = createGcs(env(fetchImpl).base, { retryDelayMs: 0 })
     await expect(gcs.read("work", "gs://results/missing.csv", new AbortController().signal)).rejects.toMatchObject({ code: "NOT_FOUND" })
     await expect(gcs.read("work", "gs://results", new AbortController().signal)).rejects.toMatchObject({ code: "INPUT_INVALID" })
+  })
+})
+
+describe("the locational endpoint, scopes and read caps (review M3, LOW 2, LOW 10)", () => {
+  const envFor = (fetchImpl: typeof fetch, options: unknown = OPTIONS) => {
+    const { deps, fakes } = fakeDeps({ options })
+    fakes.auth.grants.set("work", [CLOUD])
+    return { options: deps.options, directory: deps.directory, clock: deps.clock, auth: fakes.auth, ledger: fakes.ledger, fetch: fetchImpl }
+  }
+
+  it("calls the account region's locational endpoint, not the global host (M3)", async () => {
+    const regional = { accounts: { work: { backend: "enterprise" as const, project: "proj", region: "europe-west4", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" } } }
+    const { fetch: fetchImpl, calls } = scripted([{ status: 200, body: { notebookRuntimeTemplates: [] } }])
+    const vertex = createVertex(envFor(fetchImpl, regional), { retryDelayMs: 0 })
+    await vertex.listTemplates("work", new AbortController().signal)
+    expect(calls[0]!.url).toBe("https://europe-west4-aiplatform.googleapis.com/v1/projects/proj/locations/europe-west4/notebookRuntimeTemplates?pageSize=100")
+    // A region that is not a location is refused before any call.
+    const bad = { accounts: { work: { backend: "enterprise" as const, project: "proj", region: "the moon", outputBucket: "gs://results" } } }
+    const refused = createVertex(envFor(fetchImpl, bad), { retryDelayMs: 0 })
+    await expect(refused.listTemplates("work", new AbortController().signal)).rejects.toMatchObject({ code: "OPTIONS_INVALID" })
+  })
+
+  it("maps an insufficient access-token scope to AUTH_SCOPE_MISSING", async () => {
+    const { fetch: fetchImpl } = scripted([{ status: 403, body: { error: { code: 403, status: "PERMISSION_DENIED", message: "scope", details: [{ reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }] } } }])
+    const vertex = createVertex(envFor(fetchImpl), { retryDelayMs: 0 })
+    await expect(vertex.listTemplates("work", new AbortController().signal)).rejects.toMatchObject({ code: "AUTH_SCOPE_MISSING" })
+  })
+
+  it("refuses an object whose declared size is over maxDownloadBytes before reading the body", async () => {
+    const { fetch: fetchImpl, calls } = scripted([{ status: 200, body: undefined, headers: { "content-length": "1000" } }])
+    const gcs = createGcs(envFor(fetchImpl, { ...OPTIONS, maxDownloadBytes: 8 }), { retryDelayMs: 0 })
+    await expect(gcs.read("work", "gs://results/big.csv", new AbortController().signal)).rejects.toMatchObject({ code: "FILE_TOO_LARGE" })
+    expect(calls).toHaveLength(1)
+  })
+})
+
+describe("operations, paging and the reconcile filter (Day 0 amendment)", () => {
+  it("lists a job's create operations at v1/{job}/operations", async () => {
+    const { fetch: fetchImpl, calls } = scripted([{ status: 200, body: { operations: [{ name: "projects/proj/locations/us-central1/operations/op-1", done: false }] } }])
+    const vertex = createVertex(env(fetchImpl).base, { retryDelayMs: 0 })
+    const operations = await vertex.listJobOperations("work", "oc-job-1", new AbortController().signal)
+    expect(operations).toEqual([{ name: "projects/proj/locations/us-central1/operations/op-1", done: false }])
+    expect(calls[0]!.url).toBe("https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-1/operations?pageSize=100")
+  })
+
+  it("follows a list's nextPageToken, and sends the reconcile's exact display-name filter", async () => {
+    const one = { name: "projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-1", displayName: "one", jobState: "JOB_STATE_RUNNING" }
+    const two = { name: "projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-2", displayName: "two", jobState: "JOB_STATE_RUNNING" }
+    const { fetch: fetchImpl, calls } = scripted([
+      { status: 200, body: { notebookExecutionJobs: [one], nextPageToken: "page-2" } },
+      { status: 200, body: { notebookExecutionJobs: [two] } },
+      { status: 200, body: { schedules: [] } },
+    ])
+    const vertex = createVertex(env(fetchImpl).base, { retryDelayMs: 0 })
+    const jobs = await vertex.listJobs("work", { pageSize: 1, orderBy: "createTime desc" }, new AbortController().signal)
+    expect(jobs.map((job) => job.displayName)).toEqual(["one", "two"])
+    expect(jobs.truncated).toBeUndefined()
+    expect(calls[1]!.url).toContain("pageToken=page-2")
+    expect(calls[0]!.url).toContain("orderBy=createTime+desc")
+    await vertex.listSchedules("work", { filter: 'display_name="nightly [oc-abcd1234]"' }, new AbortController().signal)
+    expect(calls[2]!.url).toContain("filter=display_name%3D%22nightly+%5Boc-abcd1234%5D%22")
   })
 })

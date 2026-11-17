@@ -18,8 +18,17 @@
  * default $5) and the ceiling (`maxJobUsdCeiling`, default $50) before anything is created.
  */
 
+import type { Options } from "../options.js"
+import type { Prices } from "../ports.js"
+
 /** The date the table was copied from Google's pricing page; every preview and estimate carries it. */
 export const PRICES_AS_OF = "2026-11-17"
+/**
+ * The region the table's rates belong to. The page has a region selector and Compute Engine rates differ by region, so
+ * a job outside this region is `ESTIMATE_UNKNOWN` unless the `rates` option prices its machine: us-central1 is not an
+ * upper bound for anywhere else, and a cap must not be compared with a lower region's price (review M4).
+ */
+export const PRICES_REGION = "us-central1"
 export const PRICES_SOURCE = "https://cloud.google.com/colab/pricing (us-central1, on-demand, fetched 2026-11-17)"
 
 // Vertex AI accelerator type names, composed from lowercase parts (not written as literals) so the Day 0 error-table
@@ -117,8 +126,8 @@ export const MACHINES: Readonly<Record<string, Machine>> = {
   "e2-standard-8": { vCpu: 8, ramGib: 32, series: "E2" },
   "n1-standard-4": { vCpu: 4, ramGib: 15, series: "N1", attachable: [T4, V100] },
   "n1-standard-8": { vCpu: 8, ramGib: 30, series: "N1", attachable: [T4, V100] },
-  "n2-standard-4": { vCpu: 4, ramGib: 16, series: "N2", attachable: [T4, L4] },
-  "n2-standard-8": { vCpu: 8, ramGib: 32, series: "N2", attachable: [T4, L4] },
+  "n2-standard-4": { vCpu: 4, ramGib: 16, series: "N2" },
+  "n2-standard-8": { vCpu: 8, ramGib: 32, series: "N2" },
   "g2-standard-8": { vCpu: 8, ramGib: 32, series: "G2", accelerator: L4, acceleratorCount: 1 },
   "a2-highgpu-1g": { vCpu: 12, ramGib: 85, series: "A2", accelerator: A100, acceleratorCount: 1 },
   "a3-highgpu-1g": { vCpu: 26, ramGib: 234, series: "A3", accelerator: H100, acceleratorCount: 1 },
@@ -130,6 +139,8 @@ export interface PriceInput {
   readonly accelerator?: string
   readonly acceleratorCount?: number
   readonly diskGb?: number
+  /** The account's region; the table is us-central1, and any other region needs a `rates` override. */
+  readonly region?: string
   /** The `rates` option: USD/h overrides by machine name, accelerator type or short name. */
   readonly rates?: Readonly<Record<string, number>>
 }
@@ -144,6 +155,8 @@ export interface Price {
   readonly acceleratorUsdPerHour: number
   readonly diskUsdPerHour: number
   readonly usdPerHour: number
+  /** The region the table prices; anything else needed an override. */
+  readonly region: string
   /** True when the `rates` option replaced a rate (the preview says so). */
   readonly overridden: boolean
 }
@@ -158,6 +171,9 @@ export function priceOf(input: PriceInput): Price | undefined {
   const entry = MACHINES[input.machine]
   const rates = input.rates ?? {}
   const override = rates[input.machine]
+  const region = input.region ?? PRICES_REGION
+  // One region's table is not an upper bound for another: the machine's own override is the only way to price it (M4).
+  if (region !== PRICES_REGION && override === undefined) return undefined
   const eased = input.accelerator === undefined || acceleratorType(input.accelerator) !== undefined
   if (!eased) return undefined
   const diskGb = input.diskGb ?? DEFAULT_DISK_GB
@@ -195,18 +211,34 @@ export function priceOf(input: PriceInput): Price | undefined {
     acceleratorUsdPerHour: round(acceleratorUsdPerHour),
     diskUsdPerHour: round(diskUsdPerHour),
     usdPerHour: round(compute + acceleratorUsdPerHour + diskUsdPerHour),
+    region,
     overridden,
   }
   return price
 }
 
 /** A machine's $/h for the table listing, with its included or attachable accelerator verdict. */
-export function machineRows(rates: Readonly<Record<string, number>> = {}): readonly { readonly machine: string; readonly usdPerHour?: number; readonly vCpu: number; readonly ramGib: number }[] {
+export function machineRows(rates: Readonly<Record<string, number>> = {}, region: string = PRICES_REGION): readonly { readonly machine: string; readonly usdPerHour?: number; readonly vCpu: number; readonly ramGib: number }[] {
   return Object.keys(MACHINES).map((machine) => {
-    const price = priceOf({ machine, rates })
+    const price = priceOf({ machine, rates, region })
     return { machine, vCpu: MACHINES[machine]!.vCpu, ramGib: MACHINES[machine]!.ramGib, ...(price ? { usdPerHour: price.usdPerHour } : {}) }
   })
 }
 
 /** `0.22` for a preview: two decimals, never a long float. */
 export const usd = (value: number | undefined) => (value === undefined ? undefined : Number(value.toFixed(2)))
+
+/**
+ * The `Prices` seam (Day 0 amendment): package D's `colab_specs`/`colab_runtimes` and F's cost block show Enterprise $/h
+ * without importing E. `undefined` means not priced for that region unless `rates` holds it.
+ */
+export function createPrices(env: { readonly options: Pick<Options, "rates"> }): Prices {
+  return {
+    asOf: PRICES_AS_OF,
+    source: PRICES_SOURCE,
+    region: PRICES_REGION,
+    usdPerHour(input) {
+      return priceOf({ ...input, ...(env.options.rates !== undefined ? { rates: env.options.rates } : {}) })?.usdPerHour
+    },
+  }
+}
