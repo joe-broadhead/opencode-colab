@@ -14,6 +14,7 @@ import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import type { Duplex } from "node:stream"
 import { CREDENTIAL_FILES, GCLOUD_CONFIG_DIR } from "../../src/runtime/discovery.js"
+import { PROBE_CONFIG_MAX_BYTES, PROBE_CONFIG_MAX_DEPTH, PROBE_CONFIG_MAX_FILES, PROBE_CONFIG_SCOPE_DIRS, PROBE_CONFIG_SCOPE_FILES } from "../../src/runtime/probe.js"
 import { PROBE_SENTINEL } from "../../src/runtime/probe.js"
 
 export interface FakeIopub {
@@ -39,7 +40,9 @@ interface FakeBaseline {
   readonly epoch: string
   readonly mounts: readonly string[]
   readonly files: readonly string[]
+  /** The credential-bearing config only; gcloud's bookkeeping and the gce marker are apart from it. */
   readonly config: unknown
+  readonly gce: boolean
 }
 
 export interface FakeJupyterOptions {
@@ -225,17 +228,36 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
    */
   const baselines = new Map<string, FakeBaseline>()
 
-  /** The probe's recursive view of gcloud's config: every file's relative name, size and content hash (review round 5). */
+  /**
+   * The probe's view of gcloud's config, as `probe.ts` scopes and bounds it (review M-C): only files that hold or
+   * configure a credential, recursively, at most PROBE_CONFIG_MAX_FILES, depth PROBE_CONFIG_MAX_DEPTH, and the first
+   * PROBE_CONFIG_MAX_BYTES of each with its size. `gce` is reported apart: its removal is a signal, its creation is not.
+   */
   const configSnapshot = () => {
     const prefix = `${GCLOUD_CONFIG_DIR}/`
-    const names = [...contents.keys()].filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length)).sort()
-    if (names.length === 0) return null
+    const scoped = (relative: string) => PROBE_CONFIG_SCOPE_FILES.includes(relative) || PROBE_CONFIG_SCOPE_DIRS.some((folder) => relative === folder || relative.startsWith(`${folder}/`))
+    const entries = [...contents.keys()].filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length)).sort()
+    const gce = contents.has(`${prefix}gce`)
+    if (entries.length === 0 && !gce) return null
     const digest = createHash("sha256")
-    for (const name of names) {
-      const bytes = contents.get(prefix + name)!
-      digest.update(`${name}:${bytes.byteLength}:${createHash("sha256").update(bytes).digest("hex")}`)
+    const files: string[] = []
+    let bounded = true
+    for (const relative of entries) {
+      if (relative === "gce" || !scoped(relative)) continue
+      const depth = relative.split("/").length - 1
+      if (depth > PROBE_CONFIG_MAX_DEPTH) {
+        bounded = false
+        continue
+      }
+      if (files.length >= PROBE_CONFIG_MAX_FILES) {
+        bounded = false
+        break
+      }
+      const bytes = contents.get(prefix + relative)!
+      files.push(relative)
+      digest.update(`${relative}:${bytes.byteLength}:${createHash("sha256").update(bytes.subarray(0, PROBE_CONFIG_MAX_BYTES)).digest("hex")}`)
     }
-    return { files: names, digest: digest.digest("hex") }
+    return { files, digest: digest.digest("hex"), gce, bounded }
   }
 
   const driveMount = (mounts: readonly string[]) =>
@@ -247,8 +269,9 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
   const probeAnswer = (code: string, kernelId: string): string => {
     const request = JSON.parse(/_OC_REQUEST = (\{[^\n]*\})/.exec(code)?.[1] ?? "{}") as { mode?: string; epoch?: string }
     const files = CREDENTIAL_FILES.filter((path) => contents.has(path))
+    const config = configSnapshot()
     if (request.mode === "baseline") {
-      baselines.set(kernelId, { epoch: request.epoch ?? "", mounts: [...state.mounts], files, config: configSnapshot() })
+      baselines.set(kernelId, { epoch: request.epoch ?? "", mounts: [...state.mounts], files, config: config && { files: config.files, digest: config.digest, bounded: config.bounded }, gce: Boolean(config?.gce) })
       return JSON.stringify({
         mode: "baseline",
         epoch: request.epoch ?? "",
@@ -256,13 +279,14 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
         files,
         execution_count: state.executionCount,
         ram_bytes: state.ramBytes,
+        gce_present: Boolean(config?.gce),
+        bounded: config === null || config.bounded,
       })
     }
     const stored = baselines.get(kernelId)
     if (!stored) {
       return JSON.stringify({ mode: "compare", epoch: "", epoch_ok: false, restarted: true, drive_mount: false, mounts_changed: false, config_changed: false, added_files: [], execution_count: state.executionCount })
     }
-    const config = configSnapshot()
     return JSON.stringify({
       mode: "compare",
       epoch: stored.epoch,
@@ -270,7 +294,9 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
       restarted: false,
       drive_mount: driveMount(state.mounts),
       mounts_changed: state.mounts.some((entry) => !stored.mounts.includes(entry)),
-      config_changed: JSON.stringify(stored.config) !== JSON.stringify(config),
+      config_changed: JSON.stringify(stored.config) !== JSON.stringify(config && { files: config.files, digest: config.digest, bounded: config.bounded }),
+      gce_removed: Boolean(stored.gce) && !config?.gce,
+      bounded: (stored.config === null || (stored.config as { bounded?: boolean }).bounded !== false) && (config === null || config.bounded),
       added_files: files.filter((path) => !stored.files.includes(path)),
       execution_count: state.executionCount,
     })

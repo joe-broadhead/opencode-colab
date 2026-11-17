@@ -28,7 +28,7 @@ import type { PortEnv } from "../deps.js"
 import type { AgentOnlyCheck, Calibration, KernelSession, ProbeFindings, ProbeVerdict, RuntimeTarget } from "../ports.js"
 import { CREDENTIAL_FILES, DRIVE_MOUNT_PATH, GCLOUD_CONFIG_DIR, GCLOUD_CONFIG_MARKER, HIDDEN_PATHS_PROBE } from "./discovery.js"
 import { createOwnerLease, type OwnerLease } from "./lease.js"
-import { parseBaselineOutput, parseComparisonOutput, probeSnippet, PROBE_SNIPPET_VERSION, ProbeOutputError, type ProbeBaseline, type ProbeComparison } from "./probe.js"
+import { GCLOUD_GCE_MARKER, parseBaselineOutput, parseComparisonOutput, probeSnippet, PROBE_SNIPPET_VERSION, ProbeOutputError, type ProbeBaseline, type ProbeComparison } from "./probe.js"
 import type { RuntimeProtocolInternal } from "./protocol.js"
 
 /** The probe's answer is reused for this long across calls (design §7.4 step 3). */
@@ -202,6 +202,8 @@ export function createAgentOnlyCheck(env: PortEnv, protocol: RuntimeProtocolInte
           next: "Plan a freshly created runtime; release this one by plan.",
         })
       }
+      // A gcloud config past the probe's caps is refused, never read as clean, and never tainted (review M-C).
+      refuseUnbounded(first.answer.bounded)
       return {
         hiddenPathsVisible,
         baselineConnections,
@@ -230,16 +232,18 @@ export function createAgentOnlyCheck(env: PortEnv, protocol: RuntimeProtocolInte
         if (restarted) return await remember(target, { ok: false, code: "RUNTIME_UNVERIFIED", findings: emptyFindings(), at })
         const rest = await restFindings(target, input.calibration, signal)
         const clients = await clientFindings(target, input.nonce, input.calibration.baselineConnections, signal)
-        return await remember(
-          target,
-          verdictOf({
-            mounts: kernel.answer.driveMount || kernel.answer.mountsChanged || rest.mounts,
-            credentialFiles: [...new Set([...kernel.answer.addedFiles, ...rest.files])],
-            ephemeralMarkers: kernel.answer.configChanged ? [GCLOUD_CONFIG_MARKER] : [],
-            foreignSessions: clients.foreignSessions,
-            extraConnections: clients.extraConnections,
-          }),
-        )
+        // A config change only means something when the whole scoped config was read: past a cap the plugin cannot
+        // tell a credential from a flood of config files, so it refuses as UNVERIFIED instead (review M-C).
+        const markers = [...(kernel.answer.configChanged && kernel.answer.bounded ? [GCLOUD_CONFIG_MARKER] : []), ...(kernel.answer.gceRemoved ? [GCLOUD_GCE_MARKER] : [])]
+        const verdict = verdictOf({
+          mounts: kernel.answer.driveMount || kernel.answer.mountsChanged || rest.mounts,
+          credentialFiles: [...new Set([...kernel.answer.addedFiles, ...rest.files])],
+          ephemeralMarkers: markers,
+          foreignSessions: clients.foreignSessions,
+          extraConnections: clients.extraConnections,
+        })
+        if (verdict.ok) refuseUnbounded(kernel.answer.bounded)
+        return await remember(target, verdict)
       } catch (error) {
         if (error instanceof ColabError && (error.code === "CANCELLED" || error.code === "RUNTIME_BUSY")) throw error
         // A probe answer that does not parse is an integrity break and taints; an outage, a timeout or a rate limit
@@ -250,6 +254,14 @@ export function createAgentOnlyCheck(env: PortEnv, protocol: RuntimeProtocolInte
       }
     },
   }
+}
+
+/** A probe that hit its caps is refused as RUNTIME_UNVERIFIED and does not taint: it is the plugin's bound, not evidence. */
+function refuseUnbounded(bounded: boolean): void {
+  if (bounded) return
+  throw new ColabError("RUNTIME_UNVERIFIED", "The runtime's gcloud config is larger or deeper than the probe's bounds, so the plugin cannot read it.", {
+    next: "Retry the call; if it persists, plan a fresh runtime.",
+  })
 }
 
 const emptyFindings = (): ProbeFindings => ({ mounts: false, credentialFiles: [], ephemeralMarkers: [], foreignSessions: 0, extraConnections: 0 })

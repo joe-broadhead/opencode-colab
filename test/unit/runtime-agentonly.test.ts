@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest"
 import { ColabError } from "../../src/domain/errors.js"
 import type { Calibration, ProbeVerdict } from "../../src/ports.js"
 import { COLABTOOLS_FACTS_VERSION, CREDENTIAL_FILES, GCLOUD_CONFIG_MARKER } from "../../src/runtime/discovery.js"
+import { GCLOUD_GCE_MARKER } from "../../src/runtime/probe.js"
 import { createOwnerLease } from "../../src/runtime/lease.js"
 import { parseBaselineOutput, parseComparisonOutput, PROBE_SENTINEL, PROBE_SNIPPET_VERSION, probeSnippet } from "../../src/runtime/probe.js"
 import type { RuntimeProtocolInternal } from "../../src/runtime/protocol.js"
@@ -136,12 +137,25 @@ describe("the agent-only check", () => {
   it("L17: ephemeral auth's one observable trace — gcloud's config changing — is the marker, never an environment variable", async () => {
     const fixture = await createRuntimeFixture()
     try {
-      // A stock runtime can carry a `gce` file; its disappearance is what `_enable_metadata_server_for_gcloud` does.
+      // A stock runtime can carry a `gce` file; its disappearance is what `_enable_metadata_server_for_gcloud` does, and
+      // it is its own signal — its creation is not one (review M-C).
       fixture.jupyter.contents.set("content/.config/gce", new TextEncoder().encode("{}"))
       const calibration = await calibrate(fixture)
       expect(await probe(fixture, calibration)).toMatchObject({ ok: true })
       fixture.jupyter.contents.delete("content/.config/gce")
-      expect(await probe(fixture, calibration)).toMatchObject({ ok: false, code: "RUNTIME_HAS_CREDENTIALS", findings: { ephemeralMarkers: [GCLOUD_CONFIG_MARKER] } })
+      expect(await probe(fixture, calibration)).toMatchObject({ ok: false, code: "RUNTIME_HAS_CREDENTIALS", findings: { ephemeralMarkers: [GCLOUD_GCE_MARKER] } })
+      // Its creation, on a fresh runtime, is not a finding.
+      const created = await createRuntimeFixture()
+      try {
+        const freshCalibration = await calibrate(created)
+        created.jupyter.contents.set("content/.config/gce", new TextEncoder().encode("{}"))
+        expect(await probe(created, freshCalibration)).toMatchObject({ ok: true })
+        // And an edit to the nested configurations/config_default is the config-changed signal.
+        created.jupyter.contents.set("content/.config/configurations/config_default", new TextEncoder().encode("[core]\nproject = ephemeral\n"))
+        expect(await probe(created, freshCalibration)).toMatchObject({ ok: false, code: "RUNTIME_HAS_CREDENTIALS", findings: { ephemeralMarkers: [GCLOUD_CONFIG_MARKER] } })
+      } finally {
+        await created.close()
+      }
     } finally {
       await fixture.close()
     }
@@ -171,6 +185,57 @@ describe("the agent-only check", () => {
       const calibration = await calibrate(fixture)
       fixture.jupyter.contents.set("content/.config/configurations/config_default", new TextEncoder().encode("[core]\n"))
       expect(await probe(fixture, calibration)).toMatchObject({ ok: false, code: "RUNTIME_HAS_CREDENTIALS", findings: { ephemeralMarkers: [GCLOUD_CONFIG_MARKER] } })
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("M-C: gcloud's own bookkeeping — a log, a .last_* stamp, config_sentinel — is not a finding", async () => {
+    const fixture = await createRuntimeFixture()
+    try {
+      const calibration = await calibrate(fixture)
+      fixture.jupyter.contents.set("content/.config/logs/2026.11.17/18.00.00.000000.log", new TextEncoder().encode("Running [gcloud.version]\n"))
+      fixture.jupyter.contents.set("content/.config/.last_update_check.json", new TextEncoder().encode("{}"))
+      fixture.jupyter.contents.set("content/.config/.last_survey_prompt.yaml", new TextEncoder().encode("{}"))
+      expect(await probe(fixture, calibration)).toMatchObject({ ok: true })
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("M-C: an 8 MiB scoped file answers within the probe budget", async () => {
+    const fixture = await createRuntimeFixture()
+    try {
+      // Scoped and large, but not a credential file: only the config digest sees it, and it must stay within budget.
+      fixture.jupyter.contents.set("content/.config/configurations/big.json", new Uint8Array(8 * 1024 * 1024))
+      const calibration = await calibrate(fixture)
+      const started = Date.now()
+      expect(await probe(fixture, calibration)).toMatchObject({ ok: true })
+      expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("M-C: a config past the 500-file cap is refused as RUNTIME_UNVERIFIED and does not taint", async () => {
+    const fixture = await createRuntimeFixture()
+    try {
+      const calibration = await calibrate(fixture)
+      for (let index = 0; index < 501; index += 1) fixture.jupyter.contents.set(`content/.config/configurations/extra-${index}.json`, new TextEncoder().encode("{}"))
+      expect(await probe(fixture, calibration)).toMatchObject({ ok: false, code: "RUNTIME_UNVERIFIED" })
+      expect(tainted(fixture)).toBeUndefined()
+    } finally {
+      await fixture.close()
+    }
+  })
+
+  it("M-C: a scoped tree deeper than 4 is refused as RUNTIME_UNVERIFIED and does not taint", async () => {
+    const fixture = await createRuntimeFixture()
+    try {
+      const calibration = await calibrate(fixture)
+      fixture.jupyter.contents.set("content/.config/configurations/a/b/c/d/deep.json", new TextEncoder().encode("{}"))
+      expect(await probe(fixture, calibration)).toMatchObject({ ok: false, code: "RUNTIME_UNVERIFIED" })
+      expect(tainted(fixture)).toBeUndefined()
     } finally {
       await fixture.close()
     }
@@ -307,8 +372,8 @@ describe("the agent-only check", () => {
   })
 
   it("keeps every guarantee in the tier it has: what the check cannot see never reads as clean", () => {
-    const baseline = { mode: "baseline", epoch: "e", drive_mount: false, files: [], execution_count: 1, ram_bytes: 1024 }
-    const comparison = { mode: "compare", epoch: "e", epoch_ok: true, restarted: false, drive_mount: false, mounts_changed: false, config_changed: false, added_files: [], execution_count: 1 }
+    const baseline = { mode: "baseline", epoch: "e", drive_mount: false, files: [], execution_count: 1, ram_bytes: 1024, gce_present: false, bounded: true }
+    const comparison = { mode: "compare", epoch: "e", epoch_ok: true, restarted: false, drive_mount: false, mounts_changed: false, config_changed: false, gce_removed: false, bounded: true, added_files: [], execution_count: 1 }
     // Only booleans and known names travel: an extra line, an unknown file or a wrong key refuses.
     expect(() => parseBaselineOutput(`${PROBE_SENTINEL} ${JSON.stringify(baseline)}\nextra`)).toThrowError(ColabError)
     expect(() => parseBaselineOutput(`${PROBE_SENTINEL} ${JSON.stringify({ ...baseline, files: ["/etc/passwd"] })}`)).toThrowError(ColabError)
