@@ -1,7 +1,12 @@
 /**
  * Local paths for package E's writes: resolve a workspace path inside the project (or an allowed root), refuse a path
- * that escapes or is a symlink, and write copy-on-write without ever replacing an existing file (design §6: read tools
- * write only new files inside `workDir`, never over an existing path).
+ * that escapes or is a symlink below its root, and write copy-on-write without ever replacing an existing file (design
+ * §6: read tools write only new files inside `workDir`, never over an existing path).
+ *
+ * Paths are compared in their real form, because a directory may itself be behind a symlink: macOS reaches its
+ * temporary directory through one, and comparing a real project with an unresolved absolute path refused every notebook
+ * there (master's macOS CI). Symlinks *below* the root are still refused, as the family's
+ * `PATH_REFUSED` says; a path that resolves outside the root is refused by containment even before that check.
  *
  * `PATH_REFUSED` and `FILE_EXISTS` are the family's codes for those two refusals. This is E's own small helper: package C
  * owns the notebook paths and package D the download destinations, and no shared path port exists yet (a contract
@@ -9,7 +14,7 @@
  */
 import { randomBytes } from "node:crypto"
 import { readFileSync, existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { dirname, isAbsolute, join, relative, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { ColabError } from "../domain/errors.js"
 
 const inside = (root: string, target: string) => {
@@ -22,6 +27,26 @@ function realOrSelf(path: string): string {
     return realpathSync.native(path)
   } catch {
     return path
+  }
+}
+
+/**
+ * A path in its real form: every existing component's symlinks resolved, and a missing tail appended unchanged, so a
+ * target inside a symlinked directory (macOS `/var`) compares equal to the real root.
+ */
+function realTarget(path: string): string {
+  let current = resolve(path)
+  const tail: string[] = []
+  for (;;) {
+    try {
+      const real = realpathSync.native(current)
+      return tail.length === 0 ? real : resolve(real, ...tail)
+    } catch {
+      const parent = dirname(current)
+      if (parent === current) return resolve(path)
+      tail.unshift(basename(current))
+      current = parent
+    }
   }
 }
 
@@ -39,17 +64,31 @@ function refuseSymlinks(root: string, target: string): void {
   }
 }
 
+/** A root as the person gave it and in its real form, so the symlink walk can use the given names. */
+interface Root {
+  readonly given: string
+  readonly real: string
+}
+
 /**
  * A workspace path as an absolute one inside the project or one of `allowedRoots`; a relative path resolves against the
- * project. A symlink on the way, or a path outside every root, answers `PATH_REFUSED`.
+ * project. The returned path is in its real form. A symlink below the given root, or a path outside every root, answers
+ * `PATH_REFUSED`.
  */
 export function resolveLocal(directory: string, path: string, allowedRoots: readonly string[] = []): string {
-  const project = realOrSelf(directory)
-  const target = resolve(isAbsolute(path) ? path : join(project, path))
-  const roots = [project, ...allowedRoots.map((root) => realOrSelf(isAbsolute(root) ? root : join(project, root)))]
-  const root = roots.find((candidate) => inside(candidate, target))
-  if (!root) throw new ColabError("PATH_REFUSED", "The path is outside the project and its allowed roots.", { next: "Use a path inside the project; the person may add an allowed root." })
-  refuseSymlinks(root, target)
+  const projectGiven = resolve(directory)
+  const roots: Root[] = [{ given: projectGiven, real: realOrSelf(projectGiven) }]
+  for (const root of allowedRoots) {
+    const given = resolve(isAbsolute(root) ? root : join(projectGiven, root))
+    roots.push({ given, real: realOrSelf(given) })
+  }
+  const given = resolve(isAbsolute(path) ? path : join(projectGiven, path))
+  const target = realTarget(given)
+  const match = roots.find((candidate) => inside(candidate.real, target))
+  if (!match) throw new ColabError("PATH_REFUSED", "The path is outside the project and its allowed roots.", { next: "Use a path inside the project; the person may add an allowed root." })
+  // Refuse symlinks in the names as given, when the given path is under the given root. A path already given in real
+  // form (through a resolved prefix) is guarded by containment above.
+  if (inside(match.given, given)) refuseSymlinks(match.given, given)
   return target
 }
 
