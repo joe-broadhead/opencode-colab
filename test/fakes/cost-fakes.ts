@@ -77,7 +77,7 @@ export class RecordingHooks {
   readonly registered: string[] = []
   refuse = new Set<string>()
   /** What `ctx.session.context` answers, newest last; a test sets it to prove the idle check never loops. */
-  contextMessages: { readonly metadata?: Readonly<Record<string, unknown>> }[] = []
+  contextMessages: { readonly type?: string; readonly metadata?: Readonly<Record<string, unknown>> }[] = []
   readonly context = async () => this.contextMessages
   /** Every `ctx.session.synthetic` call, as the idle note posts it. */
   readonly posts: { readonly text: string; readonly description?: string; readonly metadata?: Record<string, unknown> }[] = []

@@ -27,7 +27,7 @@ import { consumerUsage, dayStart, hours } from "./usage.js"
 export const CLEANUP_COMMAND = "colab-cleanup"
 
 export interface CleanupDeps {
-  readonly options: { readonly access: Access; readonly accounts: readonly ResolvedAccount[]; readonly autoReleaseMinutes: number; readonly maxRuntimeHours: number }
+  readonly options: { readonly access: Access; readonly accounts: readonly ResolvedAccount[]; readonly autoReleaseMinutes: number; readonly maxRuntimeHours: number; readonly workDir: string }
   readonly ledger: Ledger
   readonly release: Pick<Release, "release">
   readonly clock: Clock
@@ -36,15 +36,12 @@ export interface CleanupDeps {
 export interface CleanupAction {
   readonly record: RuntimeRecord
   readonly account: ResolvedAccount
-  /** Why it is worth doing, in our own words: the idle figure and today's runtime-hours. */
-  readonly saving: string
   /** Minutes since the ledger last saw a run on it, or since it was created; the report shows it. */
   readonly quietMinutes: number
 }
 
 /** The instrumentation a test drives: every assert and every release the command made. */
 export interface CleanupTrace {
-  readonly asserted: { readonly action: string; readonly resources: readonly string[]; readonly source?: unknown }[]
   readonly released: string[]
   readonly declined: string[]
   readonly failed: { readonly runtime: string; readonly code: string }[]
@@ -52,14 +49,14 @@ export interface CleanupTrace {
 
 export interface CleanupRun {
   readonly report: string
+  /** One line on what the prompts led to, posted after them. */
   readonly outcome: string
   readonly trace: CleanupTrace
 }
 
 /** Runtimes a person may release: live, ready, of ours, with no run of ours active. */
 export async function cleanupActions(deps: CleanupDeps, now: Date): Promise<readonly CleanupAction[]> {
-  const from = dayStart(now)
-  const [records, runs] = await Promise.all([deps.ledger.listRuntimes({ live: true }), deps.ledger.listRuns({ state: "running" })])
+  const [records, runs] = await Promise.all([deps.ledger.listRuntimes({ live: true }), deps.ledger.listRuns({})])
   const active = new Set(runs.filter((run) => run.runtime !== undefined).map((run) => run.runtime as string))
   const lastSeen = new Map<string, number>()
   for (const run of runs) {
@@ -72,10 +69,8 @@ export async function cleanupActions(deps: CleanupDeps, now: Date): Promise<read
     .flatMap((record) => {
       const account = deps.options.accounts.find((entry) => entry.alias === record.account)
       if (!account) return []
-      const today = consumerUsage([record], now, from).runtimeHours
       const since = Math.max(lastSeen.get(record.id) ?? 0, Date.parse(record.createdAt) || 0)
-      const quietMinutes = Number.isFinite(since) && since > 0 ? Math.max(0, Math.round((now.getTime() - since) / 60_000)) : 0
-      return [{ record, account, quietMinutes, saving: `${record.spec.accelerator === "NONE" ? "CPU" : record.spec.accelerator} runtime, ${hours(today)} today` }]
+      return [{ record, account, quietMinutes: Number.isFinite(since) && since > 0 ? Math.max(0, Math.round((now.getTime() - since) / 60_000)) : 0 }]
     })
 }
 
@@ -84,19 +79,11 @@ const specLabel = (record: RuntimeRecord): string => (record.spec.accelerator ==
 /** The report, before anything is asked: what costs money, and the one sentence a release needs. */
 export function cleanupReport(deps: CleanupDeps, actions: readonly CleanupAction[], now: Date): string {
   const lines: string[] = [`Colab cleanup (${deps.options.access})`]
-  if (actions.length === 0) {
-    lines.push("Runtimes of the plugin's own that cost money now: none.")
-  } else {
-    lines.push(`Runtimes of the plugin's own that cost money now: ${actions.length}`)
-    for (const action of actions) {
-      const today = consumerUsage([action.record], now, dayStart(now)).runtimeHours
-      lines.push(`- ${action.record.id}: ${specLabel(action.record)} · ${hours(today)} today · no run active for ${action.quietMinutes} min`)
-      lines.push(`  ${RELEASE_LOSS}`)
-    }
-  }
-  lines.push("Enterprise runtimes are not touched here: colab_runtimes lists them with their $/h, and stopping one is a runtime.stop plan, which says what a stop loses.")
+  lines.push(`Runtimes of the plugin's own that cost money now: ${actions.length}`)
+  for (const action of actions) lines.push(`- ${action.record.id}: ${specLabel(action.record)} · ${hours(consumerUsage([action.record], now, dayStart(now)).runtimeHours)} today · no run for ${action.quietMinutes} min. ${RELEASE_LOSS}`)
+  lines.push("Enterprise runtimes are not touched here: colab_runtimes lists them with their $/h, and stopping one is a runtime.stop plan, which says what it loses.")
   if (deps.options.access === "read-only") lines.push("Read only: this is a report; nothing was released and nothing was asked.")
-  else lines.push("Each release below asks you first; a no ends that one and changes nothing.")
+  else lines.push("Each release asks you first; a no changes nothing.")
   return lines.join("\n")
 }
 
@@ -112,51 +99,39 @@ export async function runCleanup(input: {
   readonly synthetic: (text: string, description: string) => Promise<unknown>
 }): Promise<CleanupRun> {
   const now = input.deps.clock.now()
-  const trace: CleanupTrace = { asserted: [], released: [], declined: [], failed: [] }
+  const trace: CleanupTrace = { released: [], declined: [], failed: [] }
   const actions = await cleanupActions(input.deps, now)
   const report = cleanupReport(input.deps, actions, now)
   await input.synthetic(report, "Colab cleanup")
 
   const access = input.deps.options.access
-  if (access === "read-only") {
-    return { report, outcome: "Read only: nothing was released.", trace }
-  }
+  if (access === "read-only") return { report, outcome: "Read only: nothing was released.", trace }
 
-  const outcomes: string[] = []
   for (const action of actions) {
     // At `all` the tool action is allowed, so the command's own action is the prompt; at `ask-changes` the tool
     // action already asks, and asserting it here is that one prompt (design §8.5).
     const actionName = access === "ask-changes" ? "colab.delete" : "colab.cleanup"
     const resources = [runtimeResource(action.account.alias, action.record.id)]
-    trace.asserted.push({ action: actionName, resources })
     try {
       await input.assert({
         sessionID: input.sessionID,
         action: actionName,
         resources,
-        metadata: { account: action.account.alias, runtime: action.record.id, keep: [...action.record.keep], lost: RELEASE_LOSS, saving: action.saving },
+        metadata: { account: action.account.alias, runtime: action.record.id, keep: [...action.record.keep], lost: RELEASE_LOSS, quietMinutes: action.quietMinutes },
       })
     } catch {
       trace.declined.push(action.record.id)
-      outcomes.push(`${action.record.id}: declined, nothing changed.`)
       continue
     }
     try {
       const answer = await input.deps.release.release(action.record, { reason: "plan", force: false }, new AbortController().signal)
-      if (answer.released) {
-        trace.released.push(action.record.id)
-        outcomes.push(`${action.record.id}: released, ${answer.harvested.length} file${answer.harvested.length === 1 ? "" : "s"} harvested into ${input.deps.options.access === "read-only" ? "the harvest folder" : ".colab/harvest"}${answer.warnings.includes("UNHARVESTED") ? " (keep paths could not be harvested)" : ""}.`)
-      } else {
-        outcomes.push(`${action.record.id}: not released, nothing changed.`)
-      }
+      if (answer.released) trace.released.push(action.record.id)
     } catch (error) {
-      const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "UNAVAILABLE"
-      trace.failed.push({ runtime: action.record.id, code })
-      outcomes.push(`${action.record.id}: not released (${code}).`)
+      trace.failed.push({ runtime: action.record.id, code: typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "UNAVAILABLE" })
     }
   }
-  const outcome = outcomes.length === 0 ? "Nothing to release." : outcomes.join(" ")
-  await input.synthetic(`Colab cleanup: ${outcome}`, "Colab cleanup result")
+  const outcome = `Colab cleanup: released ${trace.released.length}, declined ${trace.declined.length}, failed ${trace.failed.length}.`
+  await input.synthetic(outcome, "Colab cleanup result")
   return { report, outcome, trace }
 }
 
@@ -180,7 +155,11 @@ export async function registerCleanup(ctx: CleanupContext, deps: CleanupDeps): P
           // No `source`: a person-only prompt, never a tool call the model could replay (design §8.5, boxd §C.5).
           assert: (request) => ctx.permission.assert(request as never),
           synthetic: (text, description) => ctx.session.synthetic({ sessionID, delivery, text, description, resume: false } as never),
-        }).catch(() => undefined)
+        }).catch((error: unknown) => {
+          // The command has no tool result, so a failure is posted where the person reads the report.
+          const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "UNAVAILABLE"
+          return ctx.session.synthetic({ sessionID, delivery, text: `Colab cleanup could not run (${code}); nothing was changed.`, description: "Colab cleanup", resume: false } as never)
+        })
       },
     })
   })

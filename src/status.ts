@@ -4,7 +4,7 @@
 import type { Plugin } from "@opencode/plugin"
 import { type Access, DISPLAY_NAME, STATUS_COMMAND, SUPPORTED_HOST, TESTED_HOSTS } from "./constants.js"
 import { automationOwner, automationState, ledgerBase } from "./cost/automation.js"
-import { ledgerCostSummary } from "./cost/status.js"
+import { consumerUsage, dayStart } from "./cost/usage.js"
 import { ColabError } from "./domain/errors.js"
 import { isTestedHost } from "./host-version.js"
 import { FileLedger, ledgerDir } from "./ledger/store.js"
@@ -47,10 +47,21 @@ async function costAndAutomation(ctx: StatusContext, access: Access): Promise<Pi
   const options = optionsOf(ctx)
   const ledger = new FileLedger(ledgerDir(process.env), { ledgerDays: options?.ledgerDays ?? 90 })
   try {
+    const now = new Date()
     const [runtimes, runs] = await Promise.all([ledger.listRuntimes({}), ledger.listRuns({})])
+    const consumer = consumerUsage(runtimes, now, dayStart(now))
+    const active = new Set(runs.filter((run) => run.state === "running" && run.runtime !== undefined).map((run) => run.runtime as string))
+    const quiet = runtimes.filter((record) => (record.state === "ready" || record.state === "creating") && !active.has(record.id))
+    const oldest = quiet.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0]
     const owner = automationOwner(ledgerBase(ledger))
     return {
-      cost: ledgerCostSummary({ runtimes, runs, now: new Date() }),
+      cost: {
+        runtimeHoursToday: Math.round(consumer.runtimeHours * 10) / 10,
+        runtimesRunning: consumer.running,
+        noRunActive: quiet.length,
+        complete: false,
+        ...(oldest !== undefined ? { topCleanup: `colab_plan({ action: "runtime.delete", params: { runtime: "${oldest.id}" } })` } : {}),
+      },
       automation: automationState({ automation: options?.automation ?? "auto", access, owner: owner.owner }),
     }
   } catch {

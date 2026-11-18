@@ -108,7 +108,7 @@ describe("at all", () => {
     const answer = await worldOf.run()
     expect(worldOf.release.released.map((entry) => entry.id)).toEqual([B])
     expect(answer.trace.declined).toEqual([A])
-    expect(answer.outcome).toMatch(new RegExp(`${A}: declined`))
+    expect(answer.outcome).toBe("Colab cleanup: released 1, declined 1, failed 0.")
   })
 
   it("a resource that vanished between the plan and the release is reported, not hidden", async () => {
@@ -121,7 +121,7 @@ describe("at all", () => {
     const worldOf = await world({ release: failing })
     const answer = await worldOf.run()
     expect(answer.trace.failed).toEqual([{ runtime: A, code: "RUNTIME_BUSY" }])
-    expect(answer.outcome).toMatch(/not released \(RUNTIME_BUSY\)/)
+    expect(answer.outcome).toBe("Colab cleanup: released 1, declined 0, failed 1.")
   })
 })
 
@@ -141,7 +141,7 @@ describe("nothing to do", () => {
     const answer = await worldOf.run()
     expect(worldOf.asserts.requests).toEqual([])
     expect(worldOf.release.released).toEqual([])
-    expect(answer.report).toMatch(/none/)
-    expect(answer.outcome).toBe("Nothing to release.")
+    expect(answer.report).toContain("cost money now: 0")
+    expect(answer.outcome).toBe("Colab cleanup: released 0, declined 0, failed 0.")
   })
 })

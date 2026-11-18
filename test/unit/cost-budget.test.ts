@@ -68,10 +68,9 @@ describe("the usage arithmetic", () => {
     expect(usage).toEqual({ runs: 2, usd: 2, unpriced: 1 })
   })
 
-  it("counts a live runtime's hours from today's start, and its age from creation", () => {
+  it("counts a live runtime's hours from today's start", () => {
     const usage = consumerUsage([record(), record({ id: "oc-2", createdAt: "2026-11-17T11:00:00.000Z" })], NOW, dayStart(NOW))
     expect(usage.running).toBe(2)
-    expect(usage.oldestHours).toBeCloseTo(2, 5)
     expect(usage.runtimeHours).toBeCloseTo(3, 5)
   })
 })

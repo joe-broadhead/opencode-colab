@@ -6,7 +6,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import {
-  automationNote,
   automationOwner,
   automationRuns,
   automationState,
@@ -81,12 +80,9 @@ describe("consent: which automation state applies (design §8.3 step 4)", () => 
     expect(automationState({ automation: "off", access: "all", owner: false })).toBe("off")
   })
 
-  it("runs only in the two on states, and every state has one sentence", () => {
+  it("runs only in the two on states", () => {
     expect(["on", "on (consent)"].every((state) => automationRuns(state as never))).toBe(true)
     expect(["off", "off (access)", "not-owner"].some((state) => automationRuns(state as never))).toBe(false)
-    for (const state of ["on", "on (consent)", "off", "off (access)", "not-owner"] as const) {
-      expect(automationNote(state)).toMatch(/runtime/)
-    }
   })
 })
 

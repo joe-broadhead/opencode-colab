@@ -6,8 +6,9 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { STOP_WARNING, ledgerCostSummary, runStatus } from "../../src/cost/status.js"
+import { STOP_WARNING, runStatus } from "../../src/cost/status.js"
 import { OPERATIONS } from "../../src/domain/actions.js"
+import { CONTRACTS } from "../../src/domain/contract.js"
 import { ColabError } from "../../src/domain/errors.js"
 import { FileLedger } from "../../src/ledger/store.js"
 import { computeStatus } from "../../src/status.js"
@@ -93,6 +94,8 @@ describe("colab_status", () => {
   it("lists the plugin's own runtime first with Jupyter's idle figure, then the ones Google lists for the person", async () => {
     const worldOf = await world()
     const result = await statusOf(worldOf.ctx)
+    // The result is what the contract promises, checked against the schema the host validates with.
+    expect(CONTRACTS.status.output.safeParse(result).success).toBe(true)
     expect(result.runtimes.map((runtime) => [runtime.id, runtime.ours])).toEqual([
       [OWN, true],
       [OTHER, false],
@@ -108,7 +111,7 @@ describe("colab_status", () => {
     const result = await statusOf(worldOf.ctx)
     expect(result.cost).toMatchObject({
       currency: "USD",
-      consumer: { runtimeHoursToday: 2, running: 1, ratesKnown: false, byAccelerator: { T4: 1 } },
+      consumer: { runtimeHoursToday: 2, running: 1, ratesKnown: false },
       enterprise: { running: 1, usdPerHour: 0.19, jobsToday: { runs: 0, complete: true } },
       automation: "on",
     })
@@ -148,7 +151,7 @@ describe("colab_status", () => {
     await worldOf.deps.ledger.putRun({ runId: "run-1", account: "default", backend: "colab", runtime: OWN, startedAt: "2026-11-17T09:00:00.000Z", endedAt: "2026-11-17T09:30:00.000Z", state: "timeout", errorCode: "RUN_TIMEOUT", cellIds: [], outputPaths: [] })
     const result = await statusOf(worldOf.ctx)
     expect(result.state).toBe("ok")
-    expect(result.lastErrors).toEqual(expect.arrayContaining(["UNAVAILABLE: Colab's runtime list could not be read.", "RUN_TIMEOUT: run run-1."]))
+    expect(result.lastErrors).toEqual(expect.arrayContaining(["UNAVAILABLE: runtime list.", "RUN_TIMEOUT: run run-1."]))
     expect(result.lastErrors).toHaveLength(2)
   })
 
@@ -158,6 +161,15 @@ describe("colab_status", () => {
     await runStatus({}, worldOf.ctx)
     const reads = worldOf.permission.requests.filter((request) => request.action === "colab.read").map((request) => request.resources[0])
     expect(reads).toEqual(expect.arrayContaining([`default:${OPERATIONS.runtimesGet}`]))
+  })
+
+  it("never calls a runtime idle, or offers its release, when the ledger's run list cannot be read", async () => {
+    const worldOf = await world()
+    const original = worldOf.deps.ledger.listRuns.bind(worldOf.deps.ledger)
+    worldOf.deps.ledger.listRuns = async (filter) => (filter?.state === "running" ? Promise.reject(new ColabError("LEDGER_UNAVAILABLE")) : original(filter))
+    const result = await statusOf(worldOf.ctx)
+    expect(result.cleanup.filter((entry) => entry.call.includes("runtime.delete"))).toEqual([])
+    expect(result.cost.attention).toEqual(expect.arrayContaining([expect.stringContaining("its runs could not be read")]))
   })
 
   it("shows the opt-in budget's measurement, and says when the day's USD is only a floor", async () => {
@@ -170,18 +182,6 @@ describe("colab_status", () => {
     await floor.deps.ledger.putRun({ runId: "oc-job-2", account: "default", backend: "enterprise", startedAt: "2026-11-17T09:00:00.000Z", state: "running", cellIds: [], outputPaths: [] })
     const unmeasured = await statusOf(floor.ctx)
     expect(unmeasured.cost).toMatchObject({ budget: { complete: false, spentUsd: 0 } })
-  })
-})
-
-describe("the ledger-only summary /colab-status and the TUI show", () => {
-  it("counts today's runtime-hours, the runtimes, and the oldest no-run cleanup call", () => {
-    const summary = ledgerCostSummary({
-      runtimes: [{ id: OWN, account: "default", backend: "colab", spec: T4, createdAt: "2026-11-17T10:00:00.000Z", nonce: "n1", keep: [], lease: { releaseAfterIdleMinutes: 20, maxHours: 4 }, state: "ready" }],
-      runs: [],
-      now: NOW,
-    })
-    expect(summary).toMatchObject({ runtimeHoursToday: 2, runtimesRunning: 1, noRunActive: 1, complete: false })
-    expect(summary.topCleanup).toBe(`colab_plan({ action: "runtime.delete", params: { runtime: "${OWN}" } })`)
   })
 })
 

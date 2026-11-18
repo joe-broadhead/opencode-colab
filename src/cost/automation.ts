@@ -42,21 +42,6 @@ export function automationState(choice: AutomationChoice): AutomationState {
 /** Whether this process runs the loop: the two "on" states and no other. */
 export const automationRuns = (state: AutomationState): boolean => state === "on" || state === "on (consent)"
 
-/** What to say when it does not run, in the family's one-sentence form (design §8.3 step 4). */
-export function automationNote(state: AutomationState): string {
-  switch (state) {
-    case "on":
-    case "on (consent)":
-      return "Idle runtimes of the plugin's own are harvested and released after the idle rule."
-    case "off (access)":
-      return "Idle runtimes are not released automatically at this access level; set the plugin option automation to \"on\" to allow it, or release one with colab_plan({ action: \"runtime.delete\", params: { runtime } })."
-    case "off":
-      return "Automatic release is off; release an idle runtime with colab_plan({ action: \"runtime.delete\", params: { runtime } })."
-    case "not-owner":
-      return "Another OpenCode process owns the automation; it releases idle runtimes of the plugin's own."
-  }
-}
-
 const alive = (pid: number): boolean => {
   if (pid === process.pid) return true
   try {
@@ -209,13 +194,19 @@ export async function runAutomationOnce(input: AutomationInput): Promise<Automat
     }
 
     if (verdict.state === "gone") {
-      await closeRecord(input.ledger, record, "gone", input.now.toISOString()).catch(() => undefined)
-      attention.push(`Runtime ${record.id}: it has ended, so its ledger record was closed.`)
+      const closed = await closeRecord(input.ledger, record, "gone", input.now.toISOString()).then(() => true, () => false)
+      attention.push(`Runtime ${record.id}: it has ended, so its ledger record ${closed ? "was closed" : "could not be closed"}.`)
       continue
     }
     if (verdict.state === "blocked") {
       if (verdict.why === "unreadable" || verdict.why === "tainted") {
-        attention.push(`Runtime ${record.id}: ${verdict.why === "tainted" ? "it is tainted, so it is released only by plan" : `it could not be read (${verdict.code ?? "unreadable"})`}; it was left alone.`)
+        const why =
+          verdict.why === "tainted"
+            ? "it is tainted, so it is released only by plan"
+            : verdict.code === "RUNTIME_BUSY"
+              ? "another OpenCode process is using it"
+              : `its state could not be read (${verdict.code ?? "unreadable"})`
+        attention.push(`Runtime ${record.id}: ${why}; it was left alone.`)
       }
       continue
     }

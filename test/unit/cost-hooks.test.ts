@@ -171,7 +171,7 @@ describe("registration", () => {
     expect(world.session.posts).toHaveLength(1)
 
     // A different session whose newest input is the plugin's own note stays silent too.
-    world.session.contextMessages = [{ metadata: { colab: "idle-check" } }]
+    world.session.contextMessages = [{ type: "synthetic", metadata: { colab: "idle-check" } }]
     await world.session.fire("experimental.idle", { sessionID: "ses_2", background: [] })
     expect(world.session.posts).toHaveLength(1)
   })

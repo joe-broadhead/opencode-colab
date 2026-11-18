@@ -46,7 +46,6 @@ export interface Harvested {
   readonly ok: boolean
   /** Paths on the runtime that were harvested, in the order they were found. */
   readonly files: readonly string[]
-  readonly bytes: number
   readonly reason?: string
 }
 
@@ -92,33 +91,6 @@ function harvestPath(harvestDir: string, runtimePath: string): string | undefine
   return target.startsWith(`${resolve(harvestDir)}${sep}`) ? target : undefined
 }
 
-/** Every file under one `keep` pattern, as the runtime lists them. */
-async function filesUnder(files: Pick<RuntimeProtocol, "files">, target: RuntimeTarget, pattern: string, signal: AbortSignal): Promise<readonly ContentEntry[]> {
-  const base = pattern.endsWith("/**") ? pattern.slice(0, -3) : pattern
-  const found: ContentEntry[] = []
-  const seen = new Set<string>()
-  let visited = 0
-  const visit = async (path: string, depth: number): Promise<void> => {
-    if (depth > MAX_DEPTH) throw new HarvestStop("depth")
-    if (++visited > MAX_ENTRIES) throw new HarvestStop("count")
-    const entries = await files.files.list(target, path, signal)
-    if (entries === undefined) return
-    for (const entry of entries) {
-      if (found.length >= MAX_ENTRIES) throw new HarvestStop("count")
-      if (entry.type === "directory") {
-        if (pattern.endsWith("/**")) await visit(entry.path, depth + 1)
-        continue
-      }
-      if (!seen.has(entry.path)) {
-        seen.add(entry.path)
-        found.push(entry)
-      }
-    }
-  }
-  await visit(base, 1)
-  return found
-}
-
 /** Downloads every keep path into `<workDir>/harvest/<runtimeId>/`; a failure leaves a partial folder and `ok: false`. */
 export async function harvestRuntime(input: {
   readonly files: Pick<RuntimeProtocol, "files">
@@ -130,21 +102,35 @@ export async function harvestRuntime(input: {
 }): Promise<Harvested> {
   const collected: ContentEntry[] = []
   try {
-    for (const pattern of input.keep) collected.push(...(await filesUnder(input.files, input.target, pattern, input.signal)))
+    const seen = new Set<string>()
+    const visit = async (loop: { readonly path: string; readonly depth: number; readonly all: boolean; readonly out: ContentEntry[]; hits: number }): Promise<void> => {
+      if (loop.depth > MAX_DEPTH || ++loop.hits > MAX_ENTRIES * 2) throw new HarvestStop(loop.depth > MAX_DEPTH ? "depth" : "count")
+      const entries = await input.files.files.list(input.target, loop.path, input.signal)
+      for (const entry of entries ?? []) {
+        if (loop.out.length >= MAX_ENTRIES) throw new HarvestStop("count")
+        if (entry.type === "directory") {
+          if (loop.all) await visit({ ...loop, path: entry.path, depth: loop.depth + 1 })
+        } else if (!seen.has(entry.path)) {
+          seen.add(entry.path)
+          loop.out.push(entry)
+        }
+      }
+    }
+    for (const pattern of input.keep) await visit({ path: pattern.endsWith("/**") ? pattern.slice(0, -3) : pattern, depth: 1, all: pattern.endsWith("/**"), out: collected, hits: 0 })
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw error
-    if (error instanceof HarvestStop) return { ok: false, files: [], bytes: 0, reason: error.reason }
-    return { ok: false, files: [], bytes: 0, reason: ColabError.is(error) ? error.code : "read" }
+    if (error instanceof HarvestStop) return { ok: false, files: [], reason: error.reason }
+    return { ok: false, files: [], reason: ColabError.is(error) ? error.code : "read" }
   }
 
   const done: string[] = []
-  let bytes = 0
   for (const entry of collected) {
     const path = harvestPath(input.harvestDir, entry.path)
-    if (path === undefined) return { ok: false, files: done, bytes, reason: "PATH_REFUSED" }
+    if (path === undefined) return { ok: false, files: done, reason: "PATH_REFUSED" }
     const temp = `${path}.tmp-${process.pid}`
     try {
       const chunks: Uint8Array[] = []
+      let bytes = 0
       for await (const chunk of await input.files.files.read(input.target, entry.path, input.signal)) {
         bytes += chunk.length
         if (bytes > input.maxBytes) throw new HarvestStop("FILE_TOO_LARGE")
@@ -157,11 +143,11 @@ export async function harvestRuntime(input: {
     } catch (error) {
       rmSync(temp, { force: true })
       if (error instanceof Error && error.name === "AbortError") throw error
-      if (error instanceof HarvestStop) return { ok: false, files: done, bytes, reason: error.reason }
-      return { ok: false, files: done, bytes, reason: ColabError.is(error) ? error.code : "write" }
+      if (error instanceof HarvestStop) return { ok: false, files: done, reason: error.reason }
+      return { ok: false, files: done, reason: ColabError.is(error) ? error.code : "write" }
     }
   }
-  return { ok: true, files: done, bytes }
+  return { ok: true, files: done }
 }
 
 /** Closes a ledger record as released or gone, with the event status and the `colab.runs` source read. */
@@ -195,11 +181,11 @@ export function createRelease(env: PortEnv, ports: RuntimePorts): Release {
       }
 
       const target: RuntimeTarget = { account: current.account, runtimeId: current.id }
-      let harvested: Harvested = { ok: true, files: [], bytes: 0 }
+      let harvested: Harvested = { ok: true, files: [] }
       if (current.tainted) {
         // The transport fence refuses every read on a tainted runtime, so a plan is the only way to release one, and
         // the preview has already said that what was not saved is lost.
-        harvested = { ok: false, files: [], bytes: 0, reason: "tainted" }
+        harvested = { ok: false, files: [], reason: "tainted" }
       } else {
         harvested = await harvestRuntime({
           files: ports.runtime,

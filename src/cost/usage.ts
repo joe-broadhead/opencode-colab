@@ -48,15 +48,13 @@ export interface ConsumerUsage {
   readonly runtimeHours: number
   /** Consumer runtimes of ours that are live now (ready or creating), tainted ones included: they still bill. */
   readonly running: number
-  /** Hours of the oldest live runtime. */
-  readonly oldestHours: number
 }
 
 export function consumerUsage(runtimes: readonly RuntimeRecord[], now: Date, from: Date): ConsumerUsage {
-  const live = runtimes.filter((record) => record.state === "ready" || record.state === "creating")
-  const runtimeHours = runtimes.reduce((sum, record) => sum + runtimeHoursBetween(record, from, now), 0)
-  const ages = live.map((record) => (now.getTime() - Date.parse(record.createdAt)) / 3_600_000).filter((hours) => Number.isFinite(hours))
-  return { runtimeHours, running: live.length, oldestHours: ages.length > 0 ? Math.max(...ages) : 0 }
+  return {
+    runtimeHours: runtimes.reduce((sum, record) => sum + runtimeHoursBetween(record, from, now), 0),
+    running: runtimes.filter((record) => record.state === "ready" || record.state === "creating").length,
+  }
 }
 
 export interface EnterpriseUsage {
@@ -81,18 +79,6 @@ export function enterpriseUsage(runs: readonly RunRecord[], prices: Pick<Prices,
     usd = (usd ?? 0) + estimate
   }
   return { runs: window.length, ...(usd !== undefined ? { usd } : {}), unpriced }
-}
-
-/** A ledger read a status surface needs, filtered to one account when the call named one. */
-export async function readCostRecords(
-  ledger: Pick<Ledger, "listRuntimes" | "listRuns">,
-  account: string | undefined,
-): Promise<{ readonly runtimes: readonly RuntimeRecord[]; readonly runs: readonly RunRecord[] }> {
-  const [runtimes, runs] = await Promise.all([
-    ledger.listRuntimes(account === undefined ? {} : { account }),
-    ledger.listRuns(account === undefined ? {} : { account }),
-  ])
-  return { runtimes, runs }
 }
 
 /** Runtime-hours as one decimal, the figure every surface shows. */

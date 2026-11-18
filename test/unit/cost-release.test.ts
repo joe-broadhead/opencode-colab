@@ -200,14 +200,14 @@ describe("the harvest itself", () => {
   it("refuses a path that could leave the harvest folder", async () => {
     const protocol = { files: { list: async () => [{ path: "/content/outputs/../../etc/passwd", type: "file" as const }] } } as unknown as Pick<RuntimeProtocol, "files">
     const answer = await harvestRuntime({ files: protocol, target, keep: ["/content/outputs/**"], harvestDir: join(tempDir(), "harvest"), maxBytes: 1024, signal: signal() })
-    expect(answer).toEqual({ ok: false, files: [], bytes: 0, reason: "PATH_REFUSED" })
+    expect(answer).toEqual({ ok: false, files: [], reason: "PATH_REFUSED" })
   })
 
   it("blocks, rather than skips, when a keep tree holds more files than the harvest takes", async () => {
     const tree = new CostContents()
     for (let index = 0; index < 501; index++) tree.put(`/content/outputs/file-${index}.txt`, "x")
     const answer = await harvestRuntime({ files: new CostRuntime(tree), target, keep: ["/content/outputs/**"], harvestDir: join(tempDir(), "harvest"), maxBytes: 10 * 1024 * 1024, signal: signal() })
-    expect(answer).toEqual({ ok: false, files: [], bytes: 0, reason: "count" })
+    expect(answer).toEqual({ ok: false, files: [], reason: "count" })
   })
 
   it("blocks when the keep files exceed maxDownloadBytes", async () => {

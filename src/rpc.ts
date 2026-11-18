@@ -159,11 +159,11 @@ function describeHost(status: Pick<Status, "host" | "hostWarning">): string {
 }
 
 const AUTOMATION_TEXT: Record<AutomationRow, string> = {
-  on: "on: idle runtimes of the plugin's own are harvested, then released",
-  "on (consent)": "on by your automation option at this access level",
-  off: "off: release an idle runtime with /colab-cleanup or a runtime.delete plan",
-  "off (access)": "off at this access level; set the option automation to \"on\" to allow it",
-  "not-owner": "another OpenCode process owns it",
+  on: "on",
+  "on (consent)": "on (your automation option)",
+  off: "off",
+  "off (access)": "off at this access level (automation: \"on\" allows it)",
+  "not-owner": "another process owns it",
 }
 
 /** The Cost row, one line: runtime-hours, runtimes, today's USD when known, and the top cleanup call. */
