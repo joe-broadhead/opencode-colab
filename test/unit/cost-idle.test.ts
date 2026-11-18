@@ -109,9 +109,13 @@ describe("readIdle: a runtime the plugin cannot read", () => {
     expect(await readIdle({ ...base, kernels: async () => [kernel()] })).toMatchObject({ state: "idle" })
   })
 
-  it("closes a runtime that is no longer the plugin's own, or that Colab no longer has", async () => {
-    expect(await readIdle({ ...base, kernels: async () => Promise.reject(new ColabError("RUNTIME_NOT_OURS")) })).toMatchObject({ state: "gone" })
+  it("closes a runtime only when Colab agrees it is gone: a fence refusal is gone only with no runtime behind it", async () => {
+    // B's fence refuses a `creating` record as not-ours; Colab still has it, so it is not gone (review M1).
+    expect(await readIdle({ ...base, kernels: async () => Promise.reject(new ColabError("RUNTIME_NOT_OURS")) })).toEqual({ state: "blocked", why: "unreadable", code: "RUNTIME_NOT_OURS" })
+    expect(await readIdle({ ...base, kernels: async () => Promise.reject(new ColabError("RUNTIME_NOT_OURS")), get: async () => undefined })).toMatchObject({ state: "gone" })
     expect(await readIdle({ ...base, kernels: async () => Promise.reject(new ColabError("UNAVAILABLE")), get: async () => undefined })).toMatchObject({ state: "gone" })
+    // A released ledger record is closed; nothing to track.
+    expect(await readIdle({ ...base, kernels: async () => Promise.reject(new ColabError("RUNTIME_GONE")) })).toMatchObject({ state: "gone" })
   })
 
   it("leaves alone, with a code, a runtime whose state it cannot read", async () => {

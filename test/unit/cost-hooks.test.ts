@@ -110,7 +110,7 @@ describe("the idle check", () => {
 })
 
 describe("the snapshot", () => {
-  it("comes from the ledger, cached: two calls inside the cache read once", async () => {
+  it("comes from the ledger: every call reads it, never a provider", async () => {
     const clock = new FakeClock(NOW)
     const ledger = new MemoryLedger(clock)
     await ledger.putRuntime({ id: "oc-01jcosthook", account: "default", backend: "colab", spec: T4, createdAt: "2026-11-17T10:00:00.000Z", nonce: "n1", keep: [], lease: { releaseAfterIdleMinutes: 20, maxHours: 4 }, state: "ready" })
@@ -118,10 +118,8 @@ describe("the snapshot", () => {
     const first = await read()
     expect(first.runtimes).toHaveLength(1)
     expect(first.runtimeHoursToday).toBeCloseTo(2, 5)
-    // A record written after the cached read is not seen until the cache expires.
+    // A record written now is seen by the next read.
     await ledger.putRuntime({ id: "oc-2", account: "default", backend: "colab", spec: T4, createdAt: "2026-11-17T11:00:00.000Z", nonce: "n2", keep: [], lease: { releaseAfterIdleMinutes: 20, maxHours: 4 }, state: "ready" })
-    expect((await read()).runtimes).toHaveLength(1)
-    clock.advance(11_000)
     expect((await read()).runtimes).toHaveLength(2)
   })
 })

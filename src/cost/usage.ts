@@ -81,8 +81,12 @@ export function enterpriseUsage(runs: readonly RunRecord[], prices: Pick<Prices,
   return { runs: window.length, ...(usd !== undefined ? { usd } : {}), unpriced }
 }
 
+/** The label every surface shows for a runtime's compute: "CPU", "T4 GPU", "v2-8 TPU". */
+export const specLabel = (spec: { readonly accelerator: string; readonly variant: string }): string =>
+  spec.accelerator === "NONE" ? "CPU" : `${spec.accelerator} ${spec.variant === "VARIANT_TPU" ? "TPU" : "GPU"}`
+
 /** Runtime-hours as one decimal, the figure every surface shows. */
 export const hours = (value: number): string => `${value.toFixed(1)} runtime-hour${Math.abs(value - 1) < 0.05 ? "" : "s"}`
 
-/** USD with cents below $10 and whole dollars above, as the cost block shows it. */
-export const usd = (value: number): string => (value < 10 ? `$${value.toFixed(2)}` : `$${value.toFixed(0)}`)
+/** USD with cents, as the cleanup entry shows it. */
+export const usd = (value: number): string => `$${value.toFixed(2)}`

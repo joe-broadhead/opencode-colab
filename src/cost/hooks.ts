@@ -31,12 +31,10 @@ export interface HookDeps {
 const label = (record: { readonly spec: { readonly accelerator: string; readonly variant: string } }): string =>
   record.spec.accelerator === "NONE" ? "CPU" : `${record.spec.accelerator} ${record.spec.variant === "VARIANT_TPU" ? "TPU" : "GPU"}`
 
-/** The ledger read every hook uses, cached for ten seconds: a request costs one small folder read at most. */
-export function snapshotReader(deps: HookDeps, cacheMs = 10_000): () => Promise<HookSnapshot> {
-  let cache: { readonly at: number; readonly snapshot: HookSnapshot } | undefined
+/** The ledger read every hook uses: a small local read, never a provider call. */
+export function snapshotReader(deps: HookDeps): () => Promise<HookSnapshot> {
   return async () => {
     const now = deps.clock.now()
-    if (cache !== undefined && now.getTime() - cache.at < cacheMs) return cache.snapshot
     const [records, runs] = await Promise.all([deps.ledger.listRuntimes({ live: true }), deps.ledger.listRuns({})])
     const start = new Date(now.getTime()).setHours(0, 0, 0, 0)
     const runtimeHoursToday = records.reduce((sum, record) => {
@@ -53,7 +51,6 @@ export function snapshotReader(deps: HookDeps, cacheMs = 10_000): () => Promise<
       activeRuns: runs.filter((run) => run.state === "running").length,
       runtimeHoursToday: Math.round(runtimeHoursToday * 10) / 10,
     }
-    cache = { at: now.getTime(), snapshot }
     return snapshot
   }
 }

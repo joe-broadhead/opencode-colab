@@ -112,7 +112,7 @@ describe("colab_status", () => {
     const result = await statusOf(worldOf.ctx)
     expect(result.cost).toMatchObject({
       consumer: { runtimeHoursToday: 2, running: 1, ratesKnown: false },
-      enterprise: { running: 1, usdPerHour: 0.19, jobsToday: { complete: true } },
+      enterprise: { usdPerHour: 0.19, jobsToday: { complete: true } },
     })
     expect(result.automation).toBe("on")
     expect(result.cleanup).toHaveLength(2)
@@ -120,7 +120,7 @@ describe("colab_status", () => {
     expect(result.cleanup[0]!.call).toContain('"runtime.stop"')
     expect(result.cleanup[0]!.saving).toContain(STOP_WARNING)
     expect(result.cleanup[1]!.call).toBe(`colab_plan({ action: "runtime.delete", params: { runtime: "${OWN}" } })`)
-    expect(result.cleanup[1]!.saving).toContain("Files outside keep and all variables in memory are lost at release")
+    expect(result.cleanup[1]!.saving).toContain("Files outside keep and memory are lost at release")
     expect(result.warnings).toEqual(expect.arrayContaining(["EUC_RUNTIME", "IDLE_SHUTDOWN_OFF", "RATES_UNKNOWN"]))
   })
 
@@ -169,6 +169,18 @@ describe("colab_status", () => {
     worldOf.deps.ledger.listRuns = async (filter) => (filter?.state === "running" ? Promise.reject(new ColabError("LEDGER_UNAVAILABLE")) : original(filter))
     const result = await statusOf(worldOf.ctx)
     expect(result.cleanup.filter((entry) => entry.call.includes("runtime.delete"))).toEqual([])
+  })
+
+  it("offers a tainted runtime's release by plan, and never names a creating or tainted runtime as the top cleanup", async () => {
+    const worldOf = await world()
+    const tainted = `${OWN}x`
+    await worldOf.deps.ledger.putRuntime({ id: tainted, account: "default", backend: "colab", spec: T4, createdAt: "2026-11-17T08:00:00.000Z", nonce: "n2", keep: [], lease: { releaseAfterIdleMinutes: 20, maxHours: 4 }, state: "ready", tainted: { code: "RUNTIME_HAS_CREDENTIALS", at: NOW.toISOString() } })
+    const result = await statusOf(worldOf.ctx)
+    const entry = result.cleanup.find((item) => item.call.includes(tainted))
+    expect(entry?.saving).toContain("Tainted")
+    expect(entry?.saving).toContain("keep files lost")
+    // The idle, untainted runtime stays the planning target of the row, not the tainted one.
+    expect(result.cost.attention).toEqual(expect.arrayContaining([expect.stringContaining("tainted")]))
   })
 
   it("adds BUDGET_WARN when a warn budget is reached, and leaves the figures to the account's option", async () => {

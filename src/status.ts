@@ -4,6 +4,7 @@
 import type { Plugin } from "@opencode/plugin"
 import { type Access, DISPLAY_NAME, STATUS_COMMAND, SUPPORTED_HOST, TESTED_HOSTS } from "./constants.js"
 import { automationOwner, automationState, ledgerBase } from "./cost/automation.js"
+import { costAttention } from "./cost/attention.js"
 import { consumerUsage, dayStart } from "./cost/usage.js"
 import { ColabError } from "./domain/errors.js"
 import { isTestedHost } from "./host-version.js"
@@ -52,7 +53,10 @@ async function costAndAutomation(ctx: StatusContext, access: Access): Promise<Pi
     const consumer = consumerUsage(runtimes, now, dayStart(now))
     const active = new Set(runs.filter((run) => run.state === "running" && run.runtime !== undefined).map((run) => run.runtime as string))
     const quiet = runtimes.filter((record) => (record.state === "ready" || record.state === "creating") && !active.has(record.id))
-    const oldest = quiet.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0]
+    // The row names a runtime the person can actually release by plan: a ready, untainted one.
+    const releasable = quiet.filter((record) => record.state === "ready" && record.tainted === undefined)
+    const oldest = releasable.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0]
+    const attention = options === undefined ? [] : costAttention({ runtimes, runs, options, now })
     const owner = automationOwner(ledgerBase(ledger))
     return {
       cost: {
@@ -60,6 +64,7 @@ async function costAndAutomation(ctx: StatusContext, access: Access): Promise<Pi
         runtimesRunning: consumer.running,
         noRunActive: quiet.length,
         ...(oldest !== undefined ? { topCleanup: `colab_plan({ action: "runtime.delete", params: { runtime: "${oldest.id}" } })` } : {}),
+        ...(attention.length > 0 ? { attention } : {}),
       },
       automation: automationState({ automation: options?.automation ?? "auto", access, owner: owner.owner }),
     }

@@ -61,7 +61,7 @@ function StatusDialog(props: {
   const tone = (value: Tone) => colors().text.feedback[value].base
   const ready = () => (props.view.state === "ready" ? props.view.status : undefined)
   const rowColor = (row: StatusRow, status: Status) => {
-    if (row.label === "Problems" || row.label === "Skills" || (row.label === "Agents without default rules" && status.unguardedAgents.length > 0) || (row.label === "OpenCode" && !status.host.tested)) return tone("warning")
+    if (row.label === "Problems" || row.label === "Skills" || row.label === "Attention" || (row.label === "Agents without default rules" && status.unguardedAgents.length > 0) || (row.label === "OpenCode" && !status.host.tested)) return tone("warning")
     // Money is burning and nothing will release it: the Cost row and the Automation row say so in the warning tone.
     if (row.label === "Cost" && status.cost.runtimesRunning > 0 && status.cost.noRunActive > 0) return tone("warning")
     if (row.label === "Automation" && status.cost.noRunActive > 0 && status.automation !== "on" && status.automation !== "on (consent)") return tone("warning")

@@ -51,13 +51,14 @@ async function world(input: { access?: "all" | "ask-changes" | "read-only"; runt
 }
 
 describe("what the command lists", () => {
-  it("lists live runtimes of ours with no run active, and skips a tainted one or one with a run in flight", async () => {
+  it("lists every live runtime of ours, whatever it has run: tainted ones and ones with a run recorded running", async () => {
     const worldOf = await world({
       runtimes: [record(A), record(`${B}x`, { tainted: { code: "RUNTIME_SHARED", at: NOW.toISOString() } }), record(`${B}y`)],
       runs: [{ runtime: `${B}y`, state: "running" }],
     })
     const actions = await cleanupActions(worldOf.deps, NOW)
-    expect(actions.map((action) => action.record.id)).toEqual([A])
+    expect(actions.map((action) => action.record.id)).toEqual([A, `${B}x`, `${B}y`])
+    expect(actions.map((action) => action.blocked)).toEqual([false, false, true])
   })
 
   it("says what a release loses, names the runtimes, and points Enterprise stops at their plan", async () => {
@@ -65,9 +66,9 @@ describe("what the command lists", () => {
     const report = cleanupReport(worldOf.deps, await cleanupActions(worldOf.deps, NOW), NOW)
     expect(report).toContain(A)
     expect(report).toContain(B)
-    expect(report).toContain("Files outside keep and all variables in memory are lost at release")
+    expect(report).toContain("Files outside keep and memory are lost at release")
     expect(report).toContain("runtime.stop plan")
-    expect(report).toMatch(/asks you first/)
+    expect(report).toMatch(/Each release asks first/)
   })
 })
 
@@ -79,7 +80,7 @@ describe("at read-only", () => {
     expect(worldOf.release.released).toEqual([])
     expect(answer.trace.released).toEqual([])
     expect(answer.outcome).toMatch(/Read only/)
-    expect(answer.report).toMatch(/Read only: this is a report/)
+    expect(answer.report).toMatch(/Read only: a report/)
     // The report is posted, and nothing else is: no outcome claim of a release.
     expect(worldOf.synthetic.posts).toHaveLength(1)
   })
@@ -108,7 +109,7 @@ describe("at all", () => {
     const answer = await worldOf.run()
     expect(worldOf.release.released.map((entry) => entry.id)).toEqual([B])
     expect(answer.trace.declined).toEqual([A])
-    expect(answer.outcome).toBe("Colab cleanup: released 1, declined 1, failed 0.")
+    expect(answer.outcome).toBe("Colab cleanup: released 1, declined 1, blocked 0, failed 0.")
   })
 
   it("a resource that vanished between the plan and the release is reported, not hidden", async () => {
@@ -121,7 +122,7 @@ describe("at all", () => {
     const worldOf = await world({ release: failing })
     const answer = await worldOf.run()
     expect(answer.trace.failed).toEqual([{ runtime: A, code: "RUNTIME_BUSY" }])
-    expect(answer.outcome).toBe("Colab cleanup: released 1, declined 0, failed 1.")
+    expect(answer.outcome).toBe("Colab cleanup: released 1, declined 0, blocked 0, failed 1.")
   })
 })
 
@@ -142,6 +143,6 @@ describe("nothing to do", () => {
     expect(worldOf.asserts.requests).toEqual([])
     expect(worldOf.release.released).toEqual([])
     expect(answer.report).toContain("cost money now: 0")
-    expect(answer.outcome).toBe("Colab cleanup: released 0, declined 0, failed 0.")
+    expect(answer.outcome).toBe("Colab cleanup: released 0, declined 0, blocked 0, failed 0.")
   })
 })

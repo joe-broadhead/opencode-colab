@@ -1,20 +1,13 @@
 /**
- * `/colab-cleanup` (design §8.5, boxd §C.5): the person's own cleanup. It lists what costs money, then confirms each
- * action with a permission prompt that only a person answers — `ctx.permission.assert` **without a `source`**, so the
- * prompt is not a tool call and the model never sees it in its context.
+ * `/colab-cleanup` (design §8.5, boxd §C.5): the person's own cleanup. It lists every live runtime of ours — whatever it
+ * has run, tainted, or still creating — then confirms each release with a permission prompt only a person answers:
+ * `ctx.permission.assert` **without a `source`**, so it is not a tool call the model could replay.
  *
- * Which action it asserts, so there is exactly one prompt per action at each access level:
- *
- * - `access: "all"`: the tool actions run unasked, so it asserts the command's own action `colab.cleanup`, which the
- *   default rules ask at this level (and deny at read-only);
- * - `access: "ask-changes"`: it asserts `colab.delete`, the tool action the default rules already ask for, so the
- *   person is never asked twice;
- * - `access: "read-only"`: the command only reports. It asserts nothing and changes nothing (review LOW 3).
- *
- * A yes runs that one release in the plugin's process through the one release function; a no or a deny ends that action,
- * changes nothing, and moves on to the next one. Enterprise runtimes are not stopped here — a stop loses kernel state
- * and there is no idle signal, so the report names `colab_runtimes` and the `runtime.stop` plan with the design's
- * warning. The report holds counts, ids and our own words only.
+ * One prompt per action at each access level: at `all` the command's own `colab.cleanup` (the default rules ask it), at
+ * `ask-changes` the tool's `colab.delete` (already asked), and at `read-only` nothing is asserted or released — a report
+ * only. A yes runs that one release through the one release function; a no changes nothing and moves on. A runtime with
+ * a run recorded running is listed but not offered (the release would refuse it); the person cancels first. Enterprise
+ * runtimes are not stopped here: `colab_runtimes` lists them, and a `runtime.stop` plan says what a stop loses.
  */
 import type { Plugin } from "@opencode/plugin"
 import type { Access } from "../constants.js"
@@ -22,7 +15,7 @@ import type { ResolvedAccount } from "../options.js"
 import { runtimeResource } from "../domain/actions.js"
 import type { Clock, Ledger, Release, RuntimeRecord } from "../ports.js"
 import { RELEASE_LOSS } from "./release.js"
-import { consumerUsage, dayStart, hours } from "./usage.js"
+import { consumerUsage, dayStart, hours, specLabel } from "./usage.js"
 
 export const CLEANUP_COMMAND = "colab-cleanup"
 
@@ -36,14 +29,17 @@ export interface CleanupDeps {
 export interface CleanupAction {
   readonly record: RuntimeRecord
   readonly account: ResolvedAccount
-  /** Minutes since the ledger last saw a run on it, or since it was created; the report shows it. */
+  /** Minutes since the ledger last saw a run on it, or since it was created. */
   readonly quietMinutes: number
+  /** A run of ours is recorded running; the release would refuse it, so the report says to cancel first. */
+  readonly blocked: boolean
 }
 
-/** The instrumentation a test drives: every assert and every release the command made. */
+/** What a test drives: every release, decline, block and failure the command met. */
 export interface CleanupTrace {
   readonly released: string[]
   readonly declined: string[]
+  readonly blocked: string[]
   readonly failed: { readonly runtime: string; readonly code: string }[]
 }
 
@@ -54,44 +50,52 @@ export interface CleanupRun {
   readonly trace: CleanupTrace
 }
 
-/** Runtimes a person may release: live, ready, of ours, with no run of ours active. */
+/** Every live runtime of ours, ready or creating: one that has run code still costs money. */
 export async function cleanupActions(deps: CleanupDeps, now: Date): Promise<readonly CleanupAction[]> {
   const [records, runs] = await Promise.all([deps.ledger.listRuntimes({ live: true }), deps.ledger.listRuns({})])
-  const active = new Set(runs.filter((run) => run.runtime !== undefined).map((run) => run.runtime as string))
+  const running = new Set(runs.filter((run) => run.state === "running" && run.runtime !== undefined).map((run) => run.runtime as string))
   const lastSeen = new Map<string, number>()
   for (const run of runs) {
     if (run.runtime === undefined) continue
     const at = Date.parse(run.endedAt ?? run.startedAt)
     if (Number.isFinite(at)) lastSeen.set(run.runtime, Math.max(lastSeen.get(run.runtime) ?? 0, at))
   }
-  return records
-    .filter((record) => record.state === "ready" && !record.tainted && !active.has(record.id))
-    .flatMap((record) => {
-      const account = deps.options.accounts.find((entry) => entry.alias === record.account)
-      if (!account) return []
-      const since = Math.max(lastSeen.get(record.id) ?? 0, Date.parse(record.createdAt) || 0)
-      return [{ record, account, quietMinutes: Number.isFinite(since) && since > 0 ? Math.max(0, Math.round((now.getTime() - since) / 60_000)) : 0 }]
-    })
+  return records.flatMap((record) => {
+    if (record.state !== "ready" && record.state !== "creating") return []
+    const account = deps.options.accounts.find((entry) => entry.alias === record.account)
+    if (!account) return []
+    const since = Math.max(lastSeen.get(record.id) ?? 0, Date.parse(record.createdAt) || 0)
+    return [
+      {
+        record,
+        account,
+        quietMinutes: Number.isFinite(since) && since > 0 ? Math.max(0, Math.round((now.getTime() - since) / 60_000)) : 0,
+        blocked: running.has(record.id),
+      },
+    ]
+  })
 }
 
-const specLabel = (record: RuntimeRecord): string => (record.spec.accelerator === "NONE" ? "CPU" : `${record.spec.accelerator} ${record.spec.variant === "VARIANT_TPU" ? "TPU" : "GPU"}`)
+const note = (action: CleanupAction): string =>
+  action.blocked
+    ? "a run is recorded running; colab_cancel first"
+    : action.record.state === "creating"
+      ? "create never finished; keep files lost"
+      : action.record.tainted
+        ? "tainted; keep files lost"
+        : `no run for ${action.quietMinutes} min`
 
 /** The report, before anything is asked: what costs money, and the one sentence a release needs. */
 export function cleanupReport(deps: CleanupDeps, actions: readonly CleanupAction[], now: Date): string {
-  const lines: string[] = [`Colab cleanup (${deps.options.access})`]
-  lines.push(`Runtimes of the plugin's own that cost money now: ${actions.length}`)
+  const lines: string[] = [`Colab cleanup (${deps.options.access})`, `Runtimes of the plugin's own that cost money now: ${actions.length}`]
   if (actions.length > 0) lines.push(RELEASE_LOSS)
-  for (const action of actions) lines.push(`- ${action.record.id}: ${specLabel(action.record)} · ${hours(consumerUsage([action.record], now, dayStart(now)).runtimeHours)} today · no run for ${action.quietMinutes} min`)
-  lines.push("Enterprise runtimes: colab_runtimes lists them; a runtime.stop plan says what a stop loses.")
-  if (deps.options.access === "read-only") lines.push("Read only: this is a report; nothing was released and nothing was asked.")
-  else lines.push("Each release asks you first; a no changes nothing.")
+  for (const action of actions) lines.push(`- ${action.record.id}: ${action.record.state === "creating" ? "creating" : specLabel(action.record.spec)} · ${hours(consumerUsage([action.record], now, dayStart(now)).runtimeHours)} today · ${note(action)}`)
+  lines.push("Enterprise runtimes: see colab_runtimes and a runtime.stop plan.")
+  lines.push(deps.options.access === "read-only" ? "Read only: a report; nothing released, nothing asked." : "Each release asks first; a no changes nothing.")
   return lines.join("\n")
 }
 
-/**
- * Runs the command once. `assert` is `ctx.permission.assert`, called without a `source`; `synthetic` posts the report
- * and the outcome with `resume: false`.
- */
+/** Runs the command once. `assert` is `ctx.permission.assert`, called without a `source`. */
 export async function runCleanup(input: {
   readonly deps: CleanupDeps
   readonly sessionID: string
@@ -100,7 +104,7 @@ export async function runCleanup(input: {
   readonly synthetic: (text: string, description: string) => Promise<unknown>
 }): Promise<CleanupRun> {
   const now = input.deps.clock.now()
-  const trace: CleanupTrace = { released: [], declined: [], failed: [] }
+  const trace: CleanupTrace = { released: [], declined: [], blocked: [], failed: [] }
   const actions = await cleanupActions(input.deps, now)
   const report = cleanupReport(input.deps, actions, now)
   await input.synthetic(report, "Colab cleanup")
@@ -109,6 +113,10 @@ export async function runCleanup(input: {
   if (access === "read-only") return { report, outcome: "Read only: nothing was released.", trace }
 
   for (const action of actions) {
+    if (action.blocked) {
+      trace.blocked.push(action.record.id)
+      continue
+    }
     // At `all` the tool action is allowed, so the command's own action is the prompt; at `ask-changes` the tool
     // action already asks, and asserting it here is that one prompt (design §8.5).
     const actionName = access === "ask-changes" ? "colab.delete" : "colab.cleanup"
@@ -131,7 +139,7 @@ export async function runCleanup(input: {
       trace.failed.push({ runtime: action.record.id, code: typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "UNAVAILABLE" })
     }
   }
-  const outcome = `Colab cleanup: released ${trace.released.length}, declined ${trace.declined.length}, failed ${trace.failed.length}.`
+  const outcome = `Colab cleanup: released ${trace.released.length}, declined ${trace.declined.length}, blocked ${trace.blocked.length}, failed ${trace.failed.length}.`
   await input.synthetic(outcome, "Colab cleanup result")
   return { report, outcome, trace }
 }
@@ -147,7 +155,7 @@ export async function registerCleanup(ctx: CleanupContext, deps: CleanupDeps): P
   return ctx.command.transform((editor) => {
     editor.add({
       name: CLEANUP_COMMAND,
-      description: "List what Colab costs now and release an idle runtime of the plugin's own, asking once per runtime",
+      description: "List what Colab costs now and release a runtime of the plugin's own, asking once per runtime",
       execute: async ({ sessionID, delivery }) => {
         await runCleanup({
           deps,
@@ -159,7 +167,7 @@ export async function registerCleanup(ctx: CleanupContext, deps: CleanupDeps): P
         }).catch((error: unknown) => {
           // The command has no tool result, so a failure is posted where the person reads the report.
           const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "UNAVAILABLE"
-          return ctx.session.synthetic({ sessionID, delivery, text: `Colab cleanup could not run (${code}); nothing was changed.`, description: "Colab cleanup", resume: false } as never)
+          return ctx.session.synthetic({ sessionID, delivery, text: `Colab cleanup could not run (${code}); nothing changed.`, description: "Colab cleanup", resume: false } as never)
         })
       },
     })

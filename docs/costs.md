@@ -39,17 +39,25 @@ Every 60 s, for **consumer runtimes the plugin created that are not tainted**:
    older than `maxRuntimeHours` (default 4) with the same conditions is released as `lifetime` — the backstop for a
    `last_activity` Jupyter never moved. Shapes: Jupyter Server's REST API,
    [rest-api.html](https://jupyter-server.readthedocs.io/en/stable/developers/rest-api.html).
+   A runtime that is still `creating` is never swept and never closed: Colab may hold and bill it while the create's
+   operation finishes. One older than 15 minutes is named in `attention` ("its create never finished; release it by
+   plan"), as is any runtime with a run recorded running since a time ("colab_cancel or plan with force") and any
+   runtime whose account is `access: "read"` — the automation changes nothing on such an account, and cannot ask.
 2. **Harvest, then release.** The runtime's `keep` paths (default `/content/outputs/**`, fixed at creation) are
    downloaded into `<workDir>/harvest/<runtimeId>/content/outputs/…`, and only then is the runtime deleted. A harvest
    that fails — a read error, a tree deeper or larger than the harvest bounds, a file over `maxDownloadBytes` — blocks
-   the release and is reported as `UNHARVESTED`. Nothing outside that folder is written.
+   the release and is reported as `UNHARVESTED`. Nothing outside that folder is written. A **tainted** or still
+   **creating** runtime can be released by a person's plan only: the transport fence refuses every read, so nothing is
+   harvested, and the result says `UNHARVESTED`; a create Colab never had answers `gone` with nothing lost.
 3. **Never** a runtime that is not the plugin's, a tainted one, one another OpenCode process holds (package B's owner
    lease, `<ledger>/owners/<runtime>.json`), or anything on Enterprise. There is no idle signal for an Enterprise
    runtime, and a stop loses its kernel memory.
 4. **Consent.** Automation is a change, and it cannot ask: it follows the person's `access`. At `access: "all"` (the
    default) it is **on**; at `ask-changes` and `read-only` it is **off** (`off (access)`) unless the plugin option
    `automation` is `"on"` — the person's standing yes at any access level. `automation: "off"` turns it off at `all`.
-   `colab_status`, `/colab-status` and the TUI report `on`, `on (consent)`, `off`, `off (access)` or `not-owner`.
+   `colab_status`, `/colab-status` and the TUI report `on`, `on (consent)`, `off`, `off (access)` or `not-owner`, and
+   list what it left alone in `attention`. A deny rule on `colab.delete` does **not** stop the automation — it is not
+   a tool call and cannot ask; `automation: "off"` is the switch.
 
 **A release loses everything outside `keep` and every variable in memory.** That sentence is in the `runtime.create`
 plan's preview, in `jelly.cost`, in the `runtime.delete` preview and in every cleanup entry below. A tainted runtime —
@@ -77,9 +85,10 @@ a request.
 
 ## Layer 4: the person
 
-`/colab-cleanup` lists what costs money now — each live runtime of ours with its spec, today's runtime-hours and that a
-release loses files outside `keep` and memory — then offers each release with **one permission prompt per runtime**,
-answered by a person:
+`/colab-cleanup` lists **every live runtime of ours** — ready, still creating, tainted, or one that has run code — with
+its spec, today's runtime-hours, how long since a run, and that a release loses files outside `keep` and memory. A
+runtime with a run recorded running is listed but not offered (the release would refuse it): the report says
+`colab_cancel` first. Then it offers each release with **one permission prompt per runtime**, answered by a person:
 
 - `access: "all"`: the prompt asserts the command's own action `colab.cleanup`;
 - `access: "ask-changes"`: it asserts `colab.delete`, the tool action the default rules already ask for, so a person is
@@ -91,8 +100,10 @@ plugin's process through the same release function the automation uses; a no cha
 Enterprise runtimes are not stopped here: `colab_runtimes` lists them with $/h, and stopping one is a `runtime.stop`
 plan, which says what a stop loses.
 
-The TUI's status dialog and `/colab-status` show a **Cost** row and an **Automation** row from the local ledger and the
-options; the full block, with Jupyter's idle figures and Enterprise $/h, is `colab_status`.
+The TUI's status dialog and `/colab-status` show a **Cost**, an **Automation** and, when something was left alone, an
+**Attention** row from the local ledger and the options; the full block, with Jupyter's idle figures and Enterprise $/h,
+is `colab_status`. The dialog has no buttons yet: run `/colab-cleanup`, whose prompts are the confirmation (a v1-design
+checklist note).
 
 ## Budgets (opt-in)
 
@@ -114,10 +125,11 @@ How each figure is measured, said plainly:
 
 - consumer runtime-hours come from the ledger (each record's creation to its release, inside the person's local day),
   so that limit is complete;
-- today's Enterprise USD comes from the ledger's runs. A record that carries `estimatedUsd`, or a `spec` naming its
-  machine, is priced; a record with neither **cannot** be priced, so the day is a floor. Then `colab_status` reports
-  `complete: false`, and `refuse` degrades to `warn` rather than blocking every call on a number nobody can measure.
-  A single call whose own estimate is over the limit still refuses.
+- today's Enterprise USD is the sum of the day's runs' `estimatedUsd` — the estimate package E stamps at each job's
+  commit, the same figure its preview showed. So two $5 jobs against a $10 daily `refuse` limit make the third $5 job
+  `BUDGET_REACHED`. A record without an estimate (a job older than that write, or one another client started) cannot be
+  priced; then the day is a floor, `colab_status` reports `complete: false`, and `refuse` degrades to `warn` rather than
+  blocking every call on a number nobody can measure. A single call whose own estimate is over the limit still refuses.
 
 ## Live checks
 

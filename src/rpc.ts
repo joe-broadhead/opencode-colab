@@ -21,6 +21,8 @@ export type CostRow = {
   /** Runtimes of ours running with no run of ours active. */
   readonly noRunActive: number
   readonly topCleanup?: string
+  /** Runtimes the automation leaves alone and why, in the plugin's own words (design §8.3). */
+  readonly attention?: readonly string[]
 }
 
 export type Status = {
@@ -55,6 +57,7 @@ const cost = object(
     runtimesRunning: count,
     noRunActive: count,
     topCleanup: text,
+    attention: texts,
   },
   ["runtimeHoursToday", "runtimesRunning", "noRunActive"],
 )
@@ -99,11 +102,12 @@ const isAccount = (value: unknown) => isRecord(value) && only(value, ["alias", "
 const isNumber = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
 const isCost = (value: unknown) =>
   isRecord(value) &&
-  only(value, ["runtimeHoursToday", "runtimesRunning", "noRunActive", "topCleanup"]) &&
+  only(value, ["runtimeHoursToday", "runtimesRunning", "noRunActive", "topCleanup", "attention"]) &&
   isNumber(value.runtimeHoursToday) &&
   isCount(value.runtimesRunning) &&
   isCount(value.noRunActive) &&
-  optional(value.topCleanup, isText)
+  optional(value.topCleanup, isText) &&
+  optional(value.attention, isTexts)
 
 /** JSON Schema outputs reach clients unchecked, so readers check a status against the schema's rules. */
 export function isStatus(value: unknown): value is Status {
@@ -150,21 +154,15 @@ function describeHost(status: Pick<Status, "host" | "hostWarning">): string {
   return `${status.host.version} (untested; supported range ${status.host.range})`
 }
 
-const AUTOMATION_TEXT: Record<AutomationRow, string> = {
-  on: "on",
-  "on (consent)": "on (your option)",
-  off: "off",
-  "off (access)": "off at this access level",
-  "not-owner": "another process owns it",
-}
+const automationText = (state: AutomationRow): string =>
+  state === "on (consent)" ? "on (your option)" : state === "off (access)" ? "off at this access level" : state === "not-owner" ? "another process owns it" : state
 
 /** The Cost row, one line: runtime-hours, runtimes, today's USD when known, and the top cleanup call. */
 export function costText(cost: CostRow): string {
   const hours = `${cost.runtimeHoursToday.toFixed(1)} runtime-hour${cost.runtimeHoursToday === 1 ? "" : "s"} today`
   const running = `${cost.runtimesRunning} running`
-  const quiet = cost.noRunActive > 0 ? `, ${cost.noRunActive} with no run active` : ""
   const cleanup = cost.topCleanup ? `; cleanup: ${cost.topCleanup}` : ""
-  return `${hours}; ${running}${quiet}${cleanup}`
+  return `${hours}; ${running}${cleanup}`
 }
 
 /** The status as labelled rows, in the order the dialog and /colab-status show them. */
@@ -174,8 +172,9 @@ export function statusRows(status: Status): StatusRow[] {
     { label: "Access", value: ACCESS_TEXT[status.access] },
     { label: "Tools", value: `${status.tools.registered} registered` },
     { label: "Agents without default rules", value: status.unguardedAgents.length > 0 ? status.unguardedAgents.join(", ") : "none" },
-    { label: "Cost", value: costText(status.cost) },
-    { label: "Automation", value: AUTOMATION_TEXT[status.automation] },
+    { label: "Cost", value: `${costText(status.cost)}${status.cost.noRunActive > 0 ? `, ${status.cost.noRunActive} with no run active` : ""}` },
+    { label: "Automation", value: automationText(status.automation) },
+    ...(status.cost.attention?.length ? [{ label: "Attention", value: status.cost.attention.join(" ") }] : []),
     ...(status.shadowedSkills?.length ? [{ label: "Skills", value: status.shadowedSkills.map((skill) => `${skill.id} replaced by ${skill.path}`).join("; ") }] : []),
     ...(status.problems?.length ? [{ label: "Problems", value: status.problems.join(" ") }] : []),
     { label: "OpenCode", value: describeHost(status) },

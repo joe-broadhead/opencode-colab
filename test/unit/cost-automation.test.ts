@@ -1,7 +1,7 @@
 // The automation (design §8.3, §15.1): the consent matrix, the single owner lock, and one sweep over the Jupyter idle
 // rule — each blocker (busy kernel, recent activity, foreign session, extra connection, active run, tainted) leaves a
 // runtime alone, and an idle one is released through the one release function.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -120,6 +120,20 @@ describe("one automation owner per machine", () => {
     expect(automationOwner(dir, () => 1_000_000, 4343)).toEqual({ owner: false, holder: 1 })
     expect(automationOwner(dir, () => 1_000_000 + 121_000, 4343)).toEqual({ owner: true })
     expect(automationOwner(tempDir(), () => 1_000_000, 4343)).toEqual({ owner: true })
+  })
+
+  it("treats an unreadable state file as held while the lock is fresh, and breaks it only when stale", () => {
+    const dir = tempDir()
+    mkdirSync(join(dir, "automation", "lock"), { recursive: true })
+    // A write in progress: half a JSON document.
+    writeFileSync(join(dir, "automation", "lock", "state.json"), "{ half")
+    const lock = createAutomationLock(dir)
+    expect(lock.claim()).toBe(false)
+    // A stale folder may be broken: no owner has been heard from for the stale window.
+    const old = new Date(Date.now() - 10 * 60_000)
+    utimesSync(join(dir, "automation", "lock"), old, old)
+    expect(lock.claim()).toBe(true)
+    lock.release()
   })
 
   it("breaks a lock whose process is gone", () => {

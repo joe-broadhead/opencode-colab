@@ -164,7 +164,11 @@ export function createRelease(env: PortEnv, ports: RuntimePorts): Release {
     async release(runtime, input, signal) {
       const current = (await ledger.getRuntime(runtime.id)) ?? runtime
       if (current.state === "released" || current.state === "gone") return { harvested: [], released: false, warnings: [] }
-      if (current.tainted && input.reason !== "plan") return { harvested: [], released: false, warnings: [] }
+      // A tainted or still-`creating` runtime is released only by a person's plan: the transport fence refuses every
+      // read, so nothing can be harvested, and losing kernel state is a change the automation cannot ask about (review
+      // M2). Everything else about it works the same: the lease, the active run, the ledger close and the 404 rule.
+      const unreadable = current.tainted !== undefined || current.state === "creating"
+      if (unreadable && input.reason !== "plan") return { harvested: [], released: false, warnings: [] }
 
       const holder = foreignLeaseHolder(ledger, current.id)
       if (holder !== undefined) {
@@ -182,10 +186,9 @@ export function createRelease(env: PortEnv, ports: RuntimePorts): Release {
 
       const target: RuntimeTarget = { account: current.account, runtimeId: current.id }
       let harvested: Harvested = { ok: true, files: [] }
-      if (current.tainted) {
-        // The transport fence refuses every read on a tainted runtime, so a plan is the only way to release one, and
-        // the preview has already said that what was not saved is lost.
-        harvested = { ok: false, files: [], reason: "tainted" }
+      if (unreadable) {
+        // Nothing is harvestable through the fence; the plan's preview has already said what is lost.
+        harvested = { ok: false, files: [], reason: current.tainted ? "tainted" : "creating" }
       } else {
         harvested = await harvestRuntime({
           files: ports.runtime,
@@ -208,8 +211,9 @@ export function createRelease(env: PortEnv, ports: RuntimePorts): Release {
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw error
         if (ColabError.is(error) && error.code === "NOT_FOUND") {
+          // Colab never had it (a create that never landed): nothing came up, so nothing was lost.
           await closeRecord(ledger, current, "gone", env.clock.now().toISOString())
-          return { harvested: harvested.files, released: true, warnings }
+          return { harvested: harvested.files, released: true, warnings: [] }
         }
         throw error
       }
@@ -218,4 +222,4 @@ export function createRelease(env: PortEnv, ports: RuntimePorts): Release {
 }
 
 /** What a release loses, one sentence, the same in the plan preview, status and `/colab-cleanup` (design §8.3). */
-export const RELEASE_LOSS = "Files outside keep and all variables in memory are lost at release; save to /content/outputs first."
+export const RELEASE_LOSS = "Files outside keep and memory are lost at release; save to /content/outputs first."

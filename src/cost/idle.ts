@@ -115,8 +115,10 @@ export async function readIdle(input: ReadIdleInput): Promise<IdleVerdict> {
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw error
     const code = ColabError.is(error) ? error.code : undefined
-    if (code === "RUNTIME_NOT_OURS" || code === "RUNTIME_GONE") return { state: "gone", message: "The runtime is no longer recorded as the plugin's own." }
     if (code === "RUNTIME_HAS_CREDENTIALS" || code === "RUNTIME_SHARED" || code === "RUNTIME_UNVERIFIED") return { state: "blocked", why: "tainted", code }
+    if (code === "RUNTIME_GONE") return { state: "gone", message: "The ledger records it as released." }
+    // `RUNTIME_NOT_OURS` is gone only when Colab agrees: B's fence refuses a `creating` record too, and a runtime that
+    // still exists in Colab bills whether or not the plugin can read it (review M1).
     try {
       const runtime = await input.get(input.record.account, input.record.id)
       if (runtime === undefined) return { state: "gone", message: "The runtime no longer exists in Colab." }

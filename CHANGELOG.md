@@ -44,6 +44,5 @@ All notable changes to this project are documented here. The format follows [Kee
 - The docs: the README, [Safety](docs/safety.md) (the guarantee, every known limit, the live checks not yet run),
   and the sources in [Scripting](docs/scripting.md) and [In Jelly](docs/jelly.md).
 
-- Package F, cost, cleanup and status: the one harvest-then-release function the automation and the `runtime.delete`
-  plan share, the Jupyter idle rule with one heartbeat owner per machine and the consent matrix, the per-account
-  budgets, `colab_status`'s cost and cleanup blocks, the three hooks, `/colab-cleanup`, and the Cost and Automation rows.
+- Package F, cost, cleanup and status: harvest-then-release, the idle rule and automation, budgets, `colab_status`,
+  the hooks, `/colab-cleanup`, and the Cost and Automation rows.

@@ -12,12 +12,13 @@ import type { ErrorCode, WarningCode } from "../domain/errors.js"
 import { ColabError } from "../domain/errors.js"
 import { OPERATIONS } from "../domain/actions.js"
 import type { OutputOf } from "../domain/contract.js"
-import type { ColabRuntime, RuntimeRecord, RuntimeSpecKey } from "../ports.js"
+import type { ColabRuntime, RuntimeRecord } from "../ports.js"
 import type { HandlerContext } from "../tools/types.js"
 import { automationOwner, automationState, ledgerBase, type AutomationState } from "./automation.js"
+import { costAttention } from "./attention.js"
 import { readIdle, type IdleVerdict } from "./idle.js"
 import { RELEASE_LOSS } from "./release.js"
-import { consumerUsage, dayStart, enterpriseUsage, hours, usd } from "./usage.js"
+import { consumerUsage, dayStart, enterpriseUsage, hours, specLabel, usd } from "./usage.js"
 
 /** The design's §7.2 wording, word for word, whenever a stop is offered (design §8.4). */
 export const STOP_WARNING = "kernel state and running cells are lost; the disk is kept and still billed; the person may be using this runtime — there is no idle signal"
@@ -39,7 +40,6 @@ type RuntimeRow = {
   readonly euc?: boolean
 }
 
-const specLabel = (spec: RuntimeSpecKey): string => (spec.accelerator === "NONE" ? "CPU" : `${spec.accelerator} ${spec.variant === "VARIANT_TPU" ? "TPU" : "GPU"}`)
 const last = (name: string): string => name.split("/").at(-1) ?? name
 const round = (value: number): number => Math.round(value * 10) / 10
 /** Runtime-hours to one decimal; USD to the cent, so $0.19 does not print as $0.20. */
@@ -183,24 +183,31 @@ export async function runStatus(_input: unknown, ctx: HandlerContext): Promise<O
   }
 
   const automation: AutomationState = automationState({ automation: deps.options.automation, access: deps.options.access, owner: automationOwner(ledgerBase(deps.ledger), () => now.getTime()).owner })
-  const known2 = (enterprise ?? []).length
+  const attention = costAttention({ runtimes: records, runs: allRuns, options: deps.options, now })
   const cost = {
     consumer: { runtimeHoursToday: round(consumer.runtimeHours), running: consumer.running, ratesKnown: false },
     enterprise: {
-      running: known2,
       ...(priced.some((entry) => entry.perHour !== undefined) ? { usdPerHour: money(priced.reduce((sum, entry) => sum + (entry.perHour ?? 0), 0)) } : {}),
       jobsToday: { ...(today.usd !== undefined ? { usd: money(today.usd) } : {}), complete: today.unpriced === 0 },
     },
     automation,
+    ...(attention.length > 0 ? { attention } : {}),
   }
 
-  // ── Cleanup: biggest saving first, each one call ──
+  // ── Cleanup: biggest saving first, each one call; a tainted runtime bills too and only a plan can end it ──
   const cleanup = [
     ...idle.map(({ record, verdict }) => ({
       saving: `${specLabel(record.spec)} idle ${Math.round(verdict.idleMinutes)} min, ${hours(ageHours(record, now))} today. ${RELEASE_LOSS}`,
       call: `colab_plan({ action: "runtime.delete", params: { runtime: "${record.id}" } })`,
       rank: ageHours(record, now),
     })),
+    ...records
+      .filter((record) => (record.state === "ready" || record.state === "creating") && record.tainted !== undefined)
+      .map((record) => ({
+        saving: `Tainted: only a plan releases it, keep files lost. ${RELEASE_LOSS}`,
+        call: `colab_plan({ action: "runtime.delete", params: { runtime: "${record.id}" } })`,
+        rank: ageHours(record, now),
+      })),
     ...priced.flatMap(({ runtime, perHour }) => (perHour === undefined ? [] : [{ saving: `${usd(perHour)}/h. ${STOP_WARNING}`, call: `colab_plan({ action: "runtime.stop", params: { runtime: "${runtime.name}" } })`, rank: 1_000_000 + perHour }])),
   ].sort((a, b) => b.rank - a.rank)
 

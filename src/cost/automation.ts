@@ -14,11 +14,12 @@
  *
  * Enterprise runtimes are never touched: there is no idle signal, and a stop loses kernel memory (design §8.3 step 3).
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Access } from "../constants.js"
 import type { Deps } from "../deps.js"
 import type { Ledger, Release } from "../ports.js"
+import { readAccount, staleCreate } from "./attention.js"
 import { closeRecord } from "./release.js"
 import { idleRuleOf, readIdle, type IdleRule, type IdleVerdict } from "./idle.js"
 
@@ -93,10 +94,23 @@ export function createAutomationLock(dir: string | undefined, options: Automatio
     }
   }
 
+  /** Copy-on-write, so another process's `read` never sees half a file (review LOW 5). */
   const writeState = () => {
     if (path === undefined || statePath === undefined) return
     mkdirSync(path, { recursive: true, mode: 0o700 })
-    writeFileSync(statePath, JSON.stringify({ pid, at: now() }), { mode: 0o600 })
+    const temp = `${statePath}.${pid}.tmp`
+    writeFileSync(temp, JSON.stringify({ pid, at: now() }), { mode: 0o600 })
+    renameSync(temp, statePath)
+  }
+
+  /** An unreadable state file is held while the lock is fresh: only a stale lock may be broken. */
+  const fresh = (): boolean => {
+    if (path === undefined) return false
+    try {
+      return now() - statSync(path).mtimeMs < staleMs
+    } catch {
+      return false
+    }
   }
 
   return {
@@ -119,7 +133,7 @@ export function createAutomationLock(dir: string | undefined, options: Automatio
             writeState()
             return (owned = true)
           }
-          const held = state !== undefined && state.pid !== pid && processAlive(state.pid) && now() - state.at < staleMs
+          const held = state === undefined ? fresh() : state.pid === pid || (processAlive(state.pid) && now() - state.at < staleMs)
           if (held) return (owned = false)
           rmSync(path!, { recursive: true, force: true })
         }
@@ -145,7 +159,7 @@ export function createAutomationLock(dir: string | undefined, options: Automatio
 }
 
 export interface AutomationInput {
-  readonly options: Pick<Deps["options"], "autoReleaseMinutes" | "maxRuntimeHours" | "ledgerDays">
+  readonly options: Pick<Deps["options"], "autoReleaseMinutes" | "maxRuntimeHours" | "ledgerDays" | "accounts">
   readonly ledger: Ledger
   readonly runtime: Deps["runtime"]
   readonly colab: Pick<Deps["colab"], "getRuntime">
@@ -169,11 +183,27 @@ export async function runAutomationOnce(input: AutomationInput): Promise<Automat
 
   for (const record of records) {
     if (record.backend !== "colab") continue
-    let running = 0
+    // A create in flight is left alone, and never closed: Colab may hold and bill it (review M1). An old one is named.
+    if (record.state !== "ready") {
+      if (staleCreate(record, input.now)) attention.push(`Runtime ${record.id}: its create never finished; release it by plan.`)
+      continue
+    }
+    // An account with access read changes nothing, and the automation cannot ask (ruling 6, review LOW 3).
+    if (readAccount(input.options, record.account)) {
+      attention.push(`Runtime ${record.id}: its account is read, so the automation does not release it; /colab-cleanup may.`)
+      continue
+    }
+    let runs: readonly { readonly runtime?: string; readonly startedAt: string }[] = []
     try {
-      running = (await input.ledger.listRuns({ account: record.account, state: "running" })).filter((run) => run.runtime === record.id).length
+      runs = (await input.ledger.listRuns({ account: record.account, state: "running" })).filter((run) => run.runtime === record.id)
     } catch {
       attention.push(`Runtime ${record.id}: the ledger could not be read, so it was left alone.`)
+      continue
+    }
+    const running = runs.length
+    // A run recorded running that no process closes blocks the idle rule for good: say so, and do not touch it (LOW 1).
+    if (running > 0) {
+      attention.push(`Runtime ${record.id}: a run recorded running since ${runs[0]!.startedAt} blocks its release; colab_cancel, or a plan with force.`)
       continue
     }
     let verdict: IdleVerdict
