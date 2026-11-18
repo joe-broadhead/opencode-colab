@@ -86,12 +86,14 @@ opencode api post /api/rpc/google-colab.tools/events_list -H "x-opencode-directo
   `gap: { reason: "expired", since }`, `since` being where the cursor's history ended, then restarts at the oldest kept
   entry; the next pages carry no gap. A deleted ledger answers the same one gap.
 - **A run whose writer recorded its end without a log entry** is given one by the read itself, in the plugin's ledger,
-  before it pages: the run is listed on that read.
+  before it pages (at most 200 a read): the run is listed on that read or the next.
+- **Writers during a read.** A read takes the log before the run records, so a run that ends mid-read is listed by
+  that read or a later one, whichever process wrote it.
 
 ### `colab.runtimes`
 
 Each item is `{ id, text, note }` (`output.list`): the plugin's own runtimes first, with their spec, whether they are
-tainted, their age and when they are released; a runtime opened elsewhere is marked "not the plugin's own"; an
+tainted, their age and their lease (the idle release happens only while the automation is on); a runtime opened elsewhere is marked "not the plugin's own"; an
 Enterprise runtime names its machine, accelerator, state, USD per hour when the dated price table has it, and its
 idle-shutdown and end-user-credential flags. More than 50 runtimes, or a listing Google's paging cut, is `TOO_LARGE`.
 

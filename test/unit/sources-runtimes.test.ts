@@ -40,7 +40,7 @@ describe("colab.runtimes for a Colab account", () => {
     expect((answer as { data: unknown }).data).toEqual({
       editable: false,
       items: [
-        { id: "oc-01jownruntime00000000000000", text: "T4 GPU - the plugin's own", note: "Created 2 h ago; released after 20 min idle or 4 h. Colab publishes no compute-unit rate." },
+        { id: "oc-01jownruntime00000000000000", text: "T4 GPU - the plugin's own", note: "Created 2 h ago; lease 20 min idle or 4 h, released then when the automation is on. Colab publishes no compute-unit rate." },
         {
           id: "oc-01jtaintedruntime0000000000",
           text: "CPU - the plugin's own, tainted (RUNTIME_SHARED): no more runs, released only by plan",

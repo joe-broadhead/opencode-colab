@@ -160,12 +160,18 @@ an entry to the plugin's own ledger (below).
 - A run is listed only once its end is recorded. A run whose output stream was lost (`detached`) stays unlisted until
   the plugin records its end.
 - When a run's writer records its end without a `run.finished` entry, a `colab.runs` read appends the entry to the
-  plugin's own ledger before it pages, so the run is listed on that read. This is the only write a source read makes.
+  plugin's own ledger before it pages, at most 200 a read, so the run is listed on that read or the next ones. This is
+  the only write a source read makes. After a backlog of such runs, the first reads are slower: each entry rewrites
+  the ledger's log under its lock.
+- A read takes the ledger's log before its run records, so a run that ends while a read is under way is listed by that
+  read or a later one, never passed over, with any number of OpenCode processes writing the ledger.
 - An Enterprise job create that did not land and was retried with the same id before any read is listed once, as the
   retry; a run record reopened after its end would keep its first listing (no writer does this).
-- Each page reads the whole local ledger: about 0.3 s at 27,000 runs (90 days at 300 a day).
+- Each page reads the whole local ledger: about 0.3 s at 27,000 runs (90 days at 300 a day), once every run has its
+  entry.
 - `colab.runs` is owned by this computer's OS user (`os-user:<user>@<computer>`): the ledger records runs by account
-  alias, so it lists an alias's runs whichever Google account was signed in when they ran.
+  alias, so it lists an alias's runs whichever Google account was signed in when they ran. (An amendment to the
+  design's §11, which named the Google account for every source; accepted in the package G review.)
 - For `colab.runtimes`, an account whose owner Google does not name with a verified email — a `token` account, ADC
   with no service-account email — is named `colab:account:<alias>`, the plugin's own id, never an email.
 - `colab.jobs` (every Enterprise job, the plugin's or not) is not shipped until L13. Jobs a schedule started are not

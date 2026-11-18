@@ -59,7 +59,7 @@ function colabItem(runtime: ColabRuntime, record: RuntimeRecord | undefined, now
   }
   const taint = record.tainted ? `, tainted (${record.tainted.code}): no more runs, released only by plan` : ""
   const age = duration(now - Date.parse(record.createdAt))
-  const lease = `released after ${record.lease.releaseAfterIdleMinutes} min idle or ${record.lease.maxHours} h`
+  const lease = `lease ${record.lease.releaseAfterIdleMinutes} min idle or ${record.lease.maxHours} h, released then when the automation is on`
   return {
     id,
     text: cut(`${specWords(runtime.spec)} - the plugin's own${taint}`, 200),

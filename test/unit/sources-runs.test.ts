@@ -339,6 +339,20 @@ describe("the sweep: final runs no entry announces", () => {
     expect(second.events.map((event) => event.title)).toEqual(["Colab Enterprise job job-x succeeded, 1 h"])
   })
 
+  it("lists a retry that reuses a settled create's id in the same millisecond as its own run (E's reconcile path)", async () => {
+    const h = at(T0)
+    const ledger = h.ledger as SourcesLedger
+    // reconcileCreate: abandonJobCreate appends run.finished, then openJobCreate rewrites the record, one tick apart.
+    await enterpriseJob(ledger, { runId: "job-y", start: T0 - 5 * MIN, end: T0, state: "failed" })
+    await enterpriseJob(ledger, { runId: "job-y", start: T0 })
+    const between = await drain(h.tool, { account: LAB })
+    h.fakes.clock.advance(20 * MIN)
+    await enterpriseJob(ledger, { runId: "job-y", start: T0, end: h.fakes.clock.now().getTime() })
+    const after = await drain(h.tool, { account: LAB, cursor: between.cursor })
+    expect(between.events).toEqual([])
+    expect(after.events.map((event) => event.title)).toEqual(["Colab Enterprise job job-y succeeded, 20 min"])
+  })
+
   it("never lists a run that is still running or detached", async () => {
     const h = at(T0)
     await consumerRun(h.ledger, { runId: "running", start: T0 - HOUR })
@@ -393,8 +407,8 @@ describe("realistic load", () => {
         const before = { ...ledger.reads }
         const read = await drain(h.tool, { account, cursor: cursors[account], limit: 50 })
         expect(read.gaps).toEqual([])
-        // Each page costs one run listing, one runtime listing and one log read (two when it swept).
-        expect(ledger.reads.listRuns - before.listRuns).toBe(read.pages)
+        // Each page costs one log read, one run listing and one runtime listing (log and runs twice when it swept).
+        expect(ledger.reads.listRuns - before.listRuns).toBeLessThanOrEqual(2 * read.pages)
         expect(ledger.reads.eventsSince - before.eventsSince).toBeLessThanOrEqual(2 * read.pages)
         listed[account]!.push(...read.events.map((event) => event.external_id))
         cursors[account] = read.cursor

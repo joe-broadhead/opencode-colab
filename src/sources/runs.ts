@@ -33,7 +33,7 @@
  *
  * A run is one ledger record per `runId`; a retried Enterprise create that reuses the id writes a fresh record with a
  * new start, so a run is the pair (`runId`, `startedAt`). An entry *announces* a record when it names its id and account
- * and is no older than its start. A record is listed at the first kept entry that announces it, while it is final:
+ * and was appended after its start. A record is listed at the first kept entry that announces it, while it is final:
  * a second entry for the same run (a race between two writers, or the sweep below) is passed over.
  *
  * ## The sweep: a final run with no entry
@@ -41,8 +41,12 @@
  * Package E appends `run.finished` when it records a job's end; a writer that does not (package D records a consumer
  * run's end without one; a process can stop between the two writes) would leave a finished run unlisted for good. So
  * each read first appends `run.finished` for every final record of the account, within the ledger's retention, that no
- * kept entry announces. Its position is then the sweep's: the run is listed on that read, never silently skipped. The
- * contract request to append the entry inside `putRun` (src/ledger/store.ts) makes the sweep find nothing in practice.
+ * kept entry announces, at most 200 a read (the sweep bound below). Its position is then the sweep's: the run is
+ * listed on that read, or a later one, never silently skipped. The contract request to append the entry inside `putRun`
+ * (src/ledger/store.ts) makes the sweep find nothing in practice.
+ *
+ * The read takes the log before the run records, and pages only that log against those records, so its cursor can
+ * never pass an entry whose record it did not see final.
  */
 import { decodeBoundCursor, encodeBoundCursor, type CursorBinding } from "@we-the-rebel-alliance/source-contract/cursor"
 import {
@@ -121,26 +125,37 @@ export interface RunsDeps {
 export const isFinal = (run: RunRecord): run is RunRecord & { readonly endedAt: string } =>
   run.state !== "running" && run.state !== "detached" && typeof run.endedAt === "string" && !Number.isNaN(Date.parse(run.endedAt))
 
-/** Whether a ledger entry announces this run: its id, its account, and no older than the run's start. */
+/**
+ * Whether a ledger entry announces this run: its id, its account, and appended after the run started. Strictly after:
+ * package E settles a create that never landed (appending `run.finished`) and reopens the same id for the retry within
+ * one commit, possibly in the same millisecond, and the settled attempt's entry must not announce the retry. A start
+ * stamped by a clock ahead of the ledger's (a joined job's Google `createTime`) only delays the listing until the
+ * ledger's clock passes it; the sweep's entries then announce it.
+ */
 export const announces = (entry: LedgerEvent, run: RunRecord): boolean =>
-  entry.type === "run.finished" && entry.id === run.runId && entry.account === run.account && Date.parse(entry.at) >= Date.parse(run.startedAt)
+  entry.type === "run.finished" && entry.id === run.runId && entry.account === run.account && Date.parse(entry.at) > Date.parse(run.startedAt)
 
 /**
- * Appends `run.finished` for every final run of `account` that no kept entry announces, ended within the ledger's
- * retention. Returns how many it appended.
+ * The most entries one read's sweep appends. Each file-ledger append rewrites the log under the lock, so a backlog of
+ * thousands would hold every writer for seconds (review #15, LOW 1); the rest are swept, and listed, by the next reads.
+ */
+export const SWEEP_MAX = 200
+
+/**
+ * Appends `run.finished` for final runs of `account` that no kept entry announces, ended within the ledger's
+ * retention, oldest end first, at most that bound a read. Returns how many it appended.
  */
 export async function sweepFinished(deps: RunsDeps, account: string, runs: readonly RunRecord[], log: readonly LedgerEvent[]): Promise<number> {
   const keptFrom = deps.clock.now().getTime() - Math.max(0, deps.ledgerDays - 1) * DAY
   const entries = new Map<string, LedgerEvent[]>()
   for (const entry of log) if (entry.type === "run.finished" && entry.account === account) (entries.get(entry.id) ?? entries.set(entry.id, []).get(entry.id)!).push(entry)
-  let appended = 0
-  for (const run of runs) {
-    if (run.account !== account || !isFinal(run) || Date.parse(run.endedAt) < keptFrom) continue
-    if ((entries.get(run.runId) ?? []).some((entry) => announces(entry, run))) continue
-    await deps.ledger.append({ type: "run.finished", id: run.runId, account })
-    appended++
-  }
-  return appended
+  const unannounced = runs
+    .filter((run): run is RunRecord & { readonly endedAt: string } => run.account === account && isFinal(run) && Date.parse(run.endedAt) >= keptFrom)
+    .filter((run) => !(entries.get(run.runId) ?? []).some((entry) => announces(entry, run)))
+    .sort((a, b) => Date.parse(a.endedAt) - Date.parse(b.endedAt))
+    .slice(0, SWEEP_MAX)
+  for (const run of unannounced) await deps.ledger.append({ type: "run.finished", id: run.runId, account })
+  return unannounced.length
 }
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`
@@ -216,9 +231,16 @@ export async function listRuns(deps: RunsDeps, account: string, owner: EventsOwn
   const from = request.cursor === undefined ? undefined : decodeRunsCursor(account, request.cursor)
   const now = deps.clock.now().getTime()
 
-  const runs = await deps.ledger.listRuns({ account })
+  // The log first, then the run records (review #15, M1): every writer records a run before its entry, so any entry this
+  // read sees has its final record visible to the read of the records after it. Read the other way round, a run that
+  // ended between the two reads would have its entry covered while its record still said running: skipped for good.
   let log = await deps.ledger.eventsSince(0, Number.MAX_SAFE_INTEGER)
-  if ((await sweepFinished(deps, account, runs, log.events)) > 0) log = await deps.ledger.eventsSince(0, Number.MAX_SAFE_INTEGER)
+  let runs = await deps.ledger.listRuns({ account })
+  if ((await sweepFinished(deps, account, runs, log.events)) > 0) {
+    // Other writers may have appended around the sweep's own entries: read both again, in the same order.
+    log = await deps.ledger.eventsSince(0, Number.MAX_SAFE_INTEGER)
+    runs = await deps.ledger.listRuns({ account })
+  }
 
   const entries = log.events
   const oldest = log.oldest
