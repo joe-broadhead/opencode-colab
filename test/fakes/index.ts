@@ -8,6 +8,7 @@
  */
 import { createHash, randomUUID } from "node:crypto"
 import { PlanStore } from "../../src/domain/plans.js"
+import { isFinal } from "../../src/ledger/store.js"
 import { ColabError } from "../../src/domain/errors.js"
 import type { Deps } from "../../src/deps.js"
 import { createRunEvents } from "../../src/events.js"
@@ -600,8 +601,11 @@ export class MemoryLedger implements Ledger {
     await this.append({ type: "runtime.tainted", id, account: record.account })
     return next
   }
+  /** As the file ledger: appends `run.finished` when this write makes the run final and it was not before. */
   async putRun(record: RunRecord) {
+    const previous = this.runs.get(record.runId)
     this.runs.set(record.runId, record)
+    if (isFinal(record) && (previous === undefined || !isFinal(previous))) await this.append({ type: "run.finished", id: record.runId, account: record.account })
   }
   async getRun(runId: string) {
     return this.runs.get(runId)

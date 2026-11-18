@@ -11,6 +11,7 @@
  *   declaration also passes Jelly's own `PluginDeclarationSchema`. CI has no export, so that case is skipped there.
  */
 import { pathToFileURL } from "node:url"
+import { SourceError } from "@we-the-rebel-alliance/source-contract/events"
 import { describe, expect, it } from "vitest"
 import { ASSERTABLE_ACTIONS, CLEANUP_ACTION, DECLARED_ACTIONS, PERMISSION_ONLY, READ_ACTION, TOOLS, actionOf } from "../../src/domain/actions.js"
 import type { ToolName } from "../../src/domain/contract.js"
@@ -82,7 +83,10 @@ async function assertedActions(): Promise<Map<ToolName, string[]>> {
       input = { planId: plan.id }
     }
     const before = permission.requests.length
-    await runTool(name, input, call(`call_${name}`), runner)
+    // A source read throws its refusals as the contract's SourceError (colab-15 request 4); either answer is fine here.
+    await runTool(name, input, call(`call_${name}`), runner).catch((error: unknown) => {
+      if (!(error instanceof SourceError)) throw error
+    })
     out.set(name, permission.requests.slice(before).map((request) => request.action))
   }
   return out

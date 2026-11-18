@@ -1,7 +1,7 @@
 // Pack, install and load the published shape, after opencode-metaview's pack test. The tarball holds exactly the files
 // whitelist and installs with lifecycle scripts disabled. Installed alone, it loads in each stock OpenCode release it
 // is tested on (TESTED_HOSTS), which provides @opencode/plugin, OpenTUI and Solid itself; next to those packages, both
-// entry points also import under Bun. OPENCODE_BIN_2_2_3 to OPENCODE_BIN_2_2_7 and OPENCODE_BIN_2_3_0 name stock
+// entry points also import under Bun. OPENCODE_BIN_2_2_3 to OPENCODE_BIN_2_2_7 and OPENCODE_BIN_2_3_0 to OPENCODE_BIN_2_3_2 name stock
 // binaries; otherwise each release is installed with npm, once per run. Every temp folder is a git repository under
 // the system's /tmp, never under TMPDIR or HOME, so OpenCode's upward search for `.opencode` folders never reaches the
 // agents of whoever runs the test. Each stock host runs offline: anything it tries off the machine goes to a closed
