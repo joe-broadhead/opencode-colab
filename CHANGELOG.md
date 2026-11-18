@@ -30,3 +30,16 @@ All notable changes to this project are documented here. The format follows [Kee
   `colab_execution`, `colab_cancel`, `colab_upload`, `colab_download`, `colab_specs`, `colab_runtimes` and
   `colab_files`; and the `runtime.create` and consumer `runtime.delete` plans, which calibrate a new runtime and call
   the one release function.
+- Package G, sources: the `colab.runs` source (`colab_events_list`), one event per finished run or Enterprise job from
+  the plugin's own ledger, with a cursor on the ledger log's sequence number — a run is listed when its end is
+  recorded, once, behind nothing; a burst of any size drains; a pruned or deleted ledger answers one
+  `gap: expired` from where the cursor's history ended — and a read that gives a finished run with no log entry its
+  entry; the `colab.runtimes` snapshot (`colab_runtimes_read`) as a `list` of at most 50; the source `probe`, naming
+  `colab.runs`' owner as this computer's user (the ledger is local) and `colab.runtimes`' as the signed-in Google
+  account, never `verified: false`; and `npm run conformance`, the contract's kit over both
+  sources, writing `reports/conformance-report.json`.
+- The skills: the `opencode-colab` workflow (plans with `params`, commits with only a `planId`, accounts, the
+  guarantee, costs, the sources) and `opencode-colab-notebooks` with ten worked examples, each run against the fakes by
+  the tests.
+- The docs: the README, [Safety](docs/safety.md) (the guarantee, every known limit, the live checks not yet run),
+  and the sources in [Scripting](docs/scripting.md) and [In Jelly](docs/jelly.md).
