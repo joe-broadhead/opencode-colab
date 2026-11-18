@@ -48,7 +48,7 @@ code), `message` and `next`.
 | `USAGE_LIMIT` | refused | Compute units or free usage are exhausted. | Tell the person; a CPU spec may still work. |
 | `TOO_MANY_RUNTIMES` | refused | Colab's own runtime limit is reached. | Release one of the plugin's runtimes, or reuse one. |
 | `RUNTIME_GONE` | failed | The runtime ended. | Plan a new runtime.create with the same spec. |
-| `RUNTIME_BUSY` | refused | A release or stop while a run is active. | Stop the run with colab_cancel, or plan again with force. |
+| `RUNTIME_BUSY` | refused | The runtime is busy: a run of the plugin's own is active on it, or another OpenCode process is using it. | Stop the run with colab_cancel, or plan again with force. |
 | `INTERACTIVE_UNSUPPORTED` | refused | colab_run on an enterprise account: Enterprise runs whole notebooks as jobs. | Plan colab_plan({ action: "job.create", notebook }). |
 | `KERNEL_BUSY` | refused | The kernel session runs another run. | Wait with colab_execution, or use another session. |
 | `KERNEL_DIED` | failed | The kernel died, often from memory. | Rerun; pick a high-memory spec if eligible. |

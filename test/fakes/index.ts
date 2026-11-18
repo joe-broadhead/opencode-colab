@@ -497,9 +497,11 @@ export class FakeEnterpriseRuns implements EnterpriseRuns {
 export class FakeBudget implements Budget {
   readonly checks: { account: string; action: string; usd?: number; runtimeHours?: number }[] = []
   verdict: "ok" | "warn" | "refuse" = "ok"
-  async check(account: string, input: { action: "runtime.create" | "job.create" | "schedule.create" | "schedule.resume"; usd?: number; runtimeHours?: number }) {
+  /** The unit the answer's figures are in: USD for Enterprise, runtime-hours for consumer. */
+  unit: "usd" | "runtime-hours" = "usd"
+  async check(account: string, input: { action: "runtime.create" | "job.create" | "schedule.create" | "schedule.resume"; usd?: number; runtimeHours?: number }, _signal?: AbortSignal) {
     this.checks.push({ account, ...input })
-    return { verdict: this.verdict, ...(this.verdict === "ok" ? {} : { spentUsd: 10, limitUsd: 10 }) }
+    return { verdict: this.verdict, ...(this.verdict === "ok" ? {} : { spent: 10, limit: 10, unit: this.unit }) }
   }
 }
 

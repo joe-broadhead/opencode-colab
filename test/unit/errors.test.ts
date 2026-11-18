@@ -44,6 +44,12 @@ describe("the error table", () => {
     expect([error.state, error.reason]).toEqual(["refused", "session-control"])
   })
 
+  it("RUNTIME_BUSY names both meanings: a run of the plugin's own, or another OpenCode process", () => {
+    const text = new ColabError("RUNTIME_BUSY").message
+    expect(text).toMatch(/a run of the plugin's own is active on it/)
+    expect(text).toMatch(/another OpenCode process is using it/)
+  })
+
   it("maps sign-in, scope, quota and outage codes to the source contract's", () => {
     expect(SOURCE_CODES).toMatchObject({ AUTH_REQUIRED: "NEEDS_SIGN_IN", AUTH_SCOPE_MISSING: "SCOPE_MISSING", RATE_LIMITED: "RATE_LIMITED", UNAVAILABLE: "UNAVAILABLE" })
   })

@@ -51,6 +51,13 @@ for (const [kind, make] of kinds) {
       expect(await ledger.getRun("missing")).toBeUndefined()
     })
 
+    it("keeps an Enterprise job's USD estimate, so the daily budget can price the day", async () => {
+      const ledger = make(new FakeClock())
+      await ledger.putRun(run("job-1", { backend: "enterprise", job: "jobs/oc-job-1", estimatedUsd: 4.9 }))
+      expect((await ledger.getRun("job-1"))?.estimatedUsd).toBe(4.9)
+      expect((await ledger.listRuns({ account: "default" })).find((record) => record.runId === "job-1")?.estimatedUsd).toBe(4.9)
+    })
+
     it("keeps a run's kernel session name, so a detached run can be cancelled", async () => {
       const ledger = make(new FakeClock())
       await ledger.putRun(run("run-s", { state: "detached", session: "oc-n0nce-scratch" }))

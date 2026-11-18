@@ -61,6 +61,7 @@ export function createDeps(input: { readonly options: Options; readonly director
     optionalMember<(env: PortEnv) => { readonly drive: DriveApi; readonly driveSync: DriveSync; readonly notebooks?: NotebookStore }>(notebookPackage, "createNotebookPorts") ??
     optionalMember<(env: PortEnv) => { readonly drive: DriveApi; readonly driveSync: DriveSync; readonly notebooks?: NotebookStore }>(notebookPackage, "createDrivePorts")!
   const { notebooks, ...drivePorts } = notebookFactory(env)
+  const prices = optionalMember<Prices>(enterprisePorts, "prices") ?? NO_PRICES
   return {
     options: input.options,
     directory: input.directory,
@@ -76,8 +77,9 @@ export function createDeps(input: { readonly options: Options; readonly director
     // Optional factories, so F, E and C add them in their own files without a Day 0 change: F exports `createBudget`
     // from src/cost/index.ts, E's `createEnterprisePorts` returns `prices`, and C's factory returns `notebooks`.
     // Until then, Day 0's stubs.
-    budget: optionalMember<(env: PortEnv) => Budget>(cost, "createBudget")?.(env) ?? OK_BUDGET,
-    prices: optionalMember<Prices>(enterprisePorts, "prices") ?? NO_PRICES,
+    // The budget prices the day's Enterprise runs with E's table (colab-10 M4), so it takes the prices too.
+    budget: optionalMember<(env: PortEnv, prices: Prices) => Budget>(cost, "createBudget")?.(env, prices) ?? OK_BUDGET,
+    prices,
     notebooks: notebooks ?? NO_NOTEBOOKS,
   }
 }

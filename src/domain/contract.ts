@@ -126,6 +126,8 @@ export const StatusOutput = result({
   cleanup: z.array(z.object({ saving: z.string(), call: z.string() })),
   automation: z.enum(["on", "on (consent)", "off", "off (access)", "not-owner"]),
   lastErrors: z.array(z.string()),
+  /** Runtimes the automation left alone and why, in the plugin's own words: no Google text, token or URL (design §8.3). */
+  attention: z.array(z.string().max(300)).max(20).optional(),
 })
 
 export const SpecsInput = z.object({ account: Account }).strict()

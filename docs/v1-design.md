@@ -35,7 +35,7 @@ richer double (a loopback Colab API, the proxy in front of a real Jupyter server
 
 | Owner | Files |
 | --- | --- |
-| **Day 0** | `src/ports.ts`, `src/deps.ts`, `src/events.ts`, `src/stub.ts`, `src/domain/*`, `src/plans/*`, `src/ledger/*`, `src/permissions.ts`, `src/tools.ts`, `src/tools/*`, `src/tools-rpc.ts`, `src/plugin.ts`, `src/index.ts`, `src/options.ts`, `src/constants.ts`, `src/host-version.ts`, `src/redact.ts`, `src/skills.ts`, `src/version.ts`; `test/fakes/index.ts`; `test/unit/{actions,contract,docs,errors,host-version,jelly,ledger,options,permissions,plans,redact,registry,skills,source-contract}.test.ts`; `test/conformance/declaration.test.ts`; `test/host/harness.ts`, `test/host/isolate.ts`, `test/host/route-fetch.ts`, `test/host/scratch.ts`, `test/host/plugin.test.ts`; `test/pack/pack.test.ts`; `test/fixtures/tool-registry.json`; `package.json` (the `jelly`, `sources` and `opencode` keys); `scripts/errors-doc.mjs`; `docs/v1-design.md`, `docs/errors.md` (generated); `AGENTS.md`. |
+| **Day 0** | `src/ports.ts`, `src/deps.ts`, `src/events.ts`, `src/stub.ts`, `src/domain/*`, `src/plans/*`, `src/ledger/*`, `src/permissions.ts`, `src/tools.ts`, `src/tools/*`, `src/tools-rpc.ts`, `src/plugin.ts`, `src/index.ts`, `src/options.ts`, `src/constants.ts`, `src/host-version.ts`, `src/redact.ts`, `src/skills.ts`, `src/version.ts`; `test/fakes/index.ts`; `test/unit/{actions,contract,docs,errors,host-version,jelly,ledger,options,permissions,plans,plugin,redact,registry,skills,source-contract}.test.ts`; `test/conformance/declaration.test.ts`; `test/host/harness.ts`, `test/host/isolate.ts`, `test/host/route-fetch.ts`, `test/host/scratch.ts`, `test/host/plugin.test.ts`; `test/pack/pack.test.ts`; `test/fixtures/tool-registry.json`; `package.json` (the `jelly`, `sources` and `opencode` keys); `scripts/errors-doc.mjs`; `docs/v1-design.md`, `docs/errors.md` (generated); `AGENTS.md`. |
 | **Family kit** | `test/support/jelly-kit.ts`, `test/support/jelly-settings.ts`, and the kit files in `scripts/` pinned by `scripts/check-copies.mjs`: copies, changed in every plugin at once. |
 | **A. Auth** | `src/auth/*`; `test/fakes/auth-*.ts`, `test/unit/auth*.test.ts`, `test/host/auth*.test.ts`; `docs/auth.md`. |
 | **B. Runtime transport** | `src/runtime/*` (the Colab API client, the runtime protocol, the agent-only check and its probe snippet); `test/fakes/runtime-*.ts` (the loopback Colab API, the proxy-in-front-of-jupyter harness), `test/unit/runtime*.test.ts`, `test/host/runtime*.test.ts`; the drift job's workflow file. |
@@ -119,10 +119,19 @@ What each package proves beyond design §16's must-prove column, from the Day 0 
 - **D.** Write-back goes through `deps.notebooks.mergeRun` after `hostAssert({ action: "edit" })`; `colab_download`
   and `colab_upload` assert `edit`/`external_directory` and `read` through `hostAssert`; passes `ctx.providerRead`
   to `DriveSync.pull` and `EnterpriseRuns`.
+- **E.** Writes `RunRecord.estimatedUsd` at the `job.create` commit (the preview's estimate), and reads the budget's
+  `limit` and `unit` (the deprecated `limitUsd` goes once it does).
 - **E.** Calls `deps.budget.check` at the preview and the commit of `job.create`, `schedule.create` and
   `schedule.resume` (`refuse` → `BUDGET_REACHED`, `warn` → `BUDGET_WARN`); returns `prices` from
   `createEnterprisePorts`; records a job's create LRO on `RunRecord.operation` and falls back to `listJobOperations`;
   calls `read` before each provider read inside `EnterpriseRuns`; screens job sources with `screenSecrets`.
+- **F.** The automation never releases a runtime whose account has `access: "read"`. It is listed in `attention`.
+  `/colab-cleanup` may offer it, because the person confirms each release in a prompt that names the account.
+  (Recorded from the package F review; the proposal to release read accounts' runtimes was rejected.)
+- **F.** `registerCost` returns `{ dispose, problems }`: the hooks this host refused (`idle` for
+  `experimental.idle`); `src/plugin.ts` words each as one sentence in status's problems. `createBudget(env, prices)`
+  receives E's price table, so the day's Enterprise runs are priced from `RunRecord.estimatedUsd`; `Budget.check`
+  answers `spent`, `limit` and `unit` (`usd` or `runtime-hours`). `colab_status` carries the last sweep's `attention`.
 - **F.** `colab.cleanup` at `read-only`: the default rule denies it (`src/permissions.ts`, as Jelly's namespace rule
   does), and `/colab-cleanup` at `read-only` lists what costs money and takes no action, asserting nothing (design
   §8.5). At `all` and `ask-changes` each action is a person-only ask.
