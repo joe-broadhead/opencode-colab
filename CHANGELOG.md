@@ -23,3 +23,10 @@ All notable changes to this project are documented here. The format follows [Kee
   epoch) and reports only changes, a transient failure refusing without tainting; the loopback Colab API and the
   token-checking proxy in front of a Jupyter fake; and the weekly drift job over Google's discovery documents and
   colabtools.
+- Execution (package D): `colab_run` on a calibrated, untainted runtime of the plugin's own, with the pre- and
+  post-run credential checks under one ask whose metadata carries each cell's first lines, the sources' sha256 and the
+  shell, install and network flags; capture of Jupyter's outputs (streams, display updates, rich files, `outputs.jsonl`)
+  with the inline caps and the secret screen; the write-back merge through the notebook store's per-path lock;
+  `colab_execution`, `colab_cancel`, `colab_upload`, `colab_download`, `colab_specs`, `colab_runtimes` and
+  `colab_files`; and the `runtime.create` and consumer `runtime.delete` plans, which calibrate a new runtime and call
+  the one release function.

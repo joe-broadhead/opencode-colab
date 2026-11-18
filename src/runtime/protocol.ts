@@ -126,7 +126,13 @@ export function createRuntimeProtocol(env: PortEnv, api: ColabApi, overrides: Ru
   const socketHeaders = (checked: CheckedConnection) => ({ "X-Colab-Runtime-Proxy-Token": checked.token, accept: "application/json" })
 
   /** One REST call against the runtime, refreshing an expired proxy token once (design §1: 404 on an expired token). */
-  const rest = async (target: RuntimeTarget, request: { readonly method: string; readonly path: string; readonly body?: unknown; readonly headers?: Readonly<Record<string, string>> }, signal: AbortSignal, retried = false): Promise<Response> => {
+  const rest = async (
+    target: RuntimeTarget,
+    request: { readonly method: string; readonly path: string; readonly body?: unknown; readonly headers?: Readonly<Record<string, string>> },
+    signal: AbortSignal,
+    retried = false,
+    allowed: readonly number[] = [],
+  ): Promise<Response> => {
     const checked = await connection(target, signal)
     const url = runtimeUrl(checked.url, request.path)
     let response: Response
@@ -152,11 +158,11 @@ export function createRuntimeProtocol(env: PortEnv, api: ColabApi, overrides: Ru
     if (response.status === 401 || response.status === 403 || response.status === 404) {
       if (!retried) {
         await connection(target, signal, true)
-        return rest(target, request, signal, true)
+        return rest(target, request, signal, true, allowed)
       }
       throw httpError(response.status)
     }
-    if (!response.ok) throw httpError(response.status)
+    if (!response.ok && !allowed.includes(response.status)) throw httpError(response.status)
     return response
   }
 
@@ -370,8 +376,18 @@ export function createRuntimeProtocol(env: PortEnv, api: ColabApi, overrides: Ru
         })()
       },
 
+      async mkdir(target, path, signal) {
+        await assertOurs(target)
+        // Jupyter creates one directory per request and requires the parent (design §9.3). An existing folder is not an
+        // error: Jupyter answers 200/201 and the fake below answers 409, so both are accepted.
+        await rest(target, { method: "PUT", path: `${JUPYTER_PATHS.contents}/${encodePath(path)}`, body: { type: "directory" } }, signal, false, [409])
+      },
+
       async write(target, path, bytes, signal) {
         await assertOurs(target)
+        // The contents API does not create parents: the caller makes them with `mkdir` first (design §9.3; review M5,
+        // and LOW 2 of round 2 keeps one walk, the caller's). The server answers 404 for a missing parent (Jupyter
+        // answers 500; the port's fakes model the refusal).
         const limit = Math.max(1, maxContentsBytes)
         const put = async (piece: Uint8Array, chunk: number | undefined) => {
           await rest(

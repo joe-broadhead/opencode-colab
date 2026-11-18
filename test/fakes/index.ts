@@ -203,6 +203,8 @@ export class FakeRuntimeProtocol implements RuntimeProtocol {
   sessions_ = new Map<string, SessionInfo[]>()
   /** runtimeId → path → bytes. */
   contents = new Map<string, Map<string, Uint8Array>>()
+  /** runtimeId → the folders that exist. A write needs its parent, as Jupyter's contents API does. */
+  readonly directories = new Map<string, Set<string>>()
   readonly opened: FakeKernelSession[] = []
   respond: (code: string) => readonly Omit<IopubMessage, "parentMsgId">[] = () => [{ msgType: "stream", content: { name: "stdout", text: "ok\n" } }]
 
@@ -219,6 +221,15 @@ export class FakeRuntimeProtocol implements RuntimeProtocol {
   }
   async sessions(target: { runtimeId: string }) {
     return this.sessions_.get(target.runtimeId) ?? []
+  }
+  /** The folders a runtime has, starting with the server root and Colab's /content. */
+  folders(runtimeId: string): Set<string> {
+    let set = this.directories.get(runtimeId)
+    if (!set) {
+      set = new Set(["/", "/content"])
+      this.directories.set(runtimeId, set)
+    }
+    return set
   }
   readonly files = {
     list: async (target: { runtimeId: string }, path: string): Promise<readonly ContentEntry[] | undefined> => {
@@ -239,7 +250,15 @@ export class FakeRuntimeProtocol implements RuntimeProtocol {
         yield slice
       })()
     },
-    write: async (target: { runtimeId: string }, path: string, chunks: AsyncIterable<Uint8Array>) => {
+    mkdir: async (target: { runtimeId: string }, path: string) => {
+      // Jupyter creates one directory per request and requires its parent; an existing folder is not an error.
+      const parent = path.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/"
+      if (!this.folders(target.runtimeId).has(parent)) throw new ColabError("NOT_FOUND", "The folder's parent does not exist.")
+      this.folders(target.runtimeId).add(path.replace(/\/+$/, ""))
+    },
+    write: async (target: { runtimeId: string }, path: string, chunks: AsyncIterable<Uint8Array>, _signal?: AbortSignal) => {
+      const parent = path.split("/").slice(0, -1).join("/") || "/"
+      if (!this.folders(target.runtimeId).has(parent)) throw new ColabError("NOT_FOUND", "A file write needs its parent folder, as Jupyter's contents API does.")
       const parts: Uint8Array[] = []
       for await (const chunk of chunks) parts.push(chunk)
       const bytes = Buffer.concat(parts)

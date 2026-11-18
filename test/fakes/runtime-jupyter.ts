@@ -186,6 +186,8 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
   let valid = true
   let allowHidden = options.allowHidden ?? false
   const contents = new Map<string, Uint8Array>()
+  /** The folders that exist, starting with the server root and Colab's /content; a write needs its parent. */
+  const directories = new Set<string>(["", "content"])
   const kernels = new Map<string, Kernel>()
   const sessions = new Map<string, Session>()
   const requests: WireRecord[] = []
@@ -369,16 +371,33 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
         const prefix = target === "" ? "" : `${target}/`
         const children = [...contents.keys()].filter((name) => name.startsWith(prefix) && name !== target)
         const direct = children.filter((name) => !name.slice(prefix.length).includes("/"))
-        if (direct.length === 0 && target !== "") return notFound(response)
+        const folders = [...directories].filter((name) => name !== target && name.startsWith(prefix) && !name.slice(prefix.length).includes("/"))
+        if (direct.length === 0 && folders.length === 0 && target !== "" && !directories.has(target)) return notFound(response)
         return json(response, 200, {
           type: "directory",
           path: target,
-          content: direct.map((name) => ({ name: name.slice(prefix.length), path: name, type: "file", size: contents.get(name)!.length })),
+          content: [
+            ...folders.map((name) => ({ name: name.slice(prefix.length), path: name, type: "directory" })),
+            ...direct.map((name) => ({ name: name.slice(prefix.length), path: name, type: "file", size: contents.get(name)!.length })),
+          ],
         })
       }
       if (method === "PUT") {
-        const input = JSON.parse(body.toString("utf8") || "{}") as { format?: string; content?: string; chunk?: number }
+        const input = JSON.parse(body.toString("utf8") || "{}") as { type?: string; format?: string; content?: string; chunk?: number }
+        const parent = target.split("/").slice(0, -1).join("/")
+        if (input.type === "directory") {
+          // Jupyter's contents API creates one directory per request and needs its parent
+          // (https://jupyter-server.readthedocs.io/en/stable/developers/rest-api.html#post--api-contents-path).
+          // The fake answers 409 for an existing folder; Jupyter answers 200/201, and the client accepts both.
+          const clean = target.replace(/\/+$/, "")
+          if (clean !== "" && !directories.has(parent)) return notFound(response)
+          if (directories.has(clean)) return json(response, 409, { message: "File already exists", reason: "exists" })
+          directories.add(clean)
+          return json(response, 201, { type: "directory", path: clean })
+        }
         if (input.format !== "base64" || typeof input.content !== "string") return json(response, 400, { message: "bad contents write" })
+        // The fake answers 404 for a missing parent (Jupyter answers 500); the client makes the parents first.
+        if (!directories.has(parent)) return notFound(response)
         const bytes = Buffer.from(input.content, "base64")
         if (typeof input.chunk === "number") {
           // Jupyter's AsyncLargeFileManager: chunk 1 starts, -1 ends, the pieces in between append.
