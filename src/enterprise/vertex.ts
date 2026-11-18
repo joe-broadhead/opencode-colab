@@ -170,7 +170,12 @@ export function createVertex(env: PortEnv, options: VertexOptions = {}): VertexA
     }
   }
 
-  /** A job's operations, newest page first as Google returns them; one page is enough for a create LRO. */
+  /**
+   * A job's operations (`GET v1/{job}/operations`, `notebookExecutionJobs.operations.list`). A job that does not exist
+   * answers 404 NOT_FOUND with Google's documented envelope (`{ "error": { "code", "message", "status" } }`, API Design
+   * Guide: https://cloud.google.com/apis/design/errors), which becomes the plugin's NOT_FOUND; the reconcile reads that
+   * and the job's own 404 together as "the create never landed".
+   */
   const listOperations = async (account: string, job: string, signal: AbortSignal): Promise<readonly { readonly name: string; readonly done: boolean }[]> => {
     const answer = await call(account, "GET", `${fullName(account, "notebookExecutionJobs", job)}/operations?pageSize=100`, { retry: read, signal })
     return listOf(answer.operations).map((operation) => ({ name: text(operation.name) ?? "", done: operation.done === true }))

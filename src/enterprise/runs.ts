@@ -141,7 +141,7 @@ export const isPendingCreate = (run: RunRecord) => run.backend === "enterprise" 
  * record keyed by the client-chosen job id, which `reconcileCreate` finds before any later create.
  */
 export async function openJobCreate(env: { readonly ledger: Ledger; readonly clock: { now(): Date } }, account: string, jobId: string, input: { readonly notebook?: string; readonly summary: string }): Promise<void> {
-  if (await env.ledger.getRun(jobId)) return
+  // Always a fresh pending record: a retried create reuses the id of a record that was settled as never created.
   await env.ledger.putRun({
     runId: jobId,
     account,
@@ -160,11 +160,12 @@ export async function openJobCreate(env: { readonly ledger: Ledger; readonly clo
 export async function confirmJobCreate(env: { readonly ledger: Ledger; readonly clock: { now(): Date } }, account: string, job: EnterpriseJob, operation?: string): Promise<void> {
   const runId = lastSegment(job.name)
   const existing = await env.ledger.getRun(runId)
-  const { errorCode: _drop, ...rest } = existing ?? { runId, account, backend: "enterprise" as const, job: job.name, startedAt: job.createTime ?? env.clock.now().toISOString(), state: "running" as const, cellIds: [], outputPaths: [], summary: `Colab Enterprise job ${runId}` }
+  const { errorCode: _code, endedAt: _ended, ...rest } = existing ?? { runId, account, backend: "enterprise" as const, job: job.name, startedAt: job.createTime ?? env.clock.now().toISOString(), state: "running" as const, cellIds: [], outputPaths: [], summary: `Colab Enterprise job ${runId}` }
   const finished = isTerminal(job.state)
   await env.ledger.putRun({
     ...rest,
-    ...(finished ? { endedAt: job.endTime ?? env.clock.now().toISOString(), state: terminalRunState(job.state) } : { state: "running" }),
+    state: finished ? terminalRunState(job.state) : "running",
+    ...(finished ? { endedAt: job.endTime ?? env.clock.now().toISOString() } : {}),
     ...(operation !== undefined && operation !== "" ? { operation } : {}),
     summary: String(rest.summary).replace(/ \(create unconfirmed\)$/, ""),
   })
@@ -185,34 +186,63 @@ export interface ReconcileEnv {
   readonly vertex: VertexApi
 }
 
+export type ReconcileResult = { readonly status: "none" } | { readonly status: "retry"; readonly jobId: string }
+
 /**
- * Before a create, settle every unresolved create for this account and notebook: a job that exists or an operation still
- * running blocks the new create with UNCERTAIN; nothing at all means the earlier create never landed, so its record is
- * closed and the new one may proceed (review R1).
+ * Before a create, settle every unresolved create for this account and notebook (reviews R1 and R3).
+ *
+ * - The job exists (or an operation is still running): the new create is refused with UNCERTAIN and the job named.
+ * - Google answers an authoritative 404 NOT_FOUND for **both** the job (by its client-chosen id) and its create
+ *   operation (`notebookExecutionJobs.operations.list`): the earlier create never landed, so its record is closed and
+ *   the result says to retry **with the same id** — a create that arrived late then joins rather than doubling.
+ * - Any other answer (a transient error, a 5xx, an unexpected 200) keeps the record pending and says how to resolve it.
+ *
+ * Google's 404 carries its documented envelope (`{ "error": { "code": 404, "message", "status": "NOT_FOUND" } }`; API
+ * Design Guide, errors: https://cloud.google.com/apis/design/errors); the port maps it to NOT_FOUND, and a NOT_FOUND
+ * from `listJobOperations` means the job — and therefore any create operation under it — does not exist.
  */
-export async function reconcileCreate(env: ReconcileEnv, account: string, settings: EnterpriseSettings, notebook: string | undefined, read: ProviderRead, signal: AbortSignal): Promise<"none" | "cleared"> {
+export async function reconcileCreate(env: ReconcileEnv, account: string, settings: EnterpriseSettings, notebook: string | undefined, read: ProviderRead, signal: AbortSignal): Promise<ReconcileResult> {
   const pending = (await env.ledger.listRuns({ account })).filter(isPendingCreate).filter((run) => notebook === undefined || run.notebook === undefined || run.notebook === notebook)
-  if (pending.length === 0) return "none"
-  let cleared = false
-  for (const run of pending) {
-    const name = jobResource(settings, run.runId)
-    await read(OPERATIONS.jobsGet)
-    const job = await env.vertex.getJob(account, name, signal)
-    await read(OPERATIONS.jobOperationsList)
-    const operations = await env.vertex.listJobOperations(account, name, signal)
-    if (job) {
-      await confirmJobCreate(env, account, job, operations.find((operation) => !operation.done)?.name ?? operations[0]?.name)
-      throw new ColabError("UNCERTAIN", `The earlier create ${run.runId} was left unconfirmed, and its job exists.`, {
-        next: `Read it with colab_execution({ job: "${run.runId}" }), or delete it with a job.delete plan, before planning another job.`,
-      })
-    }
-    if (operations.some((operation) => !operation.done)) {
-      throw new ColabError("UNCERTAIN", `The earlier create ${run.runId} left an operation still running.`, { next: "colab_jobs lists the account's jobs before planning again." })
-    }
-    await abandonJobCreate(env, account, run.runId, "UNCERTAIN")
-    cleared = true
+  if (pending.length === 0) return { status: "none" }
+  // One unconfirmed create per notebook at most: the create path refuses a second while one is pending.
+  const run = pending[0]!
+  const name = jobResource(settings, run.runId)
+  const uncertain = (detail: string) =>
+    new ColabError("UNCERTAIN", `The earlier create ${run.runId} could not be reconciled: ${detail}.`, {
+      next: `Check colab_jobs and the network, then plan again; if the job exists, read it with colab_execution({ job: "${run.runId}" }) or delete it with a job.delete plan.`,
+    })
+  await read(OPERATIONS.jobsGet)
+  let job: EnterpriseJob | undefined
+  try {
+    job = await env.vertex.getJob(account, name, signal)
+  } catch (error) {
+    // getJob maps a 404 to undefined; anything thrown is not the authoritative answer, so the record stays pending.
+    throw uncertain(ColabError.is(error) ? `${error.code}: ${error.detail}` : "the job lookup failed")
   }
-  return cleared ? "cleared" : "none"
+  let operations: readonly { readonly name: string; readonly done: boolean }[] = []
+  let absent = false
+  try {
+    await read(OPERATIONS.jobOperationsList)
+    operations = await env.vertex.listJobOperations(account, name, signal)
+  } catch (error) {
+    if (ColabError.is(error) && error.code === "NOT_FOUND") absent = true
+    else throw uncertain(ColabError.is(error) ? `${error.code}: ${error.detail}` : "the operation lookup failed")
+  }
+  if (job) {
+    await confirmJobCreate(env, account, job, operations.find((operation) => !operation.done)?.name ?? operations[0]?.name)
+    throw new ColabError("UNCERTAIN", `The earlier create ${run.runId} was left unconfirmed, and its job exists.`, {
+      next: `Read it with colab_execution({ job: "${run.runId}" }), or delete it with a job.delete plan, before planning another job.`,
+    })
+  }
+  if (operations.some((operation) => !operation.done)) {
+    throw new ColabError("UNCERTAIN", `The earlier create ${run.runId} left an operation still running.`, { next: "colab_jobs lists the account's jobs before planning again." })
+  }
+  if (!absent) {
+    // The job is absent (404) but its operations list answered 200: Google does not do that, so do not guess.
+    throw uncertain("the operations list answered for a job that does not exist")
+  }
+  await abandonJobCreate(env, account, run.runId, "UNCERTAIN")
+  return { status: "retry", jobId: run.runId }
 }
 
 async function poll(env: EnterpriseRunsEnv, account: string, name: string, waitSeconds: number, options: RunsOptions, signal: AbortSignal, read: ProviderRead): Promise<EnterpriseJob> {

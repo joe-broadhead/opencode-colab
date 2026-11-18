@@ -220,6 +220,15 @@ describe("operations, paging and the reconcile filter (Day 0 amendment)", () => 
     expect(calls[0]!.url).toBe("https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-1/operations?pageSize=100")
   })
 
+  it("answers NOT_FOUND for a job's operations when Google says the job does not exist", async () => {
+    // Google's documented 404 body: { "error": { "code": 404, "message", "status": "NOT_FOUND" } }
+    // (API Design Guide, errors: https://cloud.google.com/apis/design/errors).
+    const { fetch: fetchImpl, calls } = scripted([{ status: 404, body: { error: { code: 404, status: "NOT_FOUND", message: "The notebook execution job does not exist." } } }])
+    const vertex = createVertex(env(fetchImpl).base, { retryDelayMs: 0 })
+    await expect(vertex.listJobOperations("work", "oc-job-gone", new AbortController().signal)).rejects.toMatchObject({ code: "NOT_FOUND" })
+    expect(calls[0]!.url).toContain("/notebookExecutionJobs/oc-job-gone/operations")
+  })
+
   it("follows a list's nextPageToken, and sends the reconcile's exact display-name filter", async () => {
     const one = { name: "projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-1", displayName: "one", jobState: "JOB_STATE_RUNNING" }
     const two = { name: "projects/proj/locations/us-central1/notebookExecutionJobs/oc-job-2", displayName: "two", jobState: "JOB_STATE_RUNNING" }

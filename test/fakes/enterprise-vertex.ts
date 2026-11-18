@@ -29,6 +29,8 @@ export class ScriptedVertex extends FakeVertex {
   /** False models L11's bad answer: cancel is accepted but the job keeps running. */
   cancelStops = true
   failNextCreate?: ColabError
+  /** A transient failure of the next job lookup: the reconcile must keep its record UNCERTAIN. */
+  failNextGetJob?: ColabError
   failNextScheduleCreate?: ColabError
   /** Model a lost answer: store the schedule, then throw UNAVAILABLE, as a timeout after the create landed would. */
   loseNextScheduleCreate = false
@@ -76,6 +78,27 @@ export class ScriptedVertex extends FakeVertex {
     this.operationJobs.set(operation, name)
     this.operations.set(name, [...(this.operations.get(name) ?? []), { name: operation, done: false }])
     return { job, operation }
+  }
+
+  override async getJob(account: string, name: string) {
+    this.calls.push({ method: "getJob", args: [account, name] })
+    if (this.failNextGetJob) {
+      const error = this.failNextGetJob
+      this.failNextGetJob = undefined
+      throw error
+    }
+    return this.jobs.get(name) as ScriptedJob | undefined
+  }
+
+  /**
+   * Google answers 404 NOT_FOUND — its documented envelope, `{ "error": { "code": 404, "message", "status":
+   * "NOT_FOUND" } }` (API Design Guide, errors: https://cloud.google.com/apis/design/errors) — for a job that does not
+   * exist, and so for the operations under it. The port answers NOT_FOUND, not an empty list.
+   */
+  override async listJobOperations(account: string, job: string) {
+    this.calls.push({ method: "listJobOperations", args: [account, job] })
+    if (!this.jobs.has(job)) throw new ColabError("NOT_FOUND", "The job was not found, so it has no operations (a 404 NOT_FOUND with Google's documented error body).")
+    return this.operations.get(job) ?? []
   }
 
   /** Moves a job to a terminal (or any) state, as Google would. */

@@ -212,18 +212,20 @@ const jobCreate: PlanHandler<"job.create"> = {
       sessionId: ctx.call.sessionID,
     })
     const notebook = payload.notebook.path ?? payload.notebook.gcs
-    // Settle any earlier create that was left unconfirmed before this plan may create another (review R1).
-    await reconcileCreate(ctx.deps, ctx.account.alias, settings, notebook, ctx.providerRead, ctx.call.signal)
+    // Settle any earlier create that was left unconfirmed before this plan may create another (reviews R1 and R3). A
+    // create that Google's own 404s prove never landed is retried with its id, so a late-arriving one joins.
+    const reconciled = await reconcileCreate(ctx.deps, ctx.account.alias, settings, notebook, ctx.providerRead, ctx.call.signal)
+    const jobId = reconciled.status === "retry" ? reconciled.jobId : payload.jobId
     // The intent goes to the ledger before the call: a lost answer, a Stop or a crash leaves a record that blocks a
     // second create until it is reconciled.
-    await openJobCreate(ctx.deps, ctx.account.alias, payload.jobId, { ...(notebook !== undefined ? { notebook } : {}), summary: `Colab Enterprise job ${payload.jobId}` })
+    await openJobCreate(ctx.deps, ctx.account.alias, jobId, { ...(notebook !== undefined ? { notebook } : {}), summary: `Colab Enterprise job ${jobId}` })
     let created: Awaited<ReturnType<typeof ctx.deps.vertex.createJob>>
     try {
-      created = await ctx.deps.vertex.createJob(ctx.account.alias, { jobId: payload.jobId, body }, ctx.call.signal)
+      created = await ctx.deps.vertex.createJob(ctx.account.alias, { jobId, body }, ctx.call.signal)
     } catch (error) {
       // An uncertain outcome or a Stop may still have landed: leave the record pending. A definitive refusal did not.
       if (ColabError.is(error) && (error.code === "UNCERTAIN" || error.code === "CANCELLED")) throw error
-      await abandonJobCreate(ctx.deps, ctx.account.alias, payload.jobId, ColabError.is(error) ? error.code : "UNAVAILABLE")
+      await abandonJobCreate(ctx.deps, ctx.account.alias, jobId, ColabError.is(error) ? error.code : "UNAVAILABLE")
       throw error
     }
     rememberOperation(created.job.name, created.operation ?? "")
@@ -236,6 +238,7 @@ const jobCreate: PlanHandler<"job.create"> = {
       usdPerHour: usd(priceOf({ machine: payload.machine, ...(payload.accelerator !== undefined ? { accelerator: payload.accelerator } : {}), ...(ctx.deps.options.rates !== undefined ? { rates: ctx.deps.options.rates } : {}) })?.usdPerHour),
       estimateUsd: usd(payload.estimateUsd),
       pricesAsOf: PRICES_AS_OF,
+      ...(reconciled.status === "retry" ? { message: `The earlier create ${reconciled.jobId} never landed, so this create reused its id.` } : {}),
     }
   },
 }

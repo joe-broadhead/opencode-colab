@@ -264,23 +264,43 @@ describe("a create's intent is in the ledger before the call (review R1)", () =>
     // job and creating another is then an ordinary, deliberate pair of steps.
     vertex.jobs.delete(jobName(first.preview.jobId))
     const third = await plan(runner, path)
-    expect(await runTool("write", { planId: third.planId }, call(), runner)).toMatchObject({ state: "ok" })
+    expect(await runTool("write", { planId: third.planId }, call(), runner)).toMatchObject({ state: "ok", result: { id: third.preview.jobId } })
     expect(await ledger.getRun(first.preview.jobId)).toMatchObject({ state: "running" })
     expect((await ledger.getRun(first.preview.jobId))!.errorCode).toBeUndefined()
   })
 
-  it("a create stopped mid-call leaves a record, and the next create reconciles it", async () => {
+  it("a create stopped mid-call leaves a record, and the next create reuses its id (R3)", async () => {
     const { directory, path } = workspace()
     const { runner, vertex, ledger } = setup(directory)
     const first = await plan(runner, path)
     vertex.failNextCreate = new ColabError("CANCELLED", "The call stopped before the job's create was confirmed.", { next: "colab_jobs lists the account's jobs before planning again." })
     expect(await runTool("write", { planId: first.planId }, call(), runner)).toMatchObject({ state: "failed", error: "CANCELLED" })
     expect(await ledger.getRun(first.preview.jobId)).toMatchObject({ state: "running", errorCode: "UNCERTAIN" })
-    // No job, no operation: the next plan settles the record and creates its own job.
+    // The job is absent and Google answers 404 for it and its operations: the next plan retries with the same id, so a
+    // late-arriving create joins rather than doubling.
     const second = await plan(runner, path)
-    expect(await runTool("write", { planId: second.planId }, call(), runner)).toMatchObject({ state: "ok" })
-    expect(await ledger.getRun(first.preview.jobId)).toMatchObject({ state: "failed", endedAt: expect.any(String) })
-    expect(vertex.jobBodies.map((entry) => entry.jobId)).toEqual([first.preview.jobId, second.preview.jobId])
+    const committed = (await runTool("write", { planId: second.planId }, call(), runner)) as { state: string; result: Record<string, unknown> }
+    expect(committed).toMatchObject({ state: "ok", result: { id: first.preview.jobId, message: expect.stringContaining("reused its id") } })
+    expect(vertex.jobBodies.map((entry) => entry.jobId)).toEqual([first.preview.jobId, first.preview.jobId])
+    expect(await ledger.getRun(first.preview.jobId)).toMatchObject({ state: "running", operation: expect.any(String) })
+    expect((await ledger.getRun(first.preview.jobId))!.errorCode).toBeUndefined()
+  })
+
+  it("keeps the record UNCERTAIN when the reconcile's lookup fails transiently", async () => {
+    const { directory, path } = workspace()
+    const { runner, vertex, ledger } = setup(directory)
+    const first = await plan(runner, path)
+    vertex.failNextCreate = new ColabError("UNCERTAIN", "The job create's answer was lost.", { next: "colab_jobs lists the account's jobs before planning again." })
+    await runTool("write", { planId: first.planId }, call(), runner)
+    vertex.failNextGetJob = new ColabError("UNAVAILABLE", "Google answered 5xx after retries.")
+    const second = await plan(runner, path)
+    expect(await runTool("write", { planId: second.planId }, call(), runner)).toMatchObject({
+      error: "UNCERTAIN",
+      message: expect.stringContaining(first.preview.jobId),
+      next: expect.stringContaining("Check colab_jobs"),
+    })
+    expect(await ledger.getRun(first.preview.jobId)).toMatchObject({ state: "running", errorCode: "UNCERTAIN" })
+    expect(vertex.jobBodies).toHaveLength(1)
   })
 
   it("a process restart still sees the record and blocks a second job for the same notebook", async () => {
