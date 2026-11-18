@@ -51,6 +51,32 @@ for (const [kind, make] of kinds) {
       expect(await ledger.getRun("missing")).toBeUndefined()
     })
 
+    it("appends run.finished once per transition to final: none for a rewrite of a final record, one again after a reopen", async () => {
+      const ledger = make(new FakeClock())
+      const finished = async () => (await ledger.eventsSince(0, 100)).events.filter((event) => event.type === "run.finished" && event.id === "run-f").length
+      await ledger.putRun(run("run-f", { state: "running" }))
+      expect(await finished()).toBe(0)
+      await ledger.putRun(run("run-f", { state: "detached" }))
+      expect(await finished()).toBe(0)
+      await ledger.putRun(run("run-f", { state: "ok", endedAt: "2026-11-17T09:05:00.000Z" }))
+      expect(await finished()).toBe(1)
+      await ledger.putRun(run("run-f", { state: "ok", endedAt: "2026-11-17T09:05:00.000Z", outputPaths: ["x"] }))
+      expect(await finished()).toBe(1)
+      await ledger.putRun(run("run-f", { state: "running" }))
+      await ledger.putRun(run("run-f", { state: "error", endedAt: "2026-11-17T09:09:00.000Z" }))
+      expect(await finished()).toBe(2)
+      // A final state with no end time is not final yet.
+      await ledger.putRun(run("run-g", { state: "ok" }))
+      expect((await ledger.eventsSince(0, 100)).events.some((event) => event.id === "run-g")).toBe(false)
+    })
+
+    it("keeps an Enterprise job's USD estimate, so the daily budget can price the day", async () => {
+      const ledger = make(new FakeClock())
+      await ledger.putRun(run("job-1", { backend: "enterprise", job: "jobs/oc-job-1", estimatedUsd: 4.9 }))
+      expect((await ledger.getRun("job-1"))?.estimatedUsd).toBe(4.9)
+      expect((await ledger.listRuns({ account: "default" })).find((record) => record.runId === "job-1")?.estimatedUsd).toBe(4.9)
+    })
+
     it("keeps a run's kernel session name, so a detached run can be cancelled", async () => {
       const ledger = make(new FakeClock())
       await ledger.putRun(run("run-s", { state: "detached", session: "oc-n0nce-scratch" }))
@@ -104,6 +130,16 @@ describe("the file ledger on disk", () => {
     expect(await ledger.prune(clock.now())).toBe(2)
     expect((await ledger.listRuntimes()).map((record) => record.id)).toEqual(["oc-02"])
     expect((await ledger.listRuns()).map((record) => record.runId)).toEqual(["run-2"])
+  })
+
+  it("never reuses a sequence number when a crash left meta.json behind the log", async () => {
+    const dir = temp()
+    const ledger = new FileLedger(dir, { ledgerDays: 90 })
+    await ledger.append({ type: "run.finished", id: "a", account: "default" })
+    await ledger.append({ type: "run.finished", id: "b", account: "default" })
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ nextSeq: 2 }))
+    const next = await ledger.append({ type: "run.finished", id: "c", account: "default" })
+    expect(next.seq).toBe(3)
   })
 
   it("refuses an id that cannot be a file name", async () => {

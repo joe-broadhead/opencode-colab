@@ -334,6 +334,9 @@
         "kind": "events",
         "reads": "x-colab/run",
         "tool": "events_list",
+        "input": {
+          "source": "runs"
+        },
         "accounts": {
           "named": true
         },
@@ -341,8 +344,7 @@
           "events": "colab.events_list",
           "operations": [
             "colab.ledger.list"
-          ],
-          "identity": []
+          ]
         },
         "private": true,
         "cost": {
@@ -355,6 +357,9 @@
         "id": "colab.runtimes",
         "kind": "snapshot",
         "tool": "runtimes_read",
+        "input": {
+          "source": "runtimes"
+        },
         "output": "list",
         "accounts": {
           "named": true
@@ -364,8 +369,7 @@
           "operations": [
             "colaboratory.runtimes.list",
             "aiplatform.projects.locations.notebookRuntimes.list"
-          ],
-          "identity": []
+          ]
         },
         "private": true,
         "cost": {

@@ -129,8 +129,8 @@ async function record(env: EnterpriseRunsEnv, account: string, job: EnterpriseJo
       : {}),
     summary: existing.summary,
   }
+  // putRun appends run.finished itself on the transition to final (Day 0, colab-15 request 5).
   await env.ledger.putRun(run)
-  if (finished && !existing.endedAt) await env.ledger.append({ type: "run.finished", id: runId, account })
 }
 
 /** A create whose outcome is unknown: the record exists, the job may, and no second create may start until resolved. */
@@ -177,7 +177,6 @@ export async function abandonJobCreate(env: { readonly ledger: Ledger; readonly 
   if (!existing) return
   const { errorCode: _drop, endedAt: _old, ...rest } = existing
   await env.ledger.putRun({ ...rest, state: "failed", endedAt: env.clock.now().toISOString(), errorCode: code, summary: String(existing.summary ?? "").replace(/ \(create unconfirmed\)$/, "") })
-  await env.ledger.append({ type: "run.finished", id: jobId, account })
 }
 
 export interface ReconcileEnv {

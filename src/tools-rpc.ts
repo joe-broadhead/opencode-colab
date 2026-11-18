@@ -15,6 +15,7 @@ import { toolsRpcId } from "@we-the-rebel-alliance/source-contract/tools-rpc"
 import { PLUGIN_ID, STATUS_COMMAND } from "./constants.js"
 import { TOOLS } from "./domain/actions.js"
 import type { ToolName } from "./domain/contract.js"
+import { SourceError } from "@we-the-rebel-alliance/source-contract/events"
 import { ColabError } from "./domain/errors.js"
 import { sourceMethods } from "./sources/index.js"
 import { type Runner, scriptMethod } from "./tools/spec.js"
@@ -26,7 +27,8 @@ export const TOOLS_RPC_ID = toolsRpcId(PLUGIN_ID)
 export const METHOD_NAMES: readonly string[] = [...TOOLS.filter((tool) => tool.class === "read").map((tool) => tool.name), "probe"]
 
 export function methods(runner: Runner): readonly MethodSpec[] {
-  return [...TOOLS.filter((tool) => tool.class === "read").map((tool) => scriptMethod(tool.name as ToolName, runner)), ...sourceMethods()]
+  // The probe reads accounts and the ledger through the runner, as the read methods do (colab-15 request 2).
+  return [...TOOLS.filter((tool) => tool.class === "read").map((tool) => scriptMethod(tool.name as ToolName, runner)), ...(sourceMethods as (runner: Runner) => readonly MethodSpec[])(runner)]
 }
 
 /** The next step for each code the module itself raises. Each is one sentence that ends with a full stop. */
@@ -40,6 +42,8 @@ export const NEXT_STEPS: NextSteps = {
 
 /** The plugin's own errors, thrown by a method, as a code, what happened and the next step. */
 export function pluginError(error: unknown): Failure | undefined {
+  // A source read's refusal is the contract's own code (colab-15 request 3), before the plugin's.
+  if (error instanceof SourceError) return { code: error.code, what: error.what, next: error.next, ...(error.retryAfterSec !== undefined ? { retryAfterSec: error.retryAfterSec } : {}) } as Failure
   return ColabError.is(error) ? { code: error.code, what: error.detail.replace(/\.$/, ""), next: error.next } : undefined
 }
 

@@ -8,6 +8,7 @@
  */
 import { createHash, randomUUID } from "node:crypto"
 import { PlanStore } from "../../src/domain/plans.js"
+import { isFinal } from "../../src/ledger/store.js"
 import { ColabError } from "../../src/domain/errors.js"
 import type { Deps } from "../../src/deps.js"
 import { createRunEvents } from "../../src/events.js"
@@ -497,9 +498,11 @@ export class FakeEnterpriseRuns implements EnterpriseRuns {
 export class FakeBudget implements Budget {
   readonly checks: { account: string; action: string; usd?: number; runtimeHours?: number }[] = []
   verdict: "ok" | "warn" | "refuse" = "ok"
-  async check(account: string, input: { action: "runtime.create" | "job.create" | "schedule.create" | "schedule.resume"; usd?: number; runtimeHours?: number }) {
+  /** The unit the answer's figures are in: USD for Enterprise, runtime-hours for consumer. */
+  unit: "usd" | "runtime-hours" = "usd"
+  async check(account: string, input: { action: "runtime.create" | "job.create" | "schedule.create" | "schedule.resume"; usd?: number; runtimeHours?: number }, _signal?: AbortSignal) {
     this.checks.push({ account, ...input })
-    return { verdict: this.verdict, ...(this.verdict === "ok" ? {} : { spentUsd: 10, limitUsd: 10 }) }
+    return { verdict: this.verdict, ...(this.verdict === "ok" ? {} : { spent: 10, limit: 10, unit: this.unit }) }
   }
 }
 
@@ -598,8 +601,11 @@ export class MemoryLedger implements Ledger {
     await this.append({ type: "runtime.tainted", id, account: record.account })
     return next
   }
+  /** As the file ledger: appends `run.finished` when this write makes the run final and it was not before. */
   async putRun(record: RunRecord) {
+    const previous = this.runs.get(record.runId)
     this.runs.set(record.runId, record)
+    if (isFinal(record) && (previous === undefined || !isFinal(previous))) await this.append({ type: "run.finished", id: record.runId, account: record.account })
   }
   async getRun(runId: string) {
     return this.runs.get(runId)

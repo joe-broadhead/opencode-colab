@@ -409,6 +409,11 @@ export interface RunRecord {
    * so `colab_cancel` can reach a detached run.
    */
   readonly session?: string
+  /**
+   * An Enterprise job's USD estimate at commit, from the dated price table (package E), so the daily budget and
+   * `cost.enterprise.jobsToday` are complete; never a consumer figure.
+   */
+  readonly estimatedUsd?: number
   /** For the colab.runs title: plugin words only, never notebook text. */
   readonly summary?: string
 }
@@ -526,7 +531,17 @@ export interface Budget {
     account: string,
     input: { readonly action: "runtime.create" | "job.create" | "schedule.create" | "schedule.resume"; readonly usd?: number; readonly runtimeHours?: number },
     signal: AbortSignal,
-  ): Promise<{ readonly verdict: "ok" | "warn" | "refuse"; readonly spentUsd?: number; readonly limitUsd?: number }>
+  ): Promise<{
+    readonly verdict: "ok" | "warn" | "refuse"
+    /** What the day has spent and the limit, in `unit`: USD for an Enterprise budget, runtime-hours for a consumer one. */
+    readonly spent?: number
+    readonly limit?: number
+    readonly unit?: "usd" | "runtime-hours"
+    /** @deprecated Read `spent` and `unit`; kept only until package E's merged code moves off it. Never set it. */
+    readonly spentUsd?: number
+    /** @deprecated Read `limit` and `unit`; kept only until package E's merged code moves off it. Never set it. */
+    readonly limitUsd?: number
+  }>
 }
 
 /**

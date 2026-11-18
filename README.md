@@ -12,7 +12,7 @@ endorsed by Google.
 
 ## Requirements
 
-- OpenCode `>=2.2.3 <2.4.0`, tested on 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7 and 2.3.0. Outside that range the plugin does
+- OpenCode `>=2.2.3 <2.4.0`, tested on 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.1 and 2.3.2. Outside that range the plugin does
   not load, unless you set [`allowUntestedHost`](docs/configuration.md).
 - macOS or Linux.
 - A Google account. GPUs need Colab Pro, Pro+ or Pay-As-You-Go compute units; Colab Enterprise needs a Google Cloud

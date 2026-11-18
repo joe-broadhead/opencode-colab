@@ -69,8 +69,18 @@ export class FileLedger implements Ledger {
     })
   }
 
+  /**
+   * Writes the run, and in the same locked section appends `run.finished` when this write makes it final and the
+   * previous record was absent or not final (colab-15 request 5): one entry per transition to final, none for a
+   * rewrite of a final record, and one again after a reopen. A reader that sees the entry sees the final record too.
+   */
   async putRun(record: RunRecord): Promise<void> {
-    await this.locked(() => this.writeJson(join(this.folder("runs"), `${checkId(record.runId)}.json`), record))
+    await this.locked(() => {
+      const path = join(this.folder("runs"), `${checkId(record.runId)}.json`)
+      const previous = this.readJson<RunRecord>(path)
+      this.writeJson(path, record)
+      if (isFinal(record) && (previous === undefined || !isFinal(previous))) this.appendLocked({ type: "run.finished", id: record.runId, account: record.account })
+    })
   }
 
   async getRun(runId: string): Promise<RunRecord | undefined> {
@@ -120,7 +130,9 @@ export class FileLedger implements Ledger {
   // ── Internals ─────────────────────────────────────────────────────────
 
   private appendLocked(event: Omit<LedgerEvent, "seq" | "at">): LedgerEvent {
-    const meta = this.readMeta()
+    // The log is written before meta.json, so a crash between the two leaves nextSeq behind: never reuse a number.
+    const seq = Math.max(this.readMeta().nextSeq, (this.readEvents().at(-1)?.seq ?? 0) + 1)
+    const meta = { nextSeq: seq }
     const full: LedgerEvent = { ...event, seq: meta.nextSeq, at: this.clock.now().toISOString() }
     const path = join(this.dir, "events.jsonl")
     const before = existsSync(path) ? readFileSync(path, "utf8") : ""
@@ -234,6 +246,11 @@ export class FileLedger implements Ledger {
       return false
     }
   }
+}
+
+/** A run is final once it has ended in a state that is neither running nor detached. */
+export function isFinal(run: RunRecord): boolean {
+  return run.state !== "running" && run.state !== "detached" && run.endedAt !== undefined
 }
 
 /** Ids become file names, so they are held to a safe shape. */

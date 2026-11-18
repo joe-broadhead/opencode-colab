@@ -44,6 +44,12 @@ describe("the error table", () => {
     expect([error.state, error.reason]).toEqual(["refused", "session-control"])
   })
 
+  it("RUNTIME_BUSY names both meanings: a run of the plugin's own, or another OpenCode process", () => {
+    const text = new ColabError("RUNTIME_BUSY").message
+    expect(text).toMatch(/a run of the plugin's own is active on it/)
+    expect(text).toMatch(/another OpenCode process is using it/)
+  })
+
   it("maps sign-in, scope, quota and outage codes to the source contract's", () => {
     expect(SOURCE_CODES).toMatchObject({ AUTH_REQUIRED: "NEEDS_SIGN_IN", AUTH_SCOPE_MISSING: "SCOPE_MISSING", RATE_LIMITED: "RATE_LIMITED", UNAVAILABLE: "UNAVAILABLE" })
   })
@@ -55,7 +61,7 @@ describe("the error table", () => {
   it("every code a source file names is in the table", () => {
     const known = new Set<string>([...ERROR_CODES, ...WARNING_CODES])
     // The source contract's and OpenCode's own codes, and Google's enum values and ErrorInfo reasons.
-    const foreign = /^(NEEDS_SIGN_IN|SCOPE_MISSING|TOO_LARGE|CURSOR_\w+|SESSION_UNKNOWN|SESSION_AGENT_REQUIRED|ACCOUNT_MISMATCH|VARIANT_\w+|SHAPE_\w+|SUBSCRIPTION_TIER_\w+|JOB_STATE_\w+|ALREADY_EXISTS|FAILED_PRECONDITION|RESOURCE_EXHAUSTED|GOOGLE_APPLICATION_CREDENTIALS|ACCESS_TOKEN_SCOPE_INSUFFICIENT|XDG_STATE_HOME)$/
+    const foreign = /^(NEEDS_SIGN_IN|SCOPE_MISSING|SOURCE_UNKNOWN|TOO_LARGE|CURSOR_\w+|SESSION_UNKNOWN|SESSION_AGENT_REQUIRED|ACCOUNT_MISMATCH|VARIANT_\w+|SHAPE_\w+|SUBSCRIPTION_TIER_\w+|JOB_STATE_\w+|ALREADY_EXISTS|FAILED_PRECONDITION|RESOURCE_EXHAUSTED|GOOGLE_APPLICATION_CREDENTIALS|ACCESS_TOKEN_SCOPE_INSUFFICIENT|XDG_STATE_HOME)$/
     const named = walk("src").flatMap((file) => [...read(file).matchAll(/["'`]([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)["'`:]/g)].map((match) => [file, match[1]!] as const))
     expect(named.filter(([, code]) => !known.has(code) && !foreign.test(code))).toEqual([])
   })

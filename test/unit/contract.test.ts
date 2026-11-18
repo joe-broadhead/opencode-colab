@@ -7,7 +7,7 @@ import { CONTRACTS, Failure, PLAN_PARAMS } from "../../src/domain/contract.js"
 import { OPERATIONS } from "../../src/domain/actions.js"
 import type { DriveApi, EnterpriseSchedule, KernelSession, Listed, NotebookStore, RunRecord, RuntimeProtocol, VertexApi } from "../../src/ports.js"
 import { NO_NOTEBOOKS, NO_PRICES, OK_BUDGET } from "../../src/stub.js"
-import { FakeDrive, FakeDriveSync, FakeEnterpriseRuns, FakeNotebookStore, FakePrices, FakeRuntimeProtocol, FakeVertex } from "../fakes/index.js"
+import { FakeBudget, FakeDrive, FakeDriveSync, FakeEnterpriseRuns, FakeNotebookStore, FakePrices, FakeRuntimeProtocol, FakeVertex } from "../fakes/index.js"
 
 const ok = (schema: z.ZodType, value: unknown) => schema.safeParse(value).success
 const HASH = `sha256:${"a".repeat(64)}`
@@ -222,5 +222,24 @@ describe("a run's write-back result", () => {
       expect(ok(output, { ...base, writeBack: { state: "refused", error: "MADE_UP", runFolder: ".colab/runs/r1" } })).toBe(false)
       expect(ok(output, { ...base, writeBack: { state: "skipped" } })).toBe(false)
     }
+  })
+})
+
+describe("package F's contract", () => {
+  const status = { state: "ok", accounts: [], runtimes: [], runs: [], cost: {}, cleanup: [], automation: "on", lastErrors: [] }
+
+  it("colab_status may carry attention: up to 20 lines of at most 300 characters", () => {
+    expect(ok(CONTRACTS.status.output, status)).toBe(true)
+    expect(ok(CONTRACTS.status.output, { ...status, attention: ["oc-01: a run recorded running since 09:00 blocks its release; colab_cancel or a plan with force."] })).toBe(true)
+    expect(ok(CONTRACTS.status.output, { ...status, attention: Array.from({ length: 21 }, (_, index) => `line ${index}`) })).toBe(false)
+    expect(ok(CONTRACTS.status.output, { ...status, attention: ["x".repeat(301)] })).toBe(false)
+  })
+
+  it("a budget answer names its unit: USD for Enterprise, runtime-hours for consumer", async () => {
+    const budget = new FakeBudget()
+    budget.verdict = "refuse"
+    expect(await budget.check("work", { action: "job.create", usd: 3 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 10, limit: 10, unit: "usd" })
+    budget.unit = "runtime-hours"
+    expect(await budget.check("home", { action: "runtime.create", runtimeHours: 1 }, new AbortController().signal)).toMatchObject({ unit: "runtime-hours" })
   })
 })

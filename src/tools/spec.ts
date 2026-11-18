@@ -7,6 +7,7 @@
  * Asserted equals declared: the wrapper asserts exactly `actionOf(name)`; colab_write and colab_delete assert
  * `colab.write` / `colab.delete` on their plan's resource in src/plans/route.ts; handlers add only `colab.read`.
  */
+import { SourceError } from "@we-the-rebel-alliance/source-contract/events"
 import type { JsonSchema, MethodClass, PluginMethod } from "@we-the-rebel-alliance/source-contract/tools-rpc"
 import * as z from "zod"
 import { NAMESPACE } from "../constants.js"
@@ -111,7 +112,28 @@ export function assertWritable(account: Pick<HandlerContext["account"], "alias" 
 export const needsWrite = (name: ToolName) => name === "plan" || toolEntry(name).class !== "read"
 
 /** Runs one tool call: the same path for the model's tool and a script's RPC method. */
+/**
+ * The source tools' refusals are the source contract's, thrown (colab-15 request 4): a consumer reads a returned
+ * `{ state, error }` as a page that breaks the contract, and a thrown `SourceError` as its code. The wrapper's own
+ * refusals map INPUT_INVALID to INPUT_INVALID, and ACCOUNT_UNKNOWN / ACCOUNT_REQUIRED to ACCOUNT_MISMATCH.
+ */
+function asSourceRefusal(error: unknown): unknown {
+  if (!ColabError.is(error)) return error
+  if (error.code === "INPUT_INVALID") return new SourceError({ code: "INPUT_INVALID", what: error.detail.replace(/\.$/, ""), next: error.next })
+  if (error.code === "ACCOUNT_UNKNOWN" || error.code === "ACCOUNT_REQUIRED") return new SourceError({ code: "ACCOUNT_MISMATCH", what: error.detail.replace(/\.$/, ""), next: error.next })
+  return error
+}
+
 export async function runTool(name: ToolName, raw: unknown, call: ToolCall, runner: Runner): Promise<unknown> {
+  if (toolEntry(name).source) {
+    // A source read: the wrapper's own refusals are thrown as the contract's, before anything else runs.
+    try {
+      const input = parse(CONTRACTS[name].input, raw) as Record<string, unknown>
+      resolveAccount(runner.deps.options, typeof input.account === "string" ? input.account : undefined)
+    } catch (error) {
+      throw asSourceRefusal(error)
+    }
+  }
   try {
     const input = parse(CONTRACTS[name].input, raw) as Record<string, unknown>
     const handler = runner.handler(name)
