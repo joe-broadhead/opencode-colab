@@ -163,7 +163,7 @@ describe("registration", () => {
     const world = await hooks()
     await world.session.fire("experimental.idle", { sessionID: "ses_1", background: [] })
     expect(world.session.posts).toHaveLength(1)
-    expect(world.session.posts[0]!.text).toContain("automatic release is off at this access level")
+    expect(world.session.posts[0]!.text).toContain("release is off at this access level")
     expect(world.session.posts[0]!.metadata).toMatchObject({ colab: "idle-check" })
 
     // The same fingerprint stays silent.

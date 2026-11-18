@@ -79,7 +79,7 @@ describe("H9: automation consent", () => {
         const answer = await status(host)
         expect(isStatus(answer)).toBe(true)
         expect(answer.automation, JSON.stringify(entry.options)).toBe(entry.automation)
-        expect(answer.cost).toEqual(expect.objectContaining({ runtimesRunning: expect.any(Number), complete: expect.any(Boolean) }))
+        expect(answer.cost).toEqual(expect.objectContaining({ runtimesRunning: expect.any(Number), noRunActive: expect.any(Number) }))
       } finally {
         await host.close()
       }

@@ -66,7 +66,7 @@ export const snapshotFingerprint = (snapshot: HookSnapshot): string =>
 export function contextLine(snapshot: HookSnapshot, automation: AutomationState, topCall?: string): string | undefined {
   if (snapshot.runtimes.length === 0) return undefined
   const first = snapshot.runtimes[0]!
-  const line = `colab: ${snapshot.runtimes.length} runtime${snapshot.runtimes.length === 1 ? "" : "s"} of the plugin's own (${first.spec}, ${hours(snapshot.runtimeHoursToday)} today); automatic release ${automation === "on" || automation === "on (consent)" ? "on" : "off"}.`
+  const line = `colab: ${snapshot.runtimes.length} runtime${snapshot.runtimes.length === 1 ? "" : "s"} ours (${first.spec}, ${hours(snapshot.runtimeHoursToday)} today); release ${automation === "on" || automation === "on (consent)" ? "on" : "off"}.`
   return topCall !== undefined && `${line} Cleanup: ${topCall}`.length <= 200 ? `${line} Cleanup: ${topCall}` : line.slice(0, 200)
 }
 
@@ -74,7 +74,7 @@ export function contextLine(snapshot: HookSnapshot, automation: AutomationState,
 export function compactionLine(ids: readonly string[]): string | undefined {
   if (ids.length === 0) return undefined
   const shown = ids.slice(0, 10)
-  return `Keep this list in the summary: colab runtimes open: ${shown.join(", ")}${ids.length > 10 ? `, and ${ids.length - 10} more` : ""}; colab_runtimes lists all.`
+  return `Keep in the summary: colab runtimes open: ${shown.join(", ")}${ids.length > 10 ? `, and ${ids.length - 10} more` : ""}; colab_runtimes lists all.`
 }
 
 /** Appends a text part to the tail of `messages`, leaving `system` and every earlier message byte-identical. */
@@ -107,7 +107,7 @@ export function shouldNoteIdle(input: {
 
 /** The idle note's text: counts, hours and one call, in our own words. */
 export const idleNote = (snapshot: HookSnapshot, automation: AutomationState): string =>
-  `colab: ${snapshot.runtimes.length} runtime${snapshot.runtimes.length === 1 ? " is" : "s are"} running with no run active (${hours(snapshot.runtimeHoursToday)} today) and automatic release is ${automation === "off (access)" ? "off at this access level" : "off"}. Run /colab-cleanup, or release one with colab_plan({ action: "runtime.delete", params: { runtime: "${snapshot.runtimes[0]?.id}" } }).`
+  `colab: ${snapshot.runtimes.length} runtime${snapshot.runtimes.length === 1 ? " is" : "s are"} running with no run active (${hours(snapshot.runtimeHoursToday)} today) and release is ${automation === "off (access)" ? "off at this access level" : "off"}. Run /colab-cleanup, or colab_plan({ action: "runtime.delete", params: { runtime: "${snapshot.runtimes[0]?.id}" } }).`
 
 export interface HookRegistration {
   readonly stop: readonly { dispose(): Promise<void> }[]

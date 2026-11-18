@@ -36,6 +36,7 @@ type StatusOk = {
     readonly euc?: boolean
   }[]
   readonly cost: Record<string, unknown>
+  readonly automation: string
   readonly cleanup: readonly { readonly saving: string; readonly call: string }[]
   readonly warnings?: readonly string[]
   readonly lastErrors: readonly string[]
@@ -110,11 +111,10 @@ describe("colab_status", () => {
     const worldOf = await world()
     const result = await statusOf(worldOf.ctx)
     expect(result.cost).toMatchObject({
-      currency: "USD",
       consumer: { runtimeHoursToday: 2, running: 1, ratesKnown: false },
-      enterprise: { running: 1, usdPerHour: 0.19, jobsToday: { runs: 0, complete: true } },
-      automation: "on",
+      enterprise: { running: 1, usdPerHour: 0.19, jobsToday: { complete: true } },
     })
+    expect(result.automation).toBe("on")
     expect(result.cleanup).toHaveLength(2)
     // Priced savings rank first; each entry is one call and carries what it costs.
     expect(result.cleanup[0]!.call).toContain('"runtime.stop"')
@@ -169,19 +169,13 @@ describe("colab_status", () => {
     worldOf.deps.ledger.listRuns = async (filter) => (filter?.state === "running" ? Promise.reject(new ColabError("LEDGER_UNAVAILABLE")) : original(filter))
     const result = await statusOf(worldOf.ctx)
     expect(result.cleanup.filter((entry) => entry.call.includes("runtime.delete"))).toEqual([])
-    expect(result.cost.attention).toEqual(expect.arrayContaining([expect.stringContaining("its runs could not be read")]))
   })
 
-  it("shows the opt-in budget's measurement, and says when the day's USD is only a floor", async () => {
-    const measured = await world({ options: { accounts: { default: { budget: { enterpriseUsdDaily: 5, action: "warn" } } } } })
-    await measured.deps.ledger.putRun({ runId: "oc-job-1", account: "default", backend: "enterprise", spec: "e2-standard-4", startedAt: "2026-11-17T09:00:00.000Z", endedAt: "2026-11-17T10:00:00.000Z", state: "ok", cellIds: [], outputPaths: [] })
-    const withPrice = await statusOf(measured.ctx)
-    expect(withPrice.cost).toMatchObject({ budget: { enterpriseUsdDaily: 5, action: "warn", spentUsd: 0.19, complete: true } })
-
-    const floor = await world({ options: { accounts: { default: { budget: { enterpriseUsdDaily: 5, action: "warn" } } } } })
-    await floor.deps.ledger.putRun({ runId: "oc-job-2", account: "default", backend: "enterprise", startedAt: "2026-11-17T09:00:00.000Z", state: "running", cellIds: [], outputPaths: [] })
-    const unmeasured = await statusOf(floor.ctx)
-    expect(unmeasured.cost).toMatchObject({ budget: { complete: false, spentUsd: 0 } })
+  it("adds BUDGET_WARN when a warn budget is reached, and leaves the figures to the account's option", async () => {
+    const worldOf = await world({ options: { accounts: { default: { budget: { enterpriseUsdDaily: 0.1, action: "warn" } } } } })
+    await worldOf.deps.ledger.putRun({ runId: "oc-job-1", account: "default", backend: "enterprise", spec: "e2-standard-4", startedAt: "2026-11-17T09:00:00.000Z", endedAt: "2026-11-17T10:00:00.000Z", state: "ok", cellIds: [], outputPaths: [] })
+    const result = await statusOf(worldOf.ctx)
+    expect(result.warnings).toEqual(expect.arrayContaining(["BUDGET_WARN"]))
   })
 })
 

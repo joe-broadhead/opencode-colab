@@ -80,8 +80,9 @@ const specLabel = (record: RuntimeRecord): string => (record.spec.accelerator ==
 export function cleanupReport(deps: CleanupDeps, actions: readonly CleanupAction[], now: Date): string {
   const lines: string[] = [`Colab cleanup (${deps.options.access})`]
   lines.push(`Runtimes of the plugin's own that cost money now: ${actions.length}`)
-  for (const action of actions) lines.push(`- ${action.record.id}: ${specLabel(action.record)} · ${hours(consumerUsage([action.record], now, dayStart(now)).runtimeHours)} today · no run for ${action.quietMinutes} min. ${RELEASE_LOSS}`)
-  lines.push("Enterprise runtimes are not touched here: colab_runtimes lists them with their $/h, and stopping one is a runtime.stop plan, which says what it loses.")
+  if (actions.length > 0) lines.push(RELEASE_LOSS)
+  for (const action of actions) lines.push(`- ${action.record.id}: ${specLabel(action.record)} · ${hours(consumerUsage([action.record], now, dayStart(now)).runtimeHours)} today · no run for ${action.quietMinutes} min`)
+  lines.push("Enterprise runtimes: colab_runtimes lists them; a runtime.stop plan says what a stop loses.")
   if (deps.options.access === "read-only") lines.push("Read only: this is a report; nothing was released and nothing was asked.")
   else lines.push("Each release asks you first; a no changes nothing.")
   return lines.join("\n")

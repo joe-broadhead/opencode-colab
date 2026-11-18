@@ -52,7 +52,6 @@ export async function runStatus(_input: unknown, ctx: HandlerContext): Promise<O
   const now = deps.clock.now()
   const errors: string[] = []
   const warnings = new Set<WarningCode>()
-  const attention: string[] = []
 
   /** A provider read: the plugin's own codes become a line in `lastErrors`; a host denial propagates. */
   const attempt = async <T>(what: string, read: () => Promise<T>): Promise<T | undefined> => {
@@ -83,21 +82,15 @@ export async function runStatus(_input: unknown, ctx: HandlerContext): Promise<O
     const rule = { autoReleaseMinutes: record.lease?.releaseAfterIdleMinutes ?? deps.options.autoReleaseMinutes, maxHours: record.lease?.maxHours ?? deps.options.maxRuntimeHours }
     let row: RuntimeRow = { id: record.id, account: alias, backend: "colab", spec: specLabel(record.spec), state: record.state, ours: true, tainted: record.tainted !== undefined, createdAt: record.createdAt, lease: { releaseAfterIdleMinutes: rule.autoReleaseMinutes, maxHours: rule.maxHours }, keep: [...record.keep] }
     runtimes.push(row)
-    if (record.tainted) {
-      attention.push(`Runtime ${record.id}: tainted, so it is released only by plan.`)
-      continue
-    }
+    if (record.tainted) continue
     if (record.state !== "ready") continue
     const runs = await deps.ledger.listRuns({ account: alias, state: "running" }).catch((error: unknown) => {
       if (!ColabError.is(error)) throw error
       errors.push(`${error.code}: runs.`)
       return undefined
     })
-    if (runs === undefined) {
-      // Without the ledger's run list nothing may be called idle: a live run would otherwise look like an idle runtime.
-      attention.push(`Runtime ${record.id}: its runs could not be read, so it was left alone.`)
-      continue
-    }
+    // Without the ledger's run list nothing may be called idle: a live run would otherwise look like an idle runtime.
+    if (runs === undefined) continue
     const verdict = await readIdle({
       record,
       kernels: async (account, runtimeId) => {
@@ -121,11 +114,8 @@ export async function runStatus(_input: unknown, ctx: HandlerContext): Promise<O
       return { state: "blocked", why: "unreadable" } as const
     })
     if (verdict.state === "idle") {
-      row = { ...row, idleSince: verdict.lastActivity }
-      runtimes[runtimes.length - 1] = row
+      runtimes[runtimes.length - 1] = { ...row, idleSince: verdict.lastActivity }
       idle.push({ record, verdict })
-    } else if (verdict.state === "blocked" && verdict.why === "unreadable") {
-      attention.push(`Runtime ${record.id}: ${"code" in verdict && verdict.code === "RUNTIME_BUSY" ? "another OpenCode process holds it" : "unreadable"}; left alone.`)
     }
   }
   const known = new Set(records.map((record) => record.id))
@@ -184,33 +174,24 @@ export async function runStatus(_input: unknown, ctx: HandlerContext): Promise<O
   const today = enterpriseUsage(allRuns, deps.prices, from, now)
   if (consumer.running > 0) warnings.add("RATES_UNKNOWN")
   if (tier === "SUBSCRIPTION_TIER_FREE") warnings.add("FREE_TIER_PRIORITY")
-  const budgetRow =
-    budget === undefined
-      ? undefined
-      : {
-          ...(budget.enterpriseUsdDaily !== undefined ? { enterpriseUsdDaily: budget.enterpriseUsdDaily } : {}),
-          ...(budget.runtimeHoursDaily !== undefined ? { runtimeHoursDaily: budget.runtimeHoursDaily } : {}),
-          action: budget.action,
-          spentUsd: money(today.usd ?? 0),
-          complete: today.unpriced === 0,
-        }
-  if (budgetRow?.action === "warn" && budgetRow.complete && ((budgetRow.enterpriseUsdDaily !== undefined && budgetRow.spentUsd >= budgetRow.enterpriseUsdDaily) || (budgetRow.runtimeHoursDaily !== undefined && consumer.runtimeHours >= budgetRow.runtimeHoursDaily))) {
+  if (
+    budget?.action === "warn" &&
+    today.unpriced === 0 &&
+    ((budget.enterpriseUsdDaily !== undefined && (today.usd ?? 0) >= budget.enterpriseUsdDaily) || (budget.runtimeHoursDaily !== undefined && consumer.runtimeHours >= budget.runtimeHoursDaily))
+  ) {
     warnings.add("BUDGET_WARN")
   }
 
   const automation: AutomationState = automationState({ automation: deps.options.automation, access: deps.options.access, owner: automationOwner(ledgerBase(deps.ledger), () => now.getTime()).owner })
   const known2 = (enterprise ?? []).length
   const cost = {
-    currency: "USD",
     consumer: { runtimeHoursToday: round(consumer.runtimeHours), running: consumer.running, ratesKnown: false },
     enterprise: {
       running: known2,
       ...(priced.some((entry) => entry.perHour !== undefined) ? { usdPerHour: money(priced.reduce((sum, entry) => sum + (entry.perHour ?? 0), 0)) } : {}),
-      jobsToday: { runs: today.runs, ...(today.usd !== undefined ? { usd: money(today.usd) } : {}), complete: today.unpriced === 0 },
+      jobsToday: { ...(today.usd !== undefined ? { usd: money(today.usd) } : {}), complete: today.unpriced === 0 },
     },
-    ...(budgetRow !== undefined ? { budget: budgetRow } : {}),
     automation,
-    ...(attention.length > 0 ? { attention } : {}),
   }
 
   // ── Cleanup: biggest saving first, each one call ──

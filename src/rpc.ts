@@ -20,10 +20,6 @@ export type CostRow = {
   readonly runtimesRunning: number
   /** Runtimes of ours running with no run of ours active. */
   readonly noRunActive: number
-  /** Today's Enterprise job estimate; absent when the ledger cannot price it. */
-  readonly usdToday?: number
-  /** False when a run today could not be priced, so the USD figure is a floor. */
-  readonly complete: boolean
   readonly topCleanup?: string
 }
 
@@ -58,11 +54,9 @@ const cost = object(
     runtimeHoursToday: nonNegative,
     runtimesRunning: count,
     noRunActive: count,
-    usdToday: nonNegative,
-    complete: { type: "boolean" },
     topCleanup: text,
   },
-  ["runtimeHoursToday", "runtimesRunning", "noRunActive", "complete"],
+  ["runtimeHoursToday", "runtimesRunning", "noRunActive"],
 )
 
 export const STATUS_SCHEMA = object(
@@ -105,12 +99,10 @@ const isAccount = (value: unknown) => isRecord(value) && only(value, ["alias", "
 const isNumber = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
 const isCost = (value: unknown) =>
   isRecord(value) &&
-  only(value, ["runtimeHoursToday", "runtimesRunning", "noRunActive", "usdToday", "complete", "topCleanup"]) &&
+  only(value, ["runtimeHoursToday", "runtimesRunning", "noRunActive", "topCleanup"]) &&
   isNumber(value.runtimeHoursToday) &&
   isCount(value.runtimesRunning) &&
   isCount(value.noRunActive) &&
-  optional(value.usdToday, isNumber) &&
-  typeof value.complete === "boolean" &&
   optional(value.topCleanup, isText)
 
 /** JSON Schema outputs reach clients unchecked, so readers check a status against the schema's rules. */
@@ -160,9 +152,9 @@ function describeHost(status: Pick<Status, "host" | "hostWarning">): string {
 
 const AUTOMATION_TEXT: Record<AutomationRow, string> = {
   on: "on",
-  "on (consent)": "on (your automation option)",
+  "on (consent)": "on (your option)",
   off: "off",
-  "off (access)": "off at this access level (automation: \"on\" allows it)",
+  "off (access)": "off at this access level",
   "not-owner": "another process owns it",
 }
 
@@ -171,9 +163,8 @@ export function costText(cost: CostRow): string {
   const hours = `${cost.runtimeHoursToday.toFixed(1)} runtime-hour${cost.runtimeHoursToday === 1 ? "" : "s"} today`
   const running = `${cost.runtimesRunning} running`
   const quiet = cost.noRunActive > 0 ? `, ${cost.noRunActive} with no run active` : ""
-  const usd = cost.usdToday !== undefined ? `; about $${cost.usdToday.toFixed(2)} of Enterprise jobs${cost.complete ? "" : " (a floor)"}` : ""
   const cleanup = cost.topCleanup ? `; cleanup: ${cost.topCleanup}` : ""
-  return `${hours}; ${running}${quiet}${usd}${cleanup}`
+  return `${hours}; ${running}${quiet}${cleanup}`
 }
 
 /** The status as labelled rows, in the order the dialog and /colab-status show them. */
