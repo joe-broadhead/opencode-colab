@@ -11,9 +11,9 @@
 import type { InputOf } from "../domain/contract.js"
 import { ColabError } from "../domain/errors.js"
 import { screenSecrets } from "../redact.js"
-import type { ToolHandler } from "../tools/types.js"
+import type { HandlerContext, ToolHandler } from "../tools/types.js"
 import { baseName, localKind, readFolder, readLocal, resolveLocal, runtimePath, uploadDefault } from "./paths.js"
-import { oursById, sha256 } from "./support.js"
+import { calibrated, oursById, sha256 } from "./support.js"
 
 /** The family's secret file names (design §7.5), matched on the base name or a folder in the path. */
 const SECRET_NAME = [
@@ -50,6 +50,18 @@ export function screenUpload(path: string, bytes: Uint8Array, allow: boolean): v
   }
 }
 
+/**
+ * Jupyter's contents API creates one folder per request and needs the parent, so a destination's ancestors are made
+ * top-down before the file is written (design §9.3; https://jupyter-server.readthedocs.io/en/stable/developers/rest-api.html).
+ */
+async function ensureFolders(runtime: HandlerContext["deps"]["runtime"], target: { readonly account: string; readonly runtimeId: string }, path: string, signal: AbortSignal): Promise<void> {
+  let current = ""
+  for (const part of path.split("/").filter(Boolean).slice(0, -1)) {
+    current += `/${part}`
+    await runtime.files.mkdir(target, current, signal)
+  }
+}
+
 /** Streams bytes as the runtime's contents write expects, in 1 MiB slices. */
 async function* slices(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   const size = 1024 * 1024
@@ -58,7 +70,14 @@ async function* slices(bytes: Uint8Array): AsyncIterable<Uint8Array> {
 
 export const upload: ToolHandler<"upload"> = {
   async run(input: InputOf<"upload">, ctx) {
-    const found = await oursById(ctx.deps.ledger, ctx.account.alias, input.runtime)
+    const found = calibrated(await oursById(ctx.deps.ledger, ctx.account.alias, input.runtime))
+    // An upload puts local data on the runtime, so a cached check runs first: a client that joined since the last probe
+    // stops it (review LOW 3). A finding taints, as a run's probe does.
+    const verdict = await ctx.deps.check.probe(found.target, { nonce: found.record.nonce, calibration: found.calibration, fresh: false }, ctx.call.signal)
+    if (!verdict.ok) {
+      if (verdict.code !== "RUNTIME_UNVERIFIED") await ctx.deps.ledger.taint(found.record.id, { code: verdict.code, at: verdict.at })
+      throw new ColabError(verdict.code, verdict.code === "RUNTIME_UNVERIFIED" ? "The runtime check before this upload could not complete, so nothing was sent." : "The runtime check found a credential or another client on the runtime, so nothing was sent.")
+    }
     const local = await resolveLocal(input.path, { directory: ctx.deps.directory, allowedRoots: ctx.deps.options.allowedRoots })
     const target = runtimePath(input.to ?? uploadDefault(baseName(input.path)))
     // The host's own read, then external_directory when the path is outside the project (design H8).
@@ -70,6 +89,7 @@ export const upload: ToolHandler<"upload"> = {
     if (kind === "file") {
       const bytes = await readLocal(local, ctx.deps.options.maxUploadBytes)
       screenUpload(local.absolute, bytes, ctx.deps.options.allowSecretUpload)
+      await ensureFolders(ctx.deps.runtime, found.target, target, ctx.call.signal)
       const written = await ctx.deps.runtime.files.write(found.target, target, slices(bytes), ctx.call.signal)
       return { state: "ok" as const, runtime: found.record.id, to: target, bytes: written.bytes, sha256: sha256(bytes) }
     }
@@ -82,6 +102,7 @@ export const upload: ToolHandler<"upload"> = {
     const manifest: string[] = []
     for (const file of info) {
       const destination = runtimePath(`${target.replace(/\/$/, "")}/${file.path}`)
+      await ensureFolders(ctx.deps.runtime, found.target, destination, ctx.call.signal)
       const written = await ctx.deps.runtime.files.write(found.target, destination, slices(file.bytes), ctx.call.signal)
       total += written.bytes
       manifest.push(`${file.path}:${sha256(file.bytes)}`)

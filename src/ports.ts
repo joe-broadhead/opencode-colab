@@ -172,7 +172,15 @@ export interface RuntimeProtocol {
      * given: `bytes=<start>-<end>`, `end` inclusive, and to the end of the file when `end` is omitted.
      */
     read(target: RuntimeTarget, path: string, signal: AbortSignal, options?: { readonly range?: { readonly start: number; readonly end?: number } }): Promise<AsyncIterable<Uint8Array>>
-    /** `PUT /api/contents` in ≤ 50 MB chunks. */
+    /**
+     * Creates one folder: `PUT /api/contents/{path}` with `{"type": "directory"}`. Jupyter's contents API creates a
+     * single level per request and requires the parent to exist
+     * (https://jupyter-server.readthedocs.io/en/stable/developers/rest-api.html#post--api-contents-path), so a caller
+     * walks a destination's ancestors top-down before it writes a file into one (design §9.3). Creating a folder that
+     * already exists is not an error.
+     */
+    mkdir(target: RuntimeTarget, path: string, signal: AbortSignal): Promise<void>
+    /** `PUT /api/contents` in ≤ 50 MB chunks; the parent folder must exist (see `mkdir`). */
     write(target: RuntimeTarget, path: string, bytes: AsyncIterable<Uint8Array>, signal: AbortSignal): Promise<{ readonly bytes: number }>
   }
 }

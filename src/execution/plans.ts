@@ -174,6 +174,11 @@ const CREATE: PlanHandler<"runtime.create"> = {
 /** The delete plan's own facts, read by the preview and re-read by the commit. */
 interface DeleteFacts {
   readonly record: RuntimeRecord
+  /** True when Jupyter can be read: ready, untainted, calibrated. A tainted, unchecked or creating runtime is never read. */
+  readonly harvestable: boolean
+  readonly notHarvested?: "tainted" | "unchecked" | "creating"
+  /** Whether the Colab API still returns the runtime; `undefined` when the answer could not be read. */
+  readonly exists?: boolean
   readonly kernels: number
   readonly busy: boolean
   readonly idleSince?: string
@@ -181,11 +186,24 @@ interface DeleteFacts {
   readonly active: number
 }
 
+/**
+ * The facts a release plan reads. A runtime this plugin cannot use — tainted, never calibrated, or a create whose LRO
+ * has not finished — is still releasable: its plan reads only the ledger and the Colab API, never Jupyter, because the
+ * transport refuses those runtimes and every one of them keeps billing until it is deleted (review M3).
+ */
 async function deleteFacts(id: string, ctx: HandlerContext, read: boolean): Promise<DeleteFacts> {
   const record = await ctx.deps.ledger.getRuntime(id)
   if (!record || record.account !== ctx.account.alias) throw new ColabError("RUNTIME_NOT_OURS")
   if (record.state === "released" || record.state === "gone") throw new ColabError("RUNTIME_GONE")
-  if (record.state !== "ready") throw new ColabError("RUNTIME_NOT_OURS")
+  const notHarvested: DeleteFacts["notHarvested"] = record.tainted ? "tainted" : record.state === "creating" ? "creating" : record.calibration ? undefined : "unchecked"
+  const harvestable = notHarvested === undefined && record.state === "ready"
+  // The API read is the one fact both paths need: is the runtime still there to delete?
+  if (read) await ctx.providerRead(OPERATIONS.runtimesGet)
+  const exists = await ctx.deps.colab
+    .getRuntime(record.account, record.id, ctx.call.signal)
+    .then((answer) => answer !== undefined)
+    .catch(() => undefined)
+  if (!harvestable) return { record, harvestable, ...(notHarvested ? { notHarvested } : {}), ...(exists !== undefined ? { exists } : {}), kernels: 0, busy: false, lost: [], active: runsOn(record.id) }
   if (read) await ctx.providerRead(OPERATIONS.kernelsList)
   if (read) await ctx.providerRead(OPERATIONS.sessionsList)
   if (read) await ctx.providerRead(OPERATIONS.contentsList)
@@ -207,8 +225,15 @@ async function deleteFacts(id: string, ctx: HandlerContext, read: boolean): Prom
     .filter((path) => !kept(path, record.keep))
     .sort()
     .slice(0, 100)
-  return { record, kernels: kernels.length, busy, ...(since ? { idleSince: since } : {}), lost, active: runsOn(record.id) }
+  return { record, harvestable, ...(exists !== undefined ? { exists } : {}), kernels: kernels.length, busy, ...(since ? { idleSince: since } : {}), lost, active: runsOn(record.id) }
 }
+
+const why = (reason: NonNullable<DeleteFacts["notHarvested"]>) =>
+  reason === "tainted"
+    ? "the runtime is tainted, so the plugin will not read it"
+    : reason === "creating"
+      ? "the runtime's create has not finished, so nothing has been checked"
+      : "the runtime was never checked (its calibration did not complete)"
 
 const DELETE: PlanHandler<"runtime.delete"> = {
   async preview(params: PlanParams<"runtime.delete">, ctx): Promise<PlanPreview> {
@@ -216,7 +241,6 @@ const DELETE: PlanHandler<"runtime.delete"> = {
     if (facts.active > 0 && params.force !== true) {
       throw new ColabError("RUNTIME_BUSY", "A run is active on this runtime in this process.", { next: "Stop it with colab_cancel, or plan again with force." })
     }
-    const warnings: WarningCode[] = []
     return {
       preview: {
         runtime: facts.record.id,
@@ -225,19 +249,33 @@ const DELETE: PlanHandler<"runtime.delete"> = {
         ageHours: ageHours(facts.record.createdAt, ctx.deps.clock.now().toISOString()),
         state: facts.record.state,
         tainted: facts.record.tainted?.code ?? null,
-        idle: !facts.busy,
+        calibrated: Boolean(facts.record.calibration),
+        harvest: facts.harvestable,
+        ...(facts.notHarvested ? { notHarvested: why(facts.notHarvested) } : {}),
+        ...(facts.exists !== undefined ? { exists: facts.exists } : {}),
+        idle: facts.harvestable ? !facts.busy : null,
         ...(facts.idleSince ? { idleSince: facts.idleSince } : {}),
         kernels: facts.kernels,
         activeRun: facts.active > 0,
         force: params.force === true,
         keep: [...facts.record.keep],
         filesOutsideKeep: [...facts.lost],
+        filesLost: facts.harvestable ? [...facts.lost] : "everything on the runtime",
         memory: "Variables in memory are lost.",
-        release: "The release harvests the keep paths, then deletes the runtime; files outside keep are lost. Nothing on the runtime is kept.",
+        release: facts.harvestable
+          ? "The release harvests the keep paths, then deletes the runtime; files outside keep are lost. Nothing else on the runtime is kept."
+          : `Not harvested: ${why(facts.notHarvested!)}. The release deletes it through the Colab API, and everything on it is lost.`,
       },
       payload: { runtime: facts.record.id, force: params.force === true },
-      fingerprint: { state: facts.record.state, tainted: facts.record.tainted?.at ?? "", busy: facts.busy, active: facts.active > 0, lost: facts.lost.join("\n") },
-      warnings,
+      fingerprint: {
+        state: facts.record.state,
+        tainted: facts.record.tainted?.at ?? "",
+        harvestable: facts.harvestable,
+        exists: facts.exists === true,
+        busy: facts.busy,
+        active: facts.active > 0,
+        lost: facts.lost.join("\n"),
+      },
     }
   },
 
@@ -245,12 +283,28 @@ const DELETE: PlanHandler<"runtime.delete"> = {
     const payload = plan.payload as unknown as { runtime: string; force: boolean }
     if ((payload.runtime as string | undefined) === undefined) planChanged("The plan holds no runtime, so there is nothing to release.")
     const facts = await deleteFacts(payload.runtime, ctx, false)
-    if (facts.record.state !== plan.fingerprint.state || (facts.record.tainted?.at ?? "") !== plan.fingerprint.tainted || facts.busy !== plan.fingerprint.busy || facts.active > 0 !== plan.fingerprint.active || facts.lost.join("\n") !== plan.fingerprint.lost) {
-      planChanged("The runtime's state, taint, idle state, active run or the files outside keep differ from the preview.")
+    if (
+      facts.record.state !== plan.fingerprint.state ||
+      (facts.record.tainted?.at ?? "") !== plan.fingerprint.tainted ||
+      facts.harvestable !== plan.fingerprint.harvestable ||
+      (facts.exists === true) !== plan.fingerprint.exists ||
+      facts.busy !== plan.fingerprint.busy ||
+      facts.active > 0 !== plan.fingerprint.active ||
+      facts.lost.join("\n") !== plan.fingerprint.lost
+    ) {
+      planChanged("The runtime's state, taint, existence, idle state, active run or the files outside keep differ from the preview.")
     }
     if (facts.active > 0 && !payload.force) throw new ColabError("RUNTIME_BUSY", "A run is active on this runtime.", { next: "Stop it with colab_cancel, or plan again with force." })
+    // Package F's one release function: it harvests when the runtime is readable, and deletes it either way.
     const released = await ctx.deps.release.release(facts.record, { reason: "plan", force: payload.force }, ctx.call.signal)
-    return { runtime: facts.record.id, state: released.released ? "released" : "kept", harvested: [...released.harvested], warnings: [...released.warnings] }
+    return {
+      runtime: facts.record.id,
+      state: released.released ? "released" : "kept",
+      harvest: facts.harvestable,
+      ...(facts.notHarvested ? { notHarvested: why(facts.notHarvested) } : {}),
+      harvested: [...released.harvested],
+      warnings: [...released.warnings],
+    }
   },
 }
 

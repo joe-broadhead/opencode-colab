@@ -161,9 +161,11 @@ describe("colab_run", () => {
     Object.assign(deps, { notebooks: refusing })
     runtime.script = ok
     const { result } = tool(deps, "run", { runtime: record.id, notebook: { path: "analysis.ipynb" }, cells: "all", wait: 10 })
-    const answer = (await result) as { state: string; error: string; next: string }
-    expect(answer).toMatchObject({ state: "refused", error: "NOTEBOOK_CHANGED" })
-    expect(answer.next).toContain(".colab/runs/")
+    const answer = (await result) as { state: string; message?: string; writeBack?: { state: string; error?: string; runFolder: string } }
+    expect(answer.state).toBe("ok")
+    expect(answer.writeBack).toMatchObject({ state: "refused", error: "NOTEBOOK_CHANGED" })
+    expect(answer.writeBack!.runFolder).toContain(".colab/runs/")
+    expect(answer.message).toContain("were not written into it")
     expect(fakes.notebooks.merges).toHaveLength(0)
   })
 

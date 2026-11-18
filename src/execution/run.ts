@@ -85,7 +85,16 @@ const codeCells = (code: string): { cell: SourceCell; index: number }[] => [{ ce
 export function flagged(line: string): readonly ("shell" | "install" | "network")[] {
   const text = line.trim()
   const flags: ("shell" | "install" | "network")[] = []
-  if (/^!/.test(text) || /^%%(?:bash|sh|shell|script)\b/.test(text) || /\bsubprocess\b/.test(text) || /\bos\.system\b/.test(text)) flags.push("shell")
+  if (
+    /^!/.test(text) ||
+    /^%%(?:bash|sh|shell|script)\b/.test(text) ||
+    /\bsubprocess\b/.test(text) ||
+    /\bos\.system\b/.test(text) ||
+    /\b(?:exec|eval|compile)\s*\(/.test(text) ||
+    /\bb64decode\b/.test(text) ||
+    /\bbase64\s+(?:-d|--decode)\b/.test(text)
+  )
+    flags.push("shell")
   if (/^(?:%pip|%conda|!pip|!conda)\b/.test(text) || /\bpip\s+install\b/.test(text) || /\bconda\s+install\b/.test(text)) flags.push("install")
   if (/\b(?:requests|urllib|httpx|http\.client|socket|curl|wget)\b/.test(text) || /\bfrom\s+(?:requests|urllib|http)\b/.test(text)) flags.push("network")
   return flags
@@ -100,14 +109,50 @@ export function previewOf(cell: SourceCell): Readonly<Record<string, unknown>> {
   return { id: cell.id, lines, sha256: `sha256:${sha256(cell.source)}`, ...(flags.length ? { flags } : {}) }
 }
 
-/** The ask's metadata: computed before the one `colab.run` assert, never holding a token or the runtime URL. */
+/**
+ * What the ask showed, kept for the run of the same call: the exact cells (id and source sha256) and the notebook they
+ * came from. `colab_run` reads the notebook again and refuses NOTEBOOK_CHANGED if anything differs, so the code that runs
+ * is the code the person saw, even when the notebook moved while the ask was open (review M2).
+ */
+interface Asked {
+  readonly runtime: string
+  readonly notebook?: string
+  readonly cells: readonly { readonly id: string; readonly sha256: string }[]
+  readonly at: number
+}
+const asks = new Map<string, Asked>()
+const ASK_TTL_MS = 10 * 60_000
+
+function rememberAsk(callId: string, entry: Asked): void {
+  for (const [id, asked] of asks) if (entry.at - asked.at > ASK_TTL_MS) asks.delete(id)
+  asks.set(callId, entry)
+}
+
+function takeAsk(callId: string): Asked | undefined {
+  const entry = asks.get(callId)
+  asks.delete(callId)
+  return entry
+}
+
+/** The ask's metadata: every cell's sha256 and flags, the first 20 cells' lines, and how much is not shown. */
 async function metadata(input: Input, ctx: HandlerContext): Promise<Readonly<Record<string, unknown>>> {
   const selected =
     input.code !== undefined ? codeCells(input.code) : selectCells((await ctx.deps.notebooks.read(input.notebook!.path, ctx.call.signal)).cells, input.cells)
+  const hashed = selected.map(({ cell }) => ({ id: cell.id, sha256: `sha256:${sha256(cell.source)}`, flags: [...new Set(cell.source.split("\n").flatMap((line) => flagged(line)))] }))
+  rememberAsk(ctx.call.id, {
+    runtime: input.runtime,
+    ...(input.notebook ? { notebook: input.notebook.path } : {}),
+    cells: hashed.map(({ id, sha256 }) => ({ id, sha256 })),
+    at: Date.now(),
+  })
   const limit = 20
+  const rest = selected.slice(limit)
+  const moreBytes = rest.reduce((total, { cell }) => total + Buffer.byteLength(cell.source), 0)
   return {
     cells: selected.slice(0, limit).map(({ cell }) => previewOf(cell)),
-    ...(selected.length > limit ? { moreCells: selected.length - limit } : {}),
+    allCells: hashed.map(({ id, sha256, flags }) => ({ id, sha256, ...(flags.length ? { flags } : {}) })),
+    ...(rest.length ? { moreCells: rest.length, moreBytes, moreNote: `${rest.length} more cell(s), ${moreBytes} source bytes: their sha256 and flags are in allCells; their lines are not shown.` } : {}),
+    binding: "the sha256 of every cell; the run refuses if the notebook changes while this ask is open",
     timeoutSec: input.timeoutSec ?? DEFAULT_TIMEOUT_SECONDS,
   }
 }
@@ -194,7 +239,24 @@ export const run: ToolHandler<"run"> = {
     if (runOnSession(found.record.id, name)) throw new ColabError("KERNEL_BUSY", "That kernel session is already running a run in this process.")
     if (runsOn(found.record.id) >= RUNS_PER_RUNTIME) throw new ColabError("RUNTIME_BUSY", `This runtime already runs ${RUNS_PER_RUNTIME} runs in this process.`)
 
-    const before = await probe(found, ctx, { fresh: false }, ctx.call.signal)
+    // The cells are read once here; the ask's sha256s bound what runs to what the person saw (review M2).
+    const selected = input.code !== undefined ? codeCells(input.code) : selectCells((await ctx.deps.notebooks.read(input.notebook!.path, ctx.call.signal)).cells, input.cells)
+    const asked = takeAsk(ctx.call.id)
+    if (asked) {
+      const same =
+        asked.runtime === input.runtime &&
+        asked.notebook === input.notebook?.path &&
+        asked.cells.length === selected.length &&
+        asked.cells.every((cell, index) => cell.id === selected[index]!.cell.id && cell.sha256 === `sha256:${sha256(selected[index]!.cell.source)}`)
+      if (!same) {
+        throw new ColabError("NOTEBOOK_CHANGED", "The notebook changed while the ask was open, so no code was sent.", {
+          next: "Read it again with colab_notebook, then run again.",
+        })
+      }
+    }
+
+    // A fresh pre-run probe every time: a clean cached verdict from before a failed run must not clear the next one (M4).
+    const before = await probe(found, ctx, { fresh: true }, ctx.call.signal)
     if (!before.ok) {
       throw new ColabError(
         before.code,
@@ -202,8 +264,6 @@ export const run: ToolHandler<"run"> = {
       )
     }
 
-    // The cells are read from the notebook as it is now; their ids and sources are what write-back checks against.
-    const selected = input.code !== undefined ? codeCells(input.code) : selectCells((await ctx.deps.notebooks.read(input.notebook!.path, ctx.call.signal)).cells, input.cells)
     const timeoutSec = boundTimeout(input.timeoutSec, ctx.deps.options.maxRunSeconds)
     const waitMs = Math.min(input.wait ?? 60, WAIT_SECONDS) * 1000
 
@@ -213,7 +273,9 @@ export const run: ToolHandler<"run"> = {
     await mkdir(dir, { recursive: true })
     const startedAtMs = ctx.deps.clock.now().getTime()
     const spec = specLabel(found.record.spec)
-    const record: RunRecord = {
+    // `session` is contract request 1 (accepted, applied by the contract keeper): a detached scratch run is otherwise
+    // cancellable only by guessing. The assertion keeps this branch compiling until the field lands.
+    const record = {
       runId,
       account: ctx.account.alias,
       backend: "colab",
@@ -224,8 +286,9 @@ export const run: ToolHandler<"run"> = {
       startedAt: new Date(startedAtMs).toISOString(),
       state: "running",
       outputPaths: [],
+      session: name,
       summary: `${input.notebook ? `Running ${selected.length} cell(s) of the notebook` : "Running code"} on ${spec}`,
-    }
+    } as RunRecord
     await ctx.deps.ledger.putRun(record)
     ctx.deps.events.publish({ type: "started", runId, account: ctx.account.alias })
 
@@ -262,7 +325,18 @@ export const run: ToolHandler<"run"> = {
       ctx.deps.events.publish({ type: "finished", runId, state })
     }
 
-    const collect = async (): Promise<string | undefined> => {
+    let writeBack: Record<string, unknown> | undefined
+    let after: ProbeVerdict | undefined
+    /** The after-run probe: once per run, whatever the outcome, with its own signal (review M4). */
+    const afterProbe = async (): Promise<ProbeVerdict | undefined> => {
+      if (after !== undefined) return after
+      after = await probe(found, ctx, { fresh: true }, AbortSignal.timeout(60_000)).catch(() => undefined)
+      return after
+    }
+
+    const collect = async (): Promise<{ readonly message?: string; readonly writeBack?: Record<string, unknown> } | undefined> => {
+      // The bound is real time (the timers and the kernel's watchdog are), not the ledger's clock.
+      const deadline = Date.now() + timeoutSec * 1000
       try {
         await session.watchdog(timeoutSec, handle.live.controller.signal)
         const timer = setTimeout(() => {
@@ -272,6 +346,15 @@ export const run: ToolHandler<"run"> = {
         try {
           for (const [position, entry] of selected.entries()) {
             handle.live.controller.signal.throwIfAborted()
+            // The deadline is checked before every cell, so a bound reached between two cells stops the run too.
+            if (!timedOut && Date.now() >= deadline) {
+              timedOut = true
+              void session.interrupt(AbortSignal.timeout(15_000)).catch(() => undefined)
+            }
+            if (timedOut) {
+              for (const later of selected.slice(position)) captured.push(skippedCell(later.cell))
+              break
+            }
             const cell = capture({
               cellId: entry.cell.id,
               source: entry.cell.source,
@@ -297,16 +380,24 @@ export const run: ToolHandler<"run"> = {
             await checkpoint()
             ctx.deps.events.publish({ type: "cell", runId, cellId: result.id, state: result.state === "error" ? "error" : "ok" })
             handle.progress(captured)
+            // The kernel-side watchdog's KeyboardInterrupt is an ordinary error cell; at or after the bound it is the
+            // run's timeout, and no later cell may run (review M1).
+            if (!timedOut && result.error?.ename === "KeyboardInterrupt" && Date.now() >= deadline - 500) {
+              timedOut = true
+              void session.interrupt(AbortSignal.timeout(15_000)).catch(() => undefined)
+            }
+            if (timedOut) {
+              for (const later of selected.slice(position + 1)) captured.push(skippedCell(later.cell))
+              break
+            }
             if (streamError !== undefined) {
-              // A Stop ends the run as cancelled; a timed-out interrupt ends it as RUN_TIMEOUT; anything else is a transport failure.
+              // A Stop ends the run as cancelled; anything else is a transport failure.
               if (isAbort(streamError) || handle.live.controller.signal.aborted) throw new ColabError("CANCELLED")
-              if (timedOut) break
               throw streamError
             }
-            // A kernel that answered without going idle died mid-request (KERNEL_DIED); a timed-out interrupt is RUN_TIMEOUT.
-            if (!sawIdle && !timedOut) throw new ColabError("KERNEL_DIED", "The kernel's stream ended before it went idle, which often means the kernel died.")
+            if (!sawIdle) throw new ColabError("KERNEL_DIED", "The kernel's stream ended before it went idle, which often means the kernel died.")
             if (result.state === "error" && !input.continueOnError) {
-              for (const skipped of selected.slice(position + 1)) captured.push(skippedCell(skipped.cell))
+              for (const later of selected.slice(position + 1)) captured.push(skippedCell(later.cell))
               break
             }
           }
@@ -315,11 +406,13 @@ export const run: ToolHandler<"run"> = {
           // The bound that holds with OpenCode closed is cancelled once the run is over; start and cancel are paired.
           await session.watchdog(null, AbortSignal.timeout(15_000)).catch(() => undefined)
           await checkpoint().catch(() => undefined)
+          // The final cells (skipped ones included) are what colab_execution shows for a finished run.
+          handle.progress(captured)
         }
-        // The post-run probe runs before anything else can fail, so a finding always taints (design §7.4 step 3).
-        const after = await probe(found, ctx, { fresh: true }, handle.live.controller.signal)
+        const probed = await afterProbe()
         if (timedOut) {
-          throw new ColabError("RUN_TIMEOUT", `The run reached its ${timeoutSec}-second bound; the kernel was interrupted.`, {
+          const notRun = captured.filter((cell) => cell.state === "skipped").length
+          throw new ColabError("RUN_TIMEOUT", `The run reached its ${timeoutSec}-second bound; the kernel was interrupted${notRun > 0 ? ` and ${notRun} later cell(s) were not run` : ""}.`, {
             next: `Raise timeoutSec (up to ${ctx.deps.options.maxRunSeconds}), or use an Enterprise job. The run's files are in ${dirShown}.`,
           })
         }
@@ -329,28 +422,43 @@ export const run: ToolHandler<"run"> = {
           })
         }
         let message: string | undefined
-        // Write-back is the default with a notebook; a moved notebook writes nothing and the result says where the outputs are.
+        // Write-back is the default with a notebook. A declined `edit` or a notebook that moved neither fails the run nor
+        // throws its outputs away: the result says what landed, and the files stay under .colab/runs (review LOW 1).
         if (input.notebook && input.writeBack !== false && captured.some((cell) => cell.state !== "skipped")) {
-          const target = await resolveLocal(input.notebook.path, { directory: ctx.deps.directory, allowedRoots: ctx.deps.options.allowedRoots })
-          await ctx.hostAssert({ action: "edit", resources: [target.absolute], metadata: { path: shownPath(target.absolute, ctx.deps.directory), runId } })
-          if (!target.insideProject) await ctx.hostAssert({ action: "external_directory", resources: [join(target.absolute, "..")], metadata: { path: target.absolute } })
-          const merged = await ctx.deps.notebooks.mergeRun(
-            input.notebook.path,
-            {
-              cells: captured.filter((cell) => cell.state !== "skipped").map((cell) => ({ id: cell.id, source: cell.source, outputs: cell.outputs, executionCount: cell.executionCount })),
-              outputDir: dirShown,
-            },
-            handle.live.controller.signal,
-          )
-          message = `Wrote the outputs of ${captured.filter((cell) => cell.state !== "skipped").length} cell(s) into ${shownPath(target.absolute, ctx.deps.directory)} (${merged.hash}).`
+          const ran = captured.filter((cell) => cell.state !== "skipped")
+          try {
+            const target = await resolveLocal(input.notebook.path, { directory: ctx.deps.directory, allowedRoots: ctx.deps.options.allowedRoots })
+            await ctx.hostAssert({ action: "edit", resources: [target.absolute], metadata: { path: shownPath(target.absolute, ctx.deps.directory), runId } })
+            if (!target.insideProject) await ctx.hostAssert({ action: "external_directory", resources: [join(target.absolute, "..")], metadata: { path: target.absolute } })
+            const merged = await ctx.deps.notebooks.mergeRun(
+              input.notebook.path,
+              { cells: ran.map((cell) => ({ id: cell.id, source: cell.source, outputs: cell.outputs, executionCount: cell.executionCount })), outputDir: dirShown },
+              handle.live.controller.signal,
+            )
+            writeBack = { state: "written", path: shownPath(target.absolute, ctx.deps.directory), hash: merged.hash }
+            message = `Wrote the outputs of ${ran.length} cell(s) into ${shownPath(target.absolute, ctx.deps.directory)} (${merged.hash}).`
+          } catch (error) {
+            const code = ColabError.is(error) ? error.code : undefined
+            if (code === "CANCELLED") throw error
+            writeBack = {
+              state: code === "NOTEBOOK_CHANGED" ? "refused" : "skipped",
+              ...(code ? { error: code } : {}),
+              path: input.notebook.path,
+              runFolder: dirShown,
+            }
+            message =
+              code === "NOTEBOOK_CHANGED"
+                ? `The notebook changed during the run, so its outputs were not written into it; they are in ${dirShown}.`
+                : `The run finished but its outputs were not written back (${code ?? "the host declined the edit"}); they are in ${dirShown}.`
+          }
         }
-        if (!after.ok && after.code !== "RUNTIME_UNVERIFIED") {
+        if (probed && !probed.ok && probed.code !== "RUNTIME_UNVERIFIED") {
           message = [message, "The runtime no longer passes its credential and client check, so it is tainted and will not run again; plan a fresh runtime and release this one by plan."]
             .filter(Boolean)
             .join(" ")
         }
         await finishRecord(captured.some((cell) => cell.state === "error") ? "error" : "ok")
-        return message
+        return { ...(message ? { message } : {}), ...(writeBack ? { writeBack } : {}) }
       } catch (error) {
         failure = error
         const code = ColabError.is(error) ? error.code : undefined
@@ -358,6 +466,8 @@ export const run: ToolHandler<"run"> = {
         await finishRecord(aborted ? "cancelled" : timedOut ? "timeout" : "failed", code)
         throw error
       } finally {
+        // The after-probe runs on every path, including a Stop, KERNEL_DIED and a transport failure.
+        await afterProbe()
         handle.complete(state, failure)
       }
     }
@@ -382,8 +492,16 @@ export const run: ToolHandler<"run"> = {
     const files = [...outputPaths].map((path) => shownPath(path, ctx.deps.directory))
     if (!settled) return { state: "running", runId, runtime: found.record.id, cells, files, next: `colab_execution({ runId: "${runId}", wait: 60 })` }
     if (failure !== undefined) throw failure
-    const message = await task
+    const outcome = await task
     const finalState = handle.live.state()
-    return { state: finalState === "cancelled" ? "cancelled" : "ok", runId, runtime: found.record.id, cells, files, ...(message ? { message } : {}) }
+    return {
+      state: finalState === "cancelled" ? "cancelled" : "ok",
+      runId,
+      runtime: found.record.id,
+      cells,
+      files,
+      ...(outcome?.message ? { message: outcome.message } : {}),
+      ...(outcome?.writeBack ? { writeBack: outcome.writeBack } : {}),
+    }
   },
 }
