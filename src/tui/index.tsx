@@ -63,8 +63,7 @@ function StatusDialog(props: {
   const rowColor = (row: StatusRow, status: Status) => {
     if (row.label === "Problems" || row.label === "Skills" || row.label === "Attention" || (row.label === "Agents without default rules" && status.unguardedAgents.length > 0) || (row.label === "OpenCode" && !status.host.tested)) return tone("warning")
     // Money is burning and nothing will release it: the Cost row and the Automation row say so in the warning tone.
-    if (row.label === "Cost" && status.cost.runtimesRunning > 0 && status.cost.noRunActive > 0) return tone("warning")
-    if (row.label === "Automation" && status.cost.noRunActive > 0 && status.automation !== "on" && status.automation !== "on (consent)") return tone("warning")
+    if (row.label === "Cost" && status.cost.attention !== undefined) return tone("warning")
     if (row.label === "Next step" && status.nextStep === "Nothing to do.") return tone("success")
     return colors().text.base
   }
@@ -107,7 +106,7 @@ function StatusDialog(props: {
           </box>
         )}
       </Show>
-      <text fg={colors().text.muted}>{"r refresh · esc close · /colab-cleanup releases an idle runtime"}</text>
+      <text fg={colors().text.muted}>{"r refresh · esc close"}</text>
     </box>
   )
 }

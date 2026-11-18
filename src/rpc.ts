@@ -18,8 +18,6 @@ export type AccountRow = { readonly alias: string; readonly backend: (typeof BAC
 export type CostRow = {
   readonly runtimeHoursToday: number
   readonly runtimesRunning: number
-  /** Runtimes of ours running with no run of ours active. */
-  readonly noRunActive: number
   readonly topCleanup?: string
   /** Runtimes the automation leaves alone and why, in the plugin's own words (design §8.3). */
   readonly attention?: readonly string[]
@@ -55,11 +53,10 @@ const cost = object(
   {
     runtimeHoursToday: nonNegative,
     runtimesRunning: count,
-    noRunActive: count,
     topCleanup: text,
     attention: texts,
   },
-  ["runtimeHoursToday", "runtimesRunning", "noRunActive"],
+  ["runtimeHoursToday", "runtimesRunning"],
 )
 
 export const STATUS_SCHEMA = object(
@@ -102,10 +99,9 @@ const isAccount = (value: unknown) => isRecord(value) && only(value, ["alias", "
 const isNumber = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
 const isCost = (value: unknown) =>
   isRecord(value) &&
-  only(value, ["runtimeHoursToday", "runtimesRunning", "noRunActive", "topCleanup", "attention"]) &&
+  only(value, ["runtimeHoursToday", "runtimesRunning", "topCleanup", "attention"]) &&
   isNumber(value.runtimeHoursToday) &&
   isCount(value.runtimesRunning) &&
-  isCount(value.noRunActive) &&
   optional(value.topCleanup, isText) &&
   optional(value.attention, isTexts)
 
@@ -172,7 +168,7 @@ export function statusRows(status: Status): StatusRow[] {
     { label: "Access", value: ACCESS_TEXT[status.access] },
     { label: "Tools", value: `${status.tools.registered} registered` },
     { label: "Agents without default rules", value: status.unguardedAgents.length > 0 ? status.unguardedAgents.join(", ") : "none" },
-    { label: "Cost", value: `${costText(status.cost)}${status.cost.noRunActive > 0 ? `, ${status.cost.noRunActive} with no run active` : ""}` },
+    { label: "Cost", value: costText(status.cost) },
     { label: "Automation", value: automationText(status.automation) },
     ...(status.cost.attention?.length ? [{ label: "Attention", value: status.cost.attention.join(" ") }] : []),
     ...(status.shadowedSkills?.length ? [{ label: "Skills", value: status.shadowedSkills.map((skill) => `${skill.id} replaced by ${skill.path}`).join("; ") }] : []),

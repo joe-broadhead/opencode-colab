@@ -185,7 +185,7 @@ describe("colab_status", () => {
 
   it("adds BUDGET_WARN when a warn budget is reached, and leaves the figures to the account's option", async () => {
     const worldOf = await world({ options: { accounts: { default: { budget: { enterpriseUsdDaily: 0.1, action: "warn" } } } } })
-    await worldOf.deps.ledger.putRun({ runId: "oc-job-1", account: "default", backend: "enterprise", spec: "e2-standard-4", startedAt: "2026-11-17T09:00:00.000Z", endedAt: "2026-11-17T10:00:00.000Z", state: "ok", cellIds: [], outputPaths: [] })
+    await worldOf.deps.ledger.putRun({ runId: "oc-job-1", account: "default", backend: "enterprise", startedAt: "2026-11-17T09:00:00.000Z", endedAt: "2026-11-17T10:00:00.000Z", state: "ok", cellIds: [], outputPaths: [], estimatedUsd: 0.2 } as never)
     const result = await statusOf(worldOf.ctx)
     expect(result.warnings).toEqual(expect.arrayContaining(["BUDGET_WARN"]))
   })

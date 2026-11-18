@@ -22,7 +22,7 @@ export function costAttention(input: { readonly runtimes: readonly RuntimeRecord
   for (const record of input.runtimes) {
     if (record.state !== "ready" && record.state !== "creating") continue
     const run = running.find((entry) => entry.runtime === record.id)
-    if (run !== undefined) lines.push(`Runtime ${record.id}: a run recorded running since ${run.startedAt} blocks release; colab_cancel or plan with force.`)
+    if (run !== undefined) lines.push(`Runtime ${record.id}: a run has been running since ${run.startedAt}; colab_cancel or plan with force.`)
     else if (record.tainted) lines.push(`Runtime ${record.id}: tainted; only a plan releases it, keep files lost.`)
     else if (staleCreate(record, input.now)) lines.push(`Runtime ${record.id}: its create never finished; release it by plan.`)
     else if (readAccount(input.options, record.account)) lines.push(`Runtime ${record.id}: its account is read; automation leaves it, /colab-cleanup may release it.`)

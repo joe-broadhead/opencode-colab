@@ -142,7 +142,7 @@ describe("nothing to do", () => {
     const answer = await worldOf.run()
     expect(worldOf.asserts.requests).toEqual([])
     expect(worldOf.release.released).toEqual([])
-    expect(answer.report).toContain("cost money now: 0")
+    expect(answer.report).toContain("cost money: 0")
     expect(answer.outcome).toBe("Colab cleanup: released 0, declined 0, blocked 0, failed 0.")
   })
 })

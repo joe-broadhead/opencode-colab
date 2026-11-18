@@ -169,14 +169,14 @@ export interface AutomationInput {
 }
 
 export interface AutomationOutcome {
-  readonly released: readonly { readonly id: string; readonly reason: "idle" | "lifetime"; readonly harvested: number }[]
+  readonly released: readonly { readonly id: string; readonly reason: "idle" | "lifetime" }[]
   /** Runtimes left alone, with the plugin's own words only: no token, URL or Google text (design §7.3). */
   readonly attention: readonly string[]
 }
 
 /** One whole sweep: the same function the loop runs every 60 s, so a test drives it without timers. */
 export async function runAutomationOnce(input: AutomationInput): Promise<AutomationOutcome> {
-  const released: { id: string; reason: "idle" | "lifetime"; harvested: number }[] = []
+  const released: { id: string; reason: "idle" | "lifetime" }[] = []
   const attention: string[] = []
   const records = await input.ledger.listRuntimes({ live: true })
   const rule: IdleRule = { autoReleaseMinutes: input.options.autoReleaseMinutes, maxHours: input.options.maxRuntimeHours }
@@ -203,7 +203,7 @@ export async function runAutomationOnce(input: AutomationInput): Promise<Automat
     const running = runs.length
     // A run recorded running that no process closes blocks the idle rule for good: say so, and do not touch it (LOW 1).
     if (running > 0) {
-      attention.push(`Runtime ${record.id}: a run recorded running since ${runs[0]!.startedAt} blocks its release; colab_cancel, or a plan with force.`)
+      attention.push(`Runtime ${record.id}: a run has been running since ${runs[0]!.startedAt}; colab_cancel or plan with force.`)
       continue
     }
     let verdict: IdleVerdict
@@ -243,7 +243,7 @@ export async function runAutomationOnce(input: AutomationInput): Promise<Automat
 
     try {
       const answer = await input.release.release(record, { reason: verdict.reason, force: false }, input.signal)
-      if (answer.released) released.push({ id: record.id, reason: verdict.reason, harvested: answer.harvested.length })
+      if (answer.released) released.push({ id: record.id, reason: verdict.reason })
       else if (answer.warnings.includes("UNHARVESTED")) attention.push(`Runtime ${record.id}: its keep paths could not be harvested, so its release is blocked.`)
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") throw error

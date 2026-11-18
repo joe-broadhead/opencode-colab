@@ -171,7 +171,7 @@ export async function runStatus(_input: unknown, ctx: HandlerContext): Promise<O
 
   const from = dayStart(now)
   const consumer = consumerUsage(records, now, from)
-  const today = enterpriseUsage(allRuns, deps.prices, from, now)
+  const today = enterpriseUsage(allRuns, from)
   if (consumer.running > 0) warnings.add("RATES_UNKNOWN")
   if (tier === "SUBSCRIPTION_TIER_FREE") warnings.add("FREE_TIER_PRIORITY")
   if (

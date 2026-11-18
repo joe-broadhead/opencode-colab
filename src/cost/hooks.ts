@@ -64,14 +64,14 @@ export function contextLine(snapshot: HookSnapshot, automation: AutomationState,
   if (snapshot.runtimes.length === 0) return undefined
   const first = snapshot.runtimes[0]!
   const line = `colab: ${snapshot.runtimes.length} runtime${snapshot.runtimes.length === 1 ? "" : "s"} ours (${first.spec}, ${hours(snapshot.runtimeHoursToday)} today); release ${automation === "on" || automation === "on (consent)" ? "on" : "off"}.`
-  return topCall !== undefined && `${line} Cleanup: ${topCall}`.length <= 200 ? `${line} Cleanup: ${topCall}` : line.slice(0, 200)
+  return topCall !== undefined && `${line} ${topCall}`.length <= 200 ? `${line} ${topCall}` : line.slice(0, 200)
 }
 
 /** The compaction part: ids only, and the one tool that lists them again. */
 export function compactionLine(ids: readonly string[]): string | undefined {
   if (ids.length === 0) return undefined
   const shown = ids.slice(0, 10)
-  return `Keep in the summary: colab runtimes open: ${shown.join(", ")}${ids.length > 10 ? `, and ${ids.length - 10} more` : ""}; colab_runtimes lists all.`
+  return `Keep: colab runtimes open: ${shown.join(", ")}${ids.length > 10 ? `, and ${ids.length - 10} more` : ""}; colab_runtimes lists all.`
 }
 
 /** Appends a text part to the tail of `messages`, leaving `system` and every earlier message byte-identical. */
@@ -104,7 +104,7 @@ export function shouldNoteIdle(input: {
 
 /** The idle note's text: counts, hours and one call, in our own words. */
 export const idleNote = (snapshot: HookSnapshot, automation: AutomationState): string =>
-  `colab: ${snapshot.runtimes.length} runtime${snapshot.runtimes.length === 1 ? " is" : "s are"} running with no run active (${hours(snapshot.runtimeHoursToday)} today) and release is ${automation === "off (access)" ? "off at this access level" : "off"}. Run /colab-cleanup, or colab_plan({ action: "runtime.delete", params: { runtime: "${snapshot.runtimes[0]?.id}" } }).`
+  `colab: ${snapshot.runtimes.length} runtime${snapshot.runtimes.length === 1 ? " is" : "s are"} burning with no run active (${hours(snapshot.runtimeHoursToday)} today) and release is ${automation === "off (access)" ? "off at this access level" : "off"}. /colab-cleanup, or colab_plan({ action: "runtime.delete", params: { runtime: "${snapshot.runtimes[0]?.id}" } }).`
 
 export interface HookRegistration {
   readonly stop: readonly { dispose(): Promise<void> }[]
@@ -119,13 +119,9 @@ export async function registerHooks(ctx: HookContext, deps: HookDeps): Promise<H
   const stop: { dispose(): Promise<void> }[] = []
   const problems: string[] = []
   const read = snapshotReader(deps)
-  // Per-session memory, capped so a long-lived process with many sessions cannot grow it without bound.
+  // Per-session memory, bounded by the sessions this process serves.
   const fingerprints = new Map<string, string>()
   const notes = new Map<string, IdleNoteState>()
-  const remember = <T>(map: Map<string, T>, key: string, value: T) => {
-    map.set(key, value)
-    if (map.size > 1_000) map.clear()
-  }
   const state = (): AutomationState => automationState({ automation: deps.options.automation, access: deps.options.access, owner: true })
 
   const register = async (name: "context" | "compaction" | "experimental.idle", callback: (input: never) => Promise<void>): Promise<void> => {
@@ -146,7 +142,7 @@ export async function registerHooks(ctx: HookContext, deps: HookDeps): Promise<H
       const sessionID = (input as { sessionID: string }).sessionID
       if (fingerprints.get(sessionID) === fingerprint) return
       appendToTail((input as { messages: MessageLike[] }).messages, line)
-      remember(fingerprints, sessionID, fingerprint)
+      fingerprints.set(sessionID, fingerprint)
     } catch {
       // A hook never fails a request and never throws (AGENTS.md).
     }
@@ -180,7 +176,7 @@ export async function registerHooks(ctx: HookContext, deps: HookDeps): Promise<H
       }
       if (own(messages[0]) || own(messages.at(-1))) return
       // Marked before the post, so a re-entry in this same execution is silent even if it beats the queue.
-      remember(notes, sessionID, { at: now, fingerprint: snapshotFingerprint(snapshot) })
+      notes.set(sessionID, { at: now, fingerprint: snapshotFingerprint(snapshot) })
       await ctx.session.synthetic({ sessionID, text: idleNote(snapshot, automation), description: "Colab cost check", metadata: { colab: "idle-check", id: `${sessionID}:${now}` }, resume: false } as never)
     } catch {
       // An experimental hook that fails is off; layers 1 and 2 still hold (design §8.4, C.6).

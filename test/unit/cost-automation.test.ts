@@ -206,7 +206,7 @@ describe("one sweep", () => {
   it("releases an idle runtime through the one release function, with the reason Jupyter's activity gives", async () => {
     const worldOf = world()
     const outcome = await sweep(worldOf)
-    expect(outcome.released).toEqual([{ id: ID, reason: "idle", harvested: 1 }])
+    expect(outcome.released).toEqual([{ id: ID, reason: "idle" }])
     expect(worldOf.release.released).toEqual([{ id: ID, reason: "idle", force: false }])
     expect(outcome.attention).toEqual([])
   })
@@ -272,7 +272,7 @@ describe("one sweep", () => {
   it("is idle by lifetime when the lease's hours passed and Jupyter's activity is recent", async () => {
     const worldOf = world({ runtimes: [record({ createdAt: "2026-11-17T05:00:00.000Z" })], kernels: [kernel({ lastActivity: "2026-11-17T11:55:00.000Z" })] })
     const outcome = await sweep(worldOf)
-    expect(outcome.released).toEqual([{ id: ID, reason: "lifetime", harvested: 1 }])
+    expect(outcome.released).toEqual([{ id: ID, reason: "lifetime" }])
   })
 
   it("works the same for a runtime whose lease names its own thresholds", async () => {

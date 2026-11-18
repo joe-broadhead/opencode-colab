@@ -8,7 +8,7 @@
  */
 import type { Plugin } from "@opencode/plugin"
 import type { Deps, PortEnv } from "../deps.js"
-import type { Budget, Prices, Release } from "../ports.js"
+import type { Budget, Release } from "../ports.js"
 import type { RuntimePorts } from "../runtime/index.js"
 import type { ToolHandlers } from "../tools/types.js"
 import { ledgerBase, createAutomationLoop, type AutomationLoop } from "./automation.js"
@@ -29,10 +29,9 @@ export { createRelease }
  * The opt-in budgets (design §8.5). `src/deps.ts` takes the factory by this name, so `deps.budget` is F's; `refuse`
  * becomes `BUDGET_REACHED` in the caller, `warn` the BUDGET_WARN warning.
  */
-export function createBudget(env: PortEnv, prices?: Pick<Prices, "usdPerHour">): Budget {
-  // `src/deps.ts` calls this with `env` alone; the accepted contract request passes E's table as the second argument,
-  // so a day's records that name their machine are priced as well as those E stamps with `estimatedUsd`.
-  return budgetFrom({ options: env.options, ledger: env.ledger, clock: env.clock, ...(prices !== undefined ? { prices } : {}) })
+export function createBudget(env: PortEnv): Budget {
+  // The daily figure is each run's `estimatedUsd`, the estimate E stamps at the job's commit (contract request 1).
+  return budgetFrom({ options: env.options, ledger: env.ledger, clock: env.clock })
 }
 
 export interface CostContext {

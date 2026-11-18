@@ -76,20 +76,15 @@ export async function cleanupActions(deps: CleanupDeps, now: Date): Promise<read
   })
 }
 
-const note = (action: CleanupAction): string =>
-  action.blocked
-    ? "a run is recorded running; colab_cancel first"
-    : action.record.state === "creating"
-      ? "create never finished; keep files lost"
-      : action.record.tainted
-        ? "tainted; keep files lost"
-        : `no run for ${action.quietMinutes} min`
 
 /** The report, before anything is asked: what costs money, and the one sentence a release needs. */
 export function cleanupReport(deps: CleanupDeps, actions: readonly CleanupAction[], now: Date): string {
-  const lines: string[] = [`Colab cleanup (${deps.options.access})`, `Runtimes of the plugin's own that cost money now: ${actions.length}`]
+  const lines: string[] = [`Colab cleanup (${deps.options.access})`, `Runtimes of ours that cost money: ${actions.length}`]
   if (actions.length > 0) lines.push(RELEASE_LOSS)
-  for (const action of actions) lines.push(`- ${action.record.id}: ${action.record.state === "creating" ? "creating" : specLabel(action.record.spec)} · ${hours(consumerUsage([action.record], now, dayStart(now)).runtimeHours)} today · ${note(action)}`)
+  for (const action of actions) {
+    const note = action.blocked ? "a run is recorded running; colab_cancel first" : action.record.state === "creating" ? "create never finished; keep files lost" : action.record.tainted ? "tainted; keep files lost" : `no run for ${action.quietMinutes} min`
+    lines.push(`- ${action.record.id}: ${action.record.state === "creating" ? "creating" : specLabel(action.record.spec)} · ${hours(consumerUsage([action.record], now, dayStart(now)).runtimeHours)} today · ${note}`)
+  }
   lines.push("Enterprise runtimes: see colab_runtimes and a runtime.stop plan.")
   lines.push(deps.options.access === "read-only" ? "Read only: a report; nothing released, nothing asked." : "Each release asks first; a no changes nothing.")
   return lines.join("\n")

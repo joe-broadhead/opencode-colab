@@ -137,7 +137,7 @@ describe("reviewer repro, colab #10", () => {
       await fixture.ledger.putRun({ runId: "orphan", account: "default", backend: "colab", runtime: record.id, cellIds: [], startedAt: "2026-11-17T09:01:00.000Z", state: "running", outputPaths: [] })
       const outcome = await sweep(fixture, new Date("2026-11-18T09:00:00.000Z"))
       expect(outcome.released).toEqual([])
-      expect(outcome.attention.join(" ")).toContain("a run recorded running since 2026-11-17T09:01:00.000Z")
+      expect(outcome.attention.join(" ")).toContain("a run has been running since 2026-11-17T09:01:00.000Z")
     } finally {
       await fixture.close()
     }

@@ -79,7 +79,7 @@ describe("H9: automation consent", () => {
         const answer = await status(host)
         expect(isStatus(answer)).toBe(true)
         expect(answer.automation, JSON.stringify(entry.options)).toBe(entry.automation)
-        expect(answer.cost).toEqual(expect.objectContaining({ runtimesRunning: expect.any(Number), noRunActive: expect.any(Number) }))
+        expect(answer.cost).toEqual(expect.objectContaining({ runtimesRunning: expect.any(Number) }))
       } finally {
         await host.close()
       }
@@ -106,7 +106,7 @@ describe("H9: automation consent", () => {
         const all = await posted(host, sessionID)
         return all.length > 0 ? all : undefined
       })
-      expect(texts[0]).toContain("Read only: this is a report")
+      expect(texts[0]).toContain("Read only: a report")
       expect(await host.client.permission.list({ sessionID })).toEqual([])
     } finally {
       await host.close()

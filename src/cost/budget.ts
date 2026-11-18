@@ -18,21 +18,16 @@
  * Nothing here makes a Google call: the budget is local, so it answers before the first request of a change.
  */
 import type { PortEnv } from "../deps.js"
-import type { Budget, Prices } from "../ports.js"
+import type { Budget } from "../ports.js"
 import { consumerUsage, dayStart, enterpriseUsage } from "./usage.js"
-
-/** The price table the budget prices with: package E's, or nothing priced (every run uncounted). */
-const NO_PRICES: Pick<Prices, "usdPerHour"> = { usdPerHour: () => undefined }
 
 export interface BudgetEnvironment {
   readonly options: PortEnv["options"]
   readonly ledger: PortEnv["ledger"]
   readonly clock: PortEnv["clock"]
-  readonly prices?: Pick<Prices, "usdPerHour">
 }
 
 export function createBudget(env: BudgetEnvironment): Budget {
-  const prices = env.prices ?? NO_PRICES
   return {
     async check(account, input) {
       const configured = env.options.accounts.find((entry) => entry.alias === account)?.budget
@@ -53,7 +48,7 @@ export function createBudget(env: BudgetEnvironment): Budget {
 
       const limit = configured.enterpriseUsdDaily
       if (limit === undefined) return { verdict: "ok" }
-      const usage = enterpriseUsage(runs, prices, from, now)
+      const usage = enterpriseUsage(runs, from)
       const spent = usage.usd ?? 0
       const proposed = input.usd ?? 0
       if (spent + proposed <= limit + 1e-9) return { verdict: "ok" }

@@ -62,7 +62,6 @@ async function costAndAutomation(ctx: StatusContext, access: Access): Promise<Pi
       cost: {
         runtimeHoursToday: Math.round(consumer.runtimeHours * 10) / 10,
         runtimesRunning: consumer.running,
-        noRunActive: quiet.length,
         ...(oldest !== undefined ? { topCleanup: `colab_plan({ action: "runtime.delete", params: { runtime: "${oldest.id}" } })` } : {}),
         ...(attention.length > 0 ? { attention } : {}),
       },
@@ -70,7 +69,7 @@ async function costAndAutomation(ctx: StatusContext, access: Access): Promise<Pi
     }
   } catch {
     return {
-      cost: { runtimeHoursToday: 0, runtimesRunning: 0, noRunActive: 0 },
+      cost: { runtimeHoursToday: 0, runtimesRunning: 0 },
       automation: automationState({ automation: options?.automation ?? "auto", access, owner: true }),
     }
   }

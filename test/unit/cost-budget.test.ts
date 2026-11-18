@@ -6,7 +6,7 @@ import { createBudget } from "../../src/cost/budget.js"
 import { consumerUsage, dayStart, enterpriseUsage, runUsd, runtimeHoursBetween } from "../../src/cost/usage.js"
 import { loadOptions } from "../../src/options.js"
 import type { RunRecord, RuntimeRecord } from "../../src/ports.js"
-import { FakeClock, FakePrices, MemoryLedger, T4 } from "../fakes/index.js"
+import { FakeClock, MemoryLedger, T4 } from "../fakes/index.js"
 
 const NOW = new Date("2026-11-17T12:00:00.000Z")
 const ID = "oc-01jcostbudget0000000000"
@@ -42,7 +42,7 @@ async function world(input: { budget?: unknown; runtimes?: readonly RuntimeRecor
   for (const item of input.runtimes ?? []) await ledger.putRuntime(item)
   for (const item of input.runs ?? []) await ledger.putRun(item)
   const options = await loadOptions(input.budget === undefined ? {} : { accounts: { default: { budget: input.budget } } })
-  return { clock, ledger, options, prices: new FakePrices(), budget: createBudget({ options, ledger, clock, prices: new FakePrices() }) }
+  return { clock, ledger, options, budget: createBudget({ options, ledger, clock }) }
 }
 
 describe("the usage arithmetic", () => {
@@ -55,16 +55,14 @@ describe("the usage arithmetic", () => {
     expect(runtimeHoursBetween({ createdAt: "2026-11-17T13:00:00.000Z" }, from, to)).toBe(0)
   })
 
-  it("prices a run by its own estimatedUsd first, then by the machine its spec names", () => {
-    const prices = new FakePrices()
-    expect(runUsd(run({ estimatedUsd: 1.25 }), prices, NOW)).toBe(1.25)
-    expect(runUsd(run({ spec: "e2-standard-4" }), prices, NOW)).toBeCloseTo(0.19 * 1, 5)
-    expect(runUsd(run(), prices, NOW)).toBeUndefined()
-    expect(runUsd(run({ spec: "unknown-machine" }), prices, NOW)).toBeUndefined()
+  it("prices a run by the estimatedUsd E stamps at its commit, and nothing else", () => {
+    expect(runUsd(run({ estimatedUsd: 1.25 }))).toBe(1.25)
+    expect(runUsd(run())).toBeUndefined()
+    expect(runUsd(run({ estimatedUsd: -1 }))).toBeUndefined()
   })
 
   it("reports how many runs of the day it could not price", () => {
-    const usage = enterpriseUsage([run({ estimatedUsd: 2 }), run({ runId: "oc-job-2" }), { ...run({ runId: "oc-job-3" }), backend: "colab" }], new FakePrices(), dayStart(NOW), NOW)
+    const usage = enterpriseUsage([run({ estimatedUsd: 2 }), run({ runId: "oc-job-2" }), { ...run({ runId: "oc-job-3" }), backend: "colab" }], dayStart(NOW))
     expect(usage).toEqual({ runs: 2, usd: 2, unpriced: 1 })
   })
 
@@ -111,10 +109,9 @@ describe("the budget", () => {
     expect(await worldOf.budget.check("default", { action: "job.create", usd: 100 }, new AbortController().signal)).toEqual({ verdict: "ok" })
   })
 
-  it("prices today's jobs from a record that names its machine, at the dated table", async () => {
-    const worldOf = await world({ budget: { enterpriseUsdDaily: 0.2, action: "refuse" }, runs: [run({ spec: "e2-standard-4" })] })
-    // e2-standard-4 is $0.19/h in the fake table, run for one hour: $0.19.
-    expect(await worldOf.budget.check("default", { action: "job.create", usd: 0.005 }, new AbortController().signal)).toEqual({ verdict: "ok" })
-    expect(await worldOf.budget.check("default", { action: "job.create", usd: 0.02 }, new AbortController().signal)).toEqual({ verdict: "refuse", spentUsd: 0.19, limitUsd: 0.2 })
+  it("refuses the third $5 job against a $10 daily limit, as the day's committed estimates add up", async () => {
+    const worldOf = await world({ budget: { enterpriseUsdDaily: 10, action: "refuse" }, runs: [run({ estimatedUsd: 5 }), run({ runId: "oc-job-2", estimatedUsd: 5 })] })
+    expect(await worldOf.budget.check("default", { action: "job.create", usd: 5 }, new AbortController().signal)).toEqual({ verdict: "refuse", spentUsd: 10, limitUsd: 10 })
+    expect(await worldOf.budget.check("default", { action: "job.create", usd: 0.5 }, new AbortController().signal)).toEqual({ verdict: "refuse", spentUsd: 10, limitUsd: 10 })
   })
 })
