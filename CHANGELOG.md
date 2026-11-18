@@ -43,3 +43,10 @@ All notable changes to this project are documented here. The format follows [Kee
   the tests.
 - The docs: the README, [Safety](docs/safety.md) (the guarantee, every known limit, the live checks not yet run),
   and the sources in [Scripting](docs/scripting.md) and [In Jelly](docs/jelly.md).
+
+- Package F, cost, cleanup and status: the one harvest-then-release function both the automation and the
+  `runtime.delete` plan use (keep paths into `<workDir>/harvest/<runtimeId>/`, a failed harvest blocking the release,
+  a tainted runtime released only by plan), the Jupyter idle rule and the 60-second automation with one heartbeat owner
+  per machine, the consent matrix over `access` and `automation`, the opt-in per-account budgets, the `cost` and
+  `cleanup` blocks of `colab_status`, the context, compaction and `experimental.idle` hooks, `/colab-cleanup`'s
+  person-only prompts, and the Cost and Automation rows in `/colab-status` and the TUI.

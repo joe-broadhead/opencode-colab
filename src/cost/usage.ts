@@ -1,0 +1,102 @@
+/**
+ * What the plugin can say about money without a Google call (design §8.1, §8.4, §8.5).
+ *
+ * Google publishes no consumer compute-unit rate and no balance (design §8.1, U1), so consumer cost is counted in
+ * runtime-hours, by accelerator, and says `ratesKnown: false`. Enterprise cost is USD from the dated price table
+ * (package E's `Prices` seam); a job's estimate needs the compute it ran on, which the ledger holds when the record
+ * carries `estimatedUsd` or `spec` (the machine) — otherwise the figure is incomplete and says so.
+ *
+ * Everything here reads the ledger and options only: no network, no token.
+ */
+import type { Ledger, Prices, RunRecord, RuntimeRecord } from "../ports.js"
+
+/** One record's share of a time window, in hours; a released record stops at its release. */
+export function runtimeHoursBetween(record: Pick<RuntimeRecord, "createdAt" | "releasedAt">, from: Date, to: Date): number {
+  const created = Date.parse(record.createdAt)
+  if (!Number.isFinite(created)) return 0
+  const released = record.releasedAt ? Date.parse(record.releasedAt) : to.getTime()
+  const start = Math.max(created, from.getTime())
+  const end = Math.min(Number.isFinite(released) ? released : to.getTime(), to.getTime())
+  return end > start ? (end - start) / 3_600_000 : 0
+}
+
+/** The start of the person's local day: "today" in the cost block and the budget's daily window. */
+export function dayStart(now: Date): Date {
+  const start = new Date(now.getTime())
+  start.setHours(0, 0, 0, 0)
+  return start
+}
+
+/**
+ * A run's USD estimate: the record's own `estimatedUsd` when a package recorded one, else the machine its `spec` names
+ * at the dated table's rate for the run's length. `undefined` means the ledger does not say what it cost.
+ */
+export function runUsd(run: RunRecord, prices: Pick<Prices, "usdPerHour">, now: Date): number | undefined {
+  const own = (run as { readonly estimatedUsd?: unknown }).estimatedUsd
+  if (typeof own === "number") return Number.isFinite(own) && own >= 0 ? own : undefined
+  if (run.spec === undefined) return undefined
+  const perHour = prices.usdPerHour({ machine: run.spec })
+  if (perHour === undefined) return undefined
+  const started = Date.parse(run.startedAt)
+  if (!Number.isFinite(started)) return undefined
+  const ended = run.endedAt ? Date.parse(run.endedAt) : now.getTime()
+  return perHour * Math.max(0, ((Number.isFinite(ended) ? ended : now.getTime()) - started) / 3_600_000)
+}
+
+export interface ConsumerUsage {
+  /** Runtime-hours of the plugin's own consumer runtimes inside the window. */
+  readonly runtimeHours: number
+  /** Consumer runtimes of ours that are live now (ready or creating), tainted ones included: they still bill. */
+  readonly running: number
+  /** Hours of the oldest live runtime. */
+  readonly oldestHours: number
+}
+
+export function consumerUsage(runtimes: readonly RuntimeRecord[], now: Date, from: Date): ConsumerUsage {
+  const live = runtimes.filter((record) => record.state === "ready" || record.state === "creating")
+  const runtimeHours = runtimes.reduce((sum, record) => sum + runtimeHoursBetween(record, from, now), 0)
+  const ages = live.map((record) => (now.getTime() - Date.parse(record.createdAt)) / 3_600_000).filter((hours) => Number.isFinite(hours))
+  return { runtimeHours, running: live.length, oldestHours: ages.length > 0 ? Math.max(...ages) : 0 }
+}
+
+export interface EnterpriseUsage {
+  /** Enterprise runs started in the window. */
+  readonly runs: number
+  /** The priced part of their cost; undefined when none could be priced. */
+  readonly usd?: number
+  /** Runs in the window whose compute the ledger does not name, so `usd` is a floor, not the total. */
+  readonly unpriced: number
+}
+
+export function enterpriseUsage(runs: readonly RunRecord[], prices: Pick<Prices, "usdPerHour">, from: Date, now: Date): EnterpriseUsage {
+  const window = runs.filter((run) => run.backend === "enterprise" && run.startedAt >= from.toISOString())
+  let usd: number | undefined
+  let unpriced = 0
+  for (const run of window) {
+    const estimate = runUsd(run, prices, now)
+    if (estimate === undefined) {
+      unpriced += 1
+      continue
+    }
+    usd = (usd ?? 0) + estimate
+  }
+  return { runs: window.length, ...(usd !== undefined ? { usd } : {}), unpriced }
+}
+
+/** A ledger read a status surface needs, filtered to one account when the call named one. */
+export async function readCostRecords(
+  ledger: Pick<Ledger, "listRuntimes" | "listRuns">,
+  account: string | undefined,
+): Promise<{ readonly runtimes: readonly RuntimeRecord[]; readonly runs: readonly RunRecord[] }> {
+  const [runtimes, runs] = await Promise.all([
+    ledger.listRuntimes(account === undefined ? {} : { account }),
+    ledger.listRuns(account === undefined ? {} : { account }),
+  ])
+  return { runtimes, runs }
+}
+
+/** Runtime-hours as one decimal, the figure every surface shows. */
+export const hours = (value: number): string => `${value.toFixed(1)} runtime-hour${Math.abs(value - 1) < 0.05 ? "" : "s"}`
+
+/** USD with cents below $10 and whole dollars above, as the cost block shows it. */
+export const usd = (value: number): string => (value < 10 ? `$${value.toFixed(2)}` : `$${value.toFixed(0)}`)

@@ -1,22 +1,80 @@
-// Package F, Cost, cleanup, status (docs/v1-design.md, File ownership): the automation owner, the Jupyter idle rule,
-// harvest-then-release (the one release function), budgets, the cost and cleanup blocks, the hooks, colab_status,
-// `/colab-cleanup`, and the status RPC and TUI (src/rpc.ts, src/status.ts, src/tui/). Day 0 stubs answer
-// NOT_IMPLEMENTED and register nothing.
-import type { PortEnv } from "../deps.js"
-import type { Release } from "../ports.js"
+/**
+ * Package F, Cost, cleanup, status (docs/v1-design.md, File ownership): `colab_status`, the one release function, the
+ * opt-in budgets, the automation owner and the Jupyter idle rule, `/colab-cleanup`, and the three hooks. `src/status.ts`,
+ * `src/rpc.ts` and `src/tui/` grow the same status for `/colab-status` and the dialog.
+ *
+ * The pieces and the design sections they build: §8.3 (automation, harvest-then-release), §8.4 (cost and cleanup
+ * blocks, hooks), §8.5 (the person's command and budgets), §16 F.
+ */
+import type { Plugin } from "@opencode/plugin"
+import type { Deps, PortEnv } from "../deps.js"
+import type { Budget, Release } from "../ports.js"
 import type { RuntimePorts } from "../runtime/index.js"
-import { notImplemented } from "../stub.js"
 import type { ToolHandlers } from "../tools/types.js"
+import { ledgerBase, createAutomationLoop, type AutomationLoop } from "./automation.js"
+import { createBudget as budgetFrom } from "./budget.js"
+import { registerCleanup } from "./cleanup.js"
+import { registerHooks } from "./hooks.js"
+import { createRelease } from "./release.js"
+import { runStatus } from "./status.js"
 
 export const HANDLERS: ToolHandlers = {
-  status: { run: async () => notImplemented("colab_status") },
+  status: { run: runStatus },
 }
 
-export function createRelease(_env: PortEnv, _runtime: RuntimePorts): Release {
-  return { release: async () => notImplemented("Releasing a runtime") }
+/** The one release function (design §8.3 step 2): harvest the keep paths, then `runtimes.delete`. */
+export { createRelease }
+
+/**
+ * The opt-in budgets (design §8.5). `src/deps.ts` takes the factory by this name, so `deps.budget` is F's; `refuse`
+ * becomes `BUDGET_REACHED` in the caller, `warn` the BUDGET_WARN warning.
+ */
+export function createBudget(env: PortEnv): Budget {
+  return budgetFrom({ options: env.options, ledger: env.ledger, clock: env.clock })
 }
 
-/** The host registrations F owns (automation, hooks, `/colab-cleanup`). Day 0 registers nothing. */
-export async function registerCost(_ctx: unknown, _deps: unknown): Promise<{ dispose(): Promise<void> }> {
-  return { dispose: async () => undefined }
+export interface CostContext {
+  readonly command: Pick<Plugin.Context["command"], "transform">
+  readonly session: Pick<Plugin.Context["session"], "hook" | "synthetic" | "context">
+  readonly permission: Pick<Plugin.Context["permission"], "assert">
+}
+
+/** The host registrations F owns: `/colab-cleanup`, the three hooks and the automation loop. */
+export async function registerCost(ctx: CostContext, deps: Deps): Promise<{ dispose(): Promise<void> }> {
+  const stops: { dispose(): Promise<void> }[] = []
+  let loop: AutomationLoop | undefined
+  try {
+    stops.push(
+      await registerCleanup(ctx, {
+        options: deps.options,
+        ledger: deps.ledger,
+        release: deps.release,
+        clock: deps.clock,
+      }),
+    )
+    const hooks = await registerHooks(ctx, { options: deps.options, ledger: deps.ledger, clock: deps.clock })
+    stops.push(...hooks.stop)
+    // The ledger's own housekeeping (design §5: pruned after ledgerDays) belongs to the one automation owner, once per
+    // process. A failed prune never fails setup.
+    deps.ledger.prune(deps.clock.now()).catch(() => undefined)
+    loop = createAutomationLoop({
+      options: deps.options,
+      ledger: deps.ledger,
+      runtime: deps.runtime,
+      colab: deps.colab,
+      release: deps.release,
+      clock: deps.clock,
+      ...(ledgerBase(deps.ledger) !== undefined ? { lockDir: ledgerBase(deps.ledger)! } : {}),
+    })
+  } catch (error) {
+    for (const stop of stops.splice(0).reverse()) await stop.dispose().catch(() => undefined)
+    await loop?.dispose()
+    throw error
+  }
+  return {
+    async dispose() {
+      await loop?.dispose()
+      for (const stop of stops.splice(0).reverse()) await stop.dispose()
+    },
+  }
 }
