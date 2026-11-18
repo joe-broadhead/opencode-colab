@@ -8,7 +8,7 @@
  */
 import type { Plugin } from "@opencode/plugin"
 import type { Deps, PortEnv } from "../deps.js"
-import type { Budget, Release } from "../ports.js"
+import type { Budget, Prices, Release } from "../ports.js"
 import type { RuntimePorts } from "../runtime/index.js"
 import type { ToolHandlers } from "../tools/types.js"
 import { ledgerBase, createAutomationLoop, type AutomationLoop } from "./automation.js"
@@ -29,9 +29,10 @@ export { createRelease }
  * The opt-in budgets (design §8.5). `src/deps.ts` takes the factory by this name, so `deps.budget` is F's; `refuse`
  * becomes `BUDGET_REACHED` in the caller, `warn` the BUDGET_WARN warning.
  */
-export function createBudget(env: PortEnv): Budget {
-  // The daily figure is each run's `estimatedUsd`, the estimate E stamps at the job's commit (contract request 1).
-  return budgetFrom({ options: env.options, ledger: env.ledger, clock: env.clock })
+export function createBudget(env: PortEnv, prices: Prices): Budget {
+  // The daily figure is each run's `estimatedUsd` (E stamps it at the job's commit); E's table prices a record that
+  // names its machine instead.
+  return budgetFrom({ options: env.options, ledger: env.ledger, clock: env.clock, prices })
 }
 
 export interface CostContext {
@@ -41,9 +42,10 @@ export interface CostContext {
 }
 
 /** The host registrations F owns: `/colab-cleanup`, the three hooks and the automation loop. */
-export async function registerCost(ctx: CostContext, deps: Deps): Promise<{ dispose(): Promise<void> }> {
+export async function registerCost(ctx: CostContext, deps: Deps): Promise<{ dispose(): Promise<void>; readonly problems: readonly string[] }> {
   const stops: { dispose(): Promise<void> }[] = []
   let loop: AutomationLoop | undefined
+  let problems: readonly string[] = []
   try {
     stops.push(
       await registerCleanup(ctx, {
@@ -55,6 +57,7 @@ export async function registerCost(ctx: CostContext, deps: Deps): Promise<{ disp
     )
     const hooks = await registerHooks(ctx, { options: deps.options, ledger: deps.ledger, clock: deps.clock })
     stops.push(...hooks.stop)
+    problems = hooks.problems
     // The ledger's own housekeeping (design §5: pruned after ledgerDays) belongs to the one automation owner, once per
     // process. A failed prune never fails setup.
     deps.ledger.prune(deps.clock.now()).catch(() => undefined)
@@ -73,6 +76,8 @@ export async function registerCost(ctx: CostContext, deps: Deps): Promise<{ disp
     throw error
   }
   return {
+    // A host that refused a hook is named in status (design §8.4, boxd C.6); `plugin.ts` words each one.
+    problems,
     async dispose() {
       await loop?.dispose()
       for (const stop of stops.splice(0).reverse()) await stop.dispose()

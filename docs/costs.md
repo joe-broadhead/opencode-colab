@@ -125,11 +125,14 @@ How each figure is measured, said plainly:
 
 - consumer runtime-hours come from the ledger (each record's creation to its release, inside the person's local day),
   so that limit is complete;
-- today's Enterprise USD is the sum of the day's runs' `estimatedUsd` — the estimate package E stamps at each job's
-  commit, the same figure its preview showed. So two $5 jobs against a $10 daily `refuse` limit make the third $5 job
-  `BUDGET_REACHED`. A record without an estimate (a job older than that write, or one another client started) cannot be
-  priced; then the day is a floor, `colab_status` reports `complete: false`, and `refuse` degrades to `warn` rather than
-  blocking every call on a number nobody can measure. A single call whose own estimate is over the limit still refuses.
+- today's Enterprise USD is the sum of the day's runs' `estimatedUsd` — the estimate package E stores at each job's
+  commit, the same figure its preview showed and its commit re-checked — or, for a record whose `spec` names its
+  machine, E's dated table. The verdict is then exactly: counted spend plus the call's own estimate within the limit →
+  `ok`; over it → `refuse`, or `warn` when the budget's action is warn. So two $5 jobs against a $10 daily `refuse`
+  limit make the third $5 job `BUDGET_REACHED`.
+  A **legacy** run with no estimate and no `spec` (one created before this change, or by another client) is uncounted:
+  it contributes `$0`, so a call within the rest of the limit answers `ok` even though the real spend is higher, and
+  `colab_status` reports `jobsToday.complete: false`. That is the one case where the daily figure is a floor.
 
 ## Live checks
 

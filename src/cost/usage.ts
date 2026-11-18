@@ -8,7 +8,7 @@
  *
  * Everything here reads the ledger and options only: no network, no token.
  */
-import type { Ledger, RunRecord, RuntimeRecord } from "../ports.js"
+import type { Ledger, Prices, RunRecord, RuntimeRecord } from "../ports.js"
 
 /** One record's share of a time window, in hours; a released record stops at its release. */
 export function runtimeHoursBetween(record: Pick<RuntimeRecord, "createdAt" | "releasedAt">, from: Date, to: Date): number {
@@ -28,12 +28,20 @@ export function dayStart(now: Date): Date {
 }
 
 /**
- * A run's USD estimate: the `estimatedUsd` package E stamps at the job's commit (the accepted contract request).
- * `undefined` means the ledger does not say what it cost.
+ * A run's USD estimate: the `estimatedUsd` package E stamps at the job's commit (the accepted contract request), else
+ * the machine its `spec` names at the dated table's rate for the run's length. `undefined` means the ledger does not
+ * say what it cost (a legacy record, or one another client wrote).
  */
-export function runUsd(run: RunRecord): number | undefined {
+export function runUsd(run: RunRecord, prices: Pick<Prices, "usdPerHour">, now: Date): number | undefined {
   const own = (run as { readonly estimatedUsd?: unknown }).estimatedUsd
-  return typeof own === "number" && Number.isFinite(own) && own >= 0 ? own : undefined
+  if (typeof own === "number") return Number.isFinite(own) && own >= 0 ? own : undefined
+  if (run.spec === undefined) return undefined
+  const perHour = prices.usdPerHour({ machine: run.spec })
+  if (perHour === undefined) return undefined
+  const started = Date.parse(run.startedAt)
+  if (!Number.isFinite(started)) return undefined
+  const ended = run.endedAt ? Date.parse(run.endedAt) : now.getTime()
+  return perHour * Math.max(0, ((Number.isFinite(ended) ? ended : now.getTime()) - started) / 3_600_000)
 }
 
 export interface ConsumerUsage {
@@ -59,12 +67,12 @@ export interface EnterpriseUsage {
   readonly unpriced: number
 }
 
-export function enterpriseUsage(runs: readonly RunRecord[], from: Date): EnterpriseUsage {
+export function enterpriseUsage(runs: readonly RunRecord[], prices: Pick<Prices, "usdPerHour">, from: Date, now: Date): EnterpriseUsage {
   const window = runs.filter((run) => run.backend === "enterprise" && run.startedAt >= from.toISOString())
   let usd: number | undefined
   let unpriced = 0
   for (const run of window) {
-    const estimate = runUsd(run)
+    const estimate = runUsd(run, prices, now)
     if (estimate === undefined) {
       unpriced += 1
       continue

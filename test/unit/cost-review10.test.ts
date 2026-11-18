@@ -9,10 +9,11 @@ import { runAutomationOnce } from "../../src/cost/automation.js"
 import { createBudget } from "../../src/cost/index.js"
 import { cleanupActions } from "../../src/cost/cleanup.js"
 import { createRelease } from "../../src/cost/release.js"
+import { confirmJobCreate, openJobCreate } from "../../src/enterprise/runs.js"
 import type { PortEnv } from "../../src/deps.js"
 import { loadOptions } from "../../src/options.js"
 import type { RunRecord, RuntimeRecord } from "../../src/ports.js"
-import { CLEAN_CALIBRATION, FakeClock, MemoryLedger, T4 } from "../fakes/index.js"
+import { CLEAN_CALIBRATION, FakeClock, FakePrices, MemoryLedger, T4 } from "../fakes/index.js"
 import { createRuntimeFixture } from "../fakes/runtime-env.js"
 
 const temporary: string[] = []
@@ -107,27 +108,29 @@ describe("reviewer repro, colab #10", () => {
     expect(actions[0]).toMatchObject({ blocked: false, quietMinutes: 60 })
   })
 
-  it("R4: a refuse budget of $10 a day refuses the third $5 job, from the day's committed estimates", async () => {
+  it("R4: a refuse budget of $10 a day refuses the third $5 job, created through package E's writers", async () => {
     const clock = new FakeClock(NOW)
     const ledger = new MemoryLedger(clock)
-    // The shape E writes after the accepted contract request 1: `estimatedUsd` at the job's commit.
-    for (const id of ["job-a", "job-b"]) {
-      await ledger.putRun({ runId: id, account: "default", backend: "enterprise", job: `projects/p/locations/us-central1/notebookExecutionJobs/${id}`, startedAt: "2026-11-17T09:00:00.000Z", endedAt: "2026-11-17T10:00:00.000Z", state: "ok", cellIds: [], outputPaths: [], summary: "Colab Enterprise job", estimatedUsd: 5 } as RunRecord)
+    // Two jobs E created: `openJobCreate` stores the preview's estimate, `confirmJobCreate` keeps it.
+    for (const id of ["oc-job-a", "oc-job-b"]) {
+      await openJobCreate({ ledger, clock }, "default", id, { summary: `Colab Enterprise job ${id}`, estimatedUsd: 5 })
+      await confirmJobCreate({ ledger, clock }, "default", { name: `projects/p/locations/us-central1/notebookExecutionJobs/${id}`, displayName: id, state: "JOB_STATE_SUCCEEDED", endTime: "2026-11-17T10:00:00.000Z" })
     }
+    expect((await ledger.getRun("oc-job-a"))?.estimatedUsd).toBe(5)
     const options = loadOptions({ accounts: { default: { budget: { enterpriseUsdDaily: 10, action: "refuse" } } } })
-    const budget = createBudget({ options, ledger, clock, auth: { token: async () => "t", identity: async () => undefined, scopes: async () => [] }, directory: tempDir(), fetch: globalThis.fetch } as PortEnv)
-    expect(await budget.check("default", { action: "job.create", usd: 5 }, new AbortController().signal)).toMatchObject({ verdict: "refuse", spentUsd: 10, limitUsd: 10 })
-    // Two jobs are already over a third of the limit; a single call under what is left still passes.
-    expect(await budget.check("default", { action: "job.create", usd: 0.5 }, new AbortController().signal)).toMatchObject({ verdict: "refuse" })
+    const budget = createBudget({ options, ledger, clock, auth: { token: async () => "t", identity: async () => undefined, scopes: async () => [] }, directory: tempDir(), fetch: globalThis.fetch } as PortEnv, new FakePrices())
+    expect(await budget.check("default", { action: "job.create", usd: 5 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 10, limit: 10, unit: "usd" })
   })
 
-  it("R4b: a day the ledger cannot price is a floor: `refuse` degrades to warn, as documented", async () => {
+  it("R4b: a legacy run without an estimate is uncounted, so a call within the rest of the limit answers ok", async () => {
     const clock = new FakeClock(NOW)
     const ledger = new MemoryLedger(clock)
     await ledger.putRun({ runId: "job-a", account: "default", backend: "enterprise", job: "projects/p/locations/us-central1/notebookExecutionJobs/job-a", startedAt: "2026-11-17T09:00:00.000Z", endedAt: "2026-11-17T10:00:00.000Z", state: "ok", cellIds: [], outputPaths: [], summary: "Colab Enterprise job" })
     const options = loadOptions({ accounts: { default: { budget: { enterpriseUsdDaily: 10, action: "refuse" } } } })
-    const budget = createBudget({ options, ledger, clock, auth: { token: async () => "t", identity: async () => undefined, scopes: async () => [] }, directory: tempDir(), fetch: globalThis.fetch } as PortEnv)
-    expect(await budget.check("default", { action: "job.create", usd: 20 }, new AbortController().signal)).toMatchObject({ verdict: "warn" })
+    const budget = createBudget({ options, ledger, clock, auth: { token: async () => "t", identity: async () => undefined, scopes: async () => [] }, directory: tempDir(), fetch: globalThis.fetch } as PortEnv, new FakePrices())
+    expect(await budget.check("default", { action: "job.create", usd: 5 }, new AbortController().signal)).toEqual({ verdict: "ok" })
+    // The same call counted against the limit alone still refuses when its own estimate is over it.
+    expect(await budget.check("default", { action: "job.create", usd: 11 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 0, limit: 10, unit: "usd" })
   })
 
   it("R5 (LOW 1): a `running` run left by a process that died is named, not silently blocking", async () => {

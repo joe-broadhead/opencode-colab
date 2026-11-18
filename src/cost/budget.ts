@@ -5,29 +5,34 @@
  * `BUDGET_REACHED`, on `warn` it rides back as the `BUDGET_WARN` warning. Release, pause, stop and cancel never ask,
  * because they lower the cost.
  *
- * How spend is measured, and the one honesty it needs:
+ * How spend is measured, exactly:
  *
  * - consumer runtime-hours come from the ledger: each record's `createdAt` up to `releasedAt` (or now), intersected
  *   with the person's local day. That figure is complete, so `runtimeHoursDaily` refuses as asked;
- * - Enterprise USD comes from the ledger's runs started today. The ledger holds a run's compute only when the record
- *   carries `estimatedUsd` or `spec` (the machine); a record with neither cannot be priced, so the day's spend is a
- *   floor. Then `colab_status` reports it incomplete, and a `refuse` budget degrades to `warn` (the family's rule for a
- *   number nobody can measure: never block every call on it). A single call whose own estimate is over the limit still
- *   refuses, because the proposed amount is always counted.
+ * - Enterprise USD comes from the ledger's runs started today: each run's `estimatedUsd` (the preview's figure, stored
+ *   by package E at the commit) or, for a record that names its machine, E's dated table. The day's counted spend plus
+ *   the call's own estimate decides: within the limit → `ok`; over it → `refuse` or `warn`, as the budget's action
+ *   says. A legacy record with neither figure is uncounted (`$0`), so the day is a floor: a call within the rest of the
+ *   limit answers `ok` even though the real spend is higher, and `colab_status` says `complete: false`.
  *
  * Nothing here makes a Google call: the budget is local, so it answers before the first request of a change.
  */
 import type { PortEnv } from "../deps.js"
-import type { Budget } from "../ports.js"
+import type { Budget, Prices } from "../ports.js"
 import { consumerUsage, dayStart, enterpriseUsage } from "./usage.js"
+
+/** The price table the budget prices a `spec`-named run with: E's dated table. */
+const NO_PRICES: Pick<Prices, "usdPerHour"> = { usdPerHour: () => undefined }
 
 export interface BudgetEnvironment {
   readonly options: PortEnv["options"]
   readonly ledger: PortEnv["ledger"]
   readonly clock: PortEnv["clock"]
+  readonly prices?: Pick<Prices, "usdPerHour">
 }
 
 export function createBudget(env: BudgetEnvironment): Budget {
+  const prices = env.prices ?? NO_PRICES
   return {
     async check(account, input) {
       const configured = env.options.accounts.find((entry) => entry.alias === account)?.budget
@@ -43,19 +48,16 @@ export function createBudget(env: BudgetEnvironment): Budget {
         // A create starts a runtime whose lease is at most `maxRuntimeHours`, so that is the amount it proposes.
         const proposed = input.runtimeHours ?? env.options.maxRuntimeHours
         if (spent + proposed <= limit + 1e-9) return { verdict: "ok" }
-        return { verdict: configured.action === "refuse" ? "refuse" : "warn", spentUsd: spent, limitUsd: limit }
+        return { verdict: configured.action === "refuse" ? "refuse" : "warn", spent, limit, unit: "runtime-hours" }
       }
 
       const limit = configured.enterpriseUsdDaily
       if (limit === undefined) return { verdict: "ok" }
-      const usage = enterpriseUsage(runs, from)
+      const usage = enterpriseUsage(runs, prices, from, now)
       const spent = usage.usd ?? 0
       const proposed = input.usd ?? 0
       if (spent + proposed <= limit + 1e-9) return { verdict: "ok" }
-      // A day with runs the ledger cannot price is measured only as a floor: refuse degrades to warn rather than
-      // blocking every call on a number nobody can see.
-      const unmeasured = usage.unpriced > 0
-      return { verdict: configured.action === "refuse" && !unmeasured ? "refuse" : "warn", spentUsd: spent, limitUsd: limit }
+      return { verdict: configured.action === "refuse" ? "refuse" : "warn", spent, limit, unit: "usd" }
     },
   }
 }

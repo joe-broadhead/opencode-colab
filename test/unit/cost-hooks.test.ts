@@ -16,7 +16,9 @@ import {
 } from "../../src/cost/hooks.js"
 import { loadOptions } from "../../src/options.js"
 import { FakeClock, MemoryLedger, T4 } from "../fakes/index.js"
-import { RecordingHooks } from "../fakes/cost-fakes.js"
+import { registerCost } from "../../src/cost/index.js"
+import { RecordingAsserts, RecordingCommands, RecordingHooks } from "../fakes/cost-fakes.js"
+import { fakeDeps } from "../fakes/index.js"
 
 const NOW = new Date("2026-11-17T12:00:00.000Z")
 
@@ -181,6 +183,15 @@ describe("registration", () => {
     const registration = await registerHooks({ session: session as never }, { options: await loadOptions({}), ledger: new MemoryLedger(clock), clock })
     expect(registration.problems).toEqual(["idle"])
     expect(session.registered.sort()).toEqual(["compaction", "context"])
+  })
+
+  it("returns the host's refused hooks as problems, so /colab-status can say the idle check is off", async () => {
+    const session = new RecordingHooks()
+    session.refuse.add("experimental.idle")
+    const { deps } = fakeDeps({ options: { access: "ask-changes" } })
+    const registration = await registerCost({ command: new RecordingCommands() as never, session: session as never, permission: new RecordingAsserts() as never }, deps)
+    expect(registration.problems).toEqual(["idle"])
+    await registration.dispose()
   })
 
   it("never fails the request when the ledger cannot be read", async () => {

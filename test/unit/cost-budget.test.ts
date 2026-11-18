@@ -6,7 +6,7 @@ import { createBudget } from "../../src/cost/budget.js"
 import { consumerUsage, dayStart, enterpriseUsage, runUsd, runtimeHoursBetween } from "../../src/cost/usage.js"
 import { loadOptions } from "../../src/options.js"
 import type { RunRecord, RuntimeRecord } from "../../src/ports.js"
-import { FakeClock, MemoryLedger, T4 } from "../fakes/index.js"
+import { FakeClock, FakePrices, MemoryLedger, T4 } from "../fakes/index.js"
 
 const NOW = new Date("2026-11-17T12:00:00.000Z")
 const ID = "oc-01jcostbudget0000000000"
@@ -42,7 +42,8 @@ async function world(input: { budget?: unknown; runtimes?: readonly RuntimeRecor
   for (const item of input.runtimes ?? []) await ledger.putRuntime(item)
   for (const item of input.runs ?? []) await ledger.putRun(item)
   const options = await loadOptions(input.budget === undefined ? {} : { accounts: { default: { budget: input.budget } } })
-  return { clock, ledger, options, budget: createBudget({ options, ledger, clock }) }
+  const prices = new FakePrices()
+  return { clock, ledger, options, prices, budget: createBudget({ options, ledger, clock, prices }) }
 }
 
 describe("the usage arithmetic", () => {
@@ -55,14 +56,16 @@ describe("the usage arithmetic", () => {
     expect(runtimeHoursBetween({ createdAt: "2026-11-17T13:00:00.000Z" }, from, to)).toBe(0)
   })
 
-  it("prices a run by the estimatedUsd E stamps at its commit, and nothing else", () => {
-    expect(runUsd(run({ estimatedUsd: 1.25 }))).toBe(1.25)
-    expect(runUsd(run())).toBeUndefined()
-    expect(runUsd(run({ estimatedUsd: -1 }))).toBeUndefined()
+  it("prices a run by the estimatedUsd E stamps at its commit, else by the machine its spec names", () => {
+    const prices = new FakePrices()
+    expect(runUsd(run({ estimatedUsd: 1.25 }), prices, NOW)).toBe(1.25)
+    expect(runUsd(run(), prices, NOW)).toBeUndefined()
+    expect(runUsd(run({ estimatedUsd: -1 }), prices, NOW)).toBeUndefined()
+    expect(runUsd(run({ spec: "e2-standard-4" }), prices, NOW)).toBeCloseTo(0.19, 5)
   })
 
   it("reports how many runs of the day it could not price", () => {
-    const usage = enterpriseUsage([run({ estimatedUsd: 2 }), run({ runId: "oc-job-2" }), { ...run({ runId: "oc-job-3" }), backend: "colab" }], dayStart(NOW))
+    const usage = enterpriseUsage([run({ estimatedUsd: 2 }), run({ runId: "oc-job-2" }), { ...run({ runId: "oc-job-3" }), backend: "colab" }], new FakePrices(), dayStart(NOW), NOW)
     expect(usage).toEqual({ runs: 2, usd: 2, unpriced: 1 })
   })
 
@@ -82,7 +85,7 @@ describe("the budget", () => {
 
   it("counts runtime-hours today and the create's own proposal, and warns or refuses as the account says", async () => {
     const warn = await world({ budget: { runtimeHoursDaily: 3, action: "warn" }, runtimes: [record()] })
-    expect(await warn.budget.check("default", { action: "runtime.create" }, new AbortController().signal)).toEqual({ verdict: "warn", spentUsd: 2, limitUsd: 3 })
+    expect(await warn.budget.check("default", { action: "runtime.create" }, new AbortController().signal)).toEqual({ verdict: "warn", spent: 2, limit: 3, unit: "runtime-hours" })
     expect(await warn.budget.check("default", { action: "runtime.create", runtimeHours: 0.5 }, new AbortController().signal)).toEqual({ verdict: "ok" })
 
     const refuse = await world({ budget: { runtimeHoursDaily: 3, action: "refuse" }, runtimes: [record()] })
@@ -91,11 +94,14 @@ describe("the budget", () => {
 
   it("refuses a job whose own estimate is over the daily USD limit, and degrades to warn only when the day cannot be measured", async () => {
     const measured = await world({ budget: { enterpriseUsdDaily: 5, action: "refuse" }, runs: [run({ estimatedUsd: 3 })] })
-    expect(await measured.budget.check("default", { action: "job.create", usd: 3 }, new AbortController().signal)).toEqual({ verdict: "refuse", spentUsd: 3, limitUsd: 5 })
+    expect(await measured.budget.check("default", { action: "job.create", usd: 3 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 3, limit: 5, unit: "usd" })
     expect(await measured.budget.check("default", { action: "job.create", usd: 1 }, new AbortController().signal)).toEqual({ verdict: "ok" })
 
+    // A legacy run without an estimate contributes nothing: the counted spend plus the call still refuses, and the
+    // answer says the unit it counted in.
     const floor = await world({ budget: { enterpriseUsdDaily: 5, action: "refuse" }, runs: [run({ estimatedUsd: 3 }), run({ runId: "oc-job-2" })] })
-    expect(await floor.budget.check("default", { action: "job.create", usd: 3 }, new AbortController().signal)).toEqual({ verdict: "warn", spentUsd: 3, limitUsd: 5 })
+    expect(await floor.budget.check("default", { action: "job.create", usd: 2 }, new AbortController().signal)).toEqual({ verdict: "ok" })
+    expect(await floor.budget.check("default", { action: "job.create", usd: 3 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 3, limit: 5, unit: "usd" })
   })
 
   it("ignores yesterday's runs and a run nobody asked the budget about", async () => {
@@ -111,7 +117,7 @@ describe("the budget", () => {
 
   it("refuses the third $5 job against a $10 daily limit, as the day's committed estimates add up", async () => {
     const worldOf = await world({ budget: { enterpriseUsdDaily: 10, action: "refuse" }, runs: [run({ estimatedUsd: 5 }), run({ runId: "oc-job-2", estimatedUsd: 5 })] })
-    expect(await worldOf.budget.check("default", { action: "job.create", usd: 5 }, new AbortController().signal)).toEqual({ verdict: "refuse", spentUsd: 10, limitUsd: 10 })
-    expect(await worldOf.budget.check("default", { action: "job.create", usd: 0.5 }, new AbortController().signal)).toEqual({ verdict: "refuse", spentUsd: 10, limitUsd: 10 })
+    expect(await worldOf.budget.check("default", { action: "job.create", usd: 5 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 10, limit: 10, unit: "usd" })
+    expect(await worldOf.budget.check("default", { action: "job.create", usd: 0.5 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 10, limit: 10, unit: "usd" })
   })
 })
