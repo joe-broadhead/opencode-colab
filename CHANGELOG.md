@@ -43,3 +43,6 @@ All notable changes to this project are documented here. The format follows [Kee
   the tests.
 - The docs: the README, [Safety](docs/safety.md) (the guarantee, every known limit, the live checks not yet run),
   and the sources in [Scripting](docs/scripting.md) and [In Jelly](docs/jelly.md).
+
+- Package F, cost, cleanup and status: harvest-then-release, the idle rule and automation, budgets, `colab_status`,
+  the hooks, `/colab-cleanup`, and the Cost and Automation rows.

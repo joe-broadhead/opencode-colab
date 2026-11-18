@@ -1,9 +1,15 @@
 // One status, computed fresh on every call, behind /colab-status and the RPC method the TUI view uses. It makes no
-// Google call: it reads OpenCode's own state and the plugin's options. Package F grows it.
+// Google call: it reads OpenCode's own state, the plugin's options and (for the Cost row) the local ledger. Package F
+// grows it.
 import type { Plugin } from "@opencode/plugin"
 import { type Access, DISPLAY_NAME, STATUS_COMMAND, SUPPORTED_HOST, TESTED_HOSTS } from "./constants.js"
+import { automationOwner, automationState, ledgerBase } from "./cost/automation.js"
+import { costAttention } from "./cost/attention.js"
+import { consumerUsage, dayStart } from "./cost/usage.js"
 import { ColabError } from "./domain/errors.js"
 import { isTestedHost } from "./host-version.js"
+import { FileLedger, ledgerDir } from "./ledger/store.js"
+import { loadOptions, type Options } from "./options.js"
 import { defaultRules, unguardedAgents } from "./permissions.js"
 import { AGENT_STEP, type AccountRow, ColabRpc, formatStatus, NOTHING_TO_DO, type SkillPath, type Status } from "./rpc.js"
 import { PLUGIN_VERSION } from "./version.js"
@@ -13,6 +19,8 @@ const UNAVAILABLE = new ColabError("STATUS_UNAVAILABLE").message
 type StatusContext = {
   readonly agent: Pick<Plugin.Context["agent"], "list">
   readonly skill: Pick<Plugin.Context["skill"], "list">
+  /** The raw plugin options: the Cost row and the automation state read them, and an invalid set is already reported. */
+  readonly options?: Plugin.Context["options"]
 }
 
 export type StatusDeps = {
@@ -25,8 +33,50 @@ export type StatusDeps = {
   readonly problems: () => readonly string[]
 }
 
+/** The options, or undefined when they are invalid (setup then reports OPTIONS_INVALID and never reaches status). */
+function optionsOf(ctx: StatusContext): Options | undefined {
+  if (ctx.options === undefined) return undefined
+  try {
+    return loadOptions(ctx.options)
+  } catch {
+    return undefined
+  }
+}
+
+/** The Cost row and the automation state, both from the ledger and the options: no Google call, no token. */
+async function costAndAutomation(ctx: StatusContext, access: Access): Promise<Pick<Status, "cost" | "automation">> {
+  const options = optionsOf(ctx)
+  const ledger = new FileLedger(ledgerDir(process.env), { ledgerDays: options?.ledgerDays ?? 90 })
+  try {
+    const now = new Date()
+    const [runtimes, runs] = await Promise.all([ledger.listRuntimes({}), ledger.listRuns({})])
+    const consumer = consumerUsage(runtimes, now, dayStart(now))
+    const active = new Set(runs.filter((run) => run.state === "running" && run.runtime !== undefined).map((run) => run.runtime as string))
+    const quiet = runtimes.filter((record) => (record.state === "ready" || record.state === "creating") && !active.has(record.id))
+    // The row names a runtime the person can actually release by plan: a ready, untainted one.
+    const releasable = quiet.filter((record) => record.state === "ready" && record.tainted === undefined)
+    const oldest = releasable.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0]
+    const attention = options === undefined ? [] : costAttention({ runtimes, runs, options, now })
+    const owner = automationOwner(ledgerBase(ledger))
+    return {
+      cost: {
+        runtimeHoursToday: Math.round(consumer.runtimeHours * 10) / 10,
+        runtimesRunning: consumer.running,
+        ...(oldest !== undefined ? { topCleanup: `colab_plan({ action: "runtime.delete", params: { runtime: "${oldest.id}" } })` } : {}),
+        ...(attention.length > 0 ? { attention } : {}),
+      },
+      automation: automationState({ automation: options?.automation ?? "auto", access, owner: owner.owner }),
+    }
+  } catch {
+    return {
+      cost: { runtimeHoursToday: 0, runtimesRunning: 0 },
+      automation: automationState({ automation: options?.automation ?? "auto", access, owner: true }),
+    }
+  }
+}
+
 export async function computeStatus(ctx: StatusContext, deps: StatusDeps): Promise<Status> {
-  const [agents, listed] = await Promise.all([ctx.agent.list(), ctx.skill.list().then((result) => result.data, () => undefined)])
+  const [agents, listed, money] = await Promise.all([ctx.agent.list(), ctx.skill.list().then((result) => result.data, () => undefined), costAndAutomation(ctx, deps.access)])
   const unguarded = unguardedAgents(agents.data, deps.access)
   const shadowed = shadowedSkills(deps.skills, listed ?? [])
   const problems = deps.problems()
@@ -41,6 +91,8 @@ export async function computeStatus(ctx: StatusContext, deps: StatusDeps): Promi
     ...(problems.length > 0 ? { problems: [...problems] } : {}),
     host: { version: deps.hostVersion, range: SUPPORTED_HOST, tested: isTestedHost(deps.hostVersion) },
     ...(deps.hostWarning ? { hostWarning: deps.hostWarning } : {}),
+    cost: money.cost,
+    automation: money.automation,
     nextStep:
       problems[0]?.split("Next step: ")[1] ??
       (unguarded.length > 0 ? AGENT_STEP : undefined) ??

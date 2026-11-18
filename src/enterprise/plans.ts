@@ -218,7 +218,7 @@ const jobCreate: PlanHandler<"job.create"> = {
     const jobId = reconciled.status === "retry" ? reconciled.jobId : payload.jobId
     // The intent goes to the ledger before the call: a lost answer, a Stop or a crash leaves a record that blocks a
     // second create until it is reconciled.
-    await openJobCreate(ctx.deps, ctx.account.alias, jobId, { ...(notebook !== undefined ? { notebook } : {}), summary: `Colab Enterprise job ${jobId}` })
+    await openJobCreate(ctx.deps, ctx.account.alias, jobId, { ...(notebook !== undefined ? { notebook } : {}), estimatedUsd: payload.estimateUsd, summary: `Colab Enterprise job ${jobId}` })
     let created: Awaited<ReturnType<typeof ctx.deps.vertex.createJob>>
     try {
       created = await ctx.deps.vertex.createJob(ctx.account.alias, { jobId, body }, ctx.call.signal)

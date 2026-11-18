@@ -537,10 +537,6 @@ export interface Budget {
     readonly spent?: number
     readonly limit?: number
     readonly unit?: "usd" | "runtime-hours"
-    /** @deprecated Read `spent` and `unit`; kept only until package E's merged code moves off it. Never set it. */
-    readonly spentUsd?: number
-    /** @deprecated Read `limit` and `unit`; kept only until package E's merged code moves off it. Never set it. */
-    readonly limitUsd?: number
   }>
 }
 

@@ -51,7 +51,7 @@ function screenNotebook(notebook: Notebook): SecretScreen {
 export async function budgetCheck(ctx: HandlerContext, action: "job.create" | "schedule.create" | "schedule.resume", usd: number | undefined): Promise<readonly WarningCode[]> {
   const answer = await ctx.deps.budget.check(ctx.account.alias, { action, ...(usd !== undefined ? { usd } : {}) }, ctx.call.signal)
   if (answer.verdict === "refuse") {
-    throw new ColabError("BUDGET_REACHED", `The account's budget refuses ${action}${answer.limitUsd !== undefined ? ` (limit $${answer.limitUsd.toFixed(2)})` : ""}.`, {
+    throw new ColabError("BUDGET_REACHED", `The account's budget refuses ${action}${answer.unit === "usd" && answer.limit !== undefined ? ` (limit $${answer.limit.toFixed(2)})` : ""}.`, {
       next: "Wait for the daily reset, or raise the account's budget.",
     })
   }
