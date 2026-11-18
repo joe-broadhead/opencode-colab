@@ -9,10 +9,7 @@
 //   page, so no single run can fail on its own) and **not** `noExpiry`: the ledger prunes after `ledgerDays`, so the
 //   expired-cursor and gap-once checks run on a real expired cursor. `colab.runtimes` runs one snapshot per backend, so
 //   both declared listing operations are asserted.
-// - **The declaration checked is package.json's with contract request 1 applied** (test/fakes/sources-descriptor.ts:
-//   `input.source` on both items, the empty `identity` dropped), and the report says so in `notes`. Without `input` the
-//   contract names a page's source by the item id, `colab.runs`, which is not a source name (`resultProblems`), so no
-//   page can pass; test/unit/sources-declaration.test.ts pins that the request changes nothing else.
+// - **The declaration checked is package.json's own**, as shipped.
 // - **Beyond the kit**, the report's `extra` records what the design asks and the kit has no case for: an account
 //   mismatch at the probe, the list snapshot validated as a consumer validates it, and TOO_LARGE.
 import { describe, expect, test } from "bun:test"
@@ -30,7 +27,7 @@ import { TOOLS } from "../../src/domain/actions.js"
 import type { ToolName } from "../../src/domain/contract.js"
 import { CPU, T4 } from "../fakes/index.js"
 import { callOf, consumerRun, enterpriseJob, HOME, LAB, ourRuntime, sourcesHarness } from "../fakes/sources-harness.js"
-import { PACKAGE_NAME, PACKAGE_VERSION, requestedSources, shippedSources } from "../fakes/sources-descriptor.js"
+import { PACKAGE_NAME, PACKAGE_VERSION, shippedSources } from "../fakes/sources-descriptor.js"
 
 const ROOT = join(import.meta.dir, "..", "..")
 const NOW = Date.parse("2026-11-17T12:00:00.000Z")
@@ -39,9 +36,9 @@ const HOUR = 3_600_000
 const DAY = 86_400_000
 const iso = (ms: number) => new Date(ms).toISOString()
 
-const requested = requestedSources()
-const checked = SOURCES_SCHEMA.check(requested)
-if (!checked.ok) throw new Error(`the requested sources declaration is invalid: ${checked.problems.join("; ")}`)
+const shipped = shippedSources()
+const checked = SOURCES_SCHEMA.check(shipped)
+if (!checked.ok) throw new Error(`the sources declaration is invalid: ${checked.problems.join("; ")}`)
 const sources = checked.value
 const tools = METHOD_NAMES.map((id) => ({ id, readOnly: id === "probe" || TOOLS.find((tool) => tool.name === id)?.class === "read" }))
 
@@ -89,7 +86,7 @@ const extra: { name: string; ok: boolean; detail: string }[] = []
 
 describe("the source contract's conformance kit", () => {
   test("the declaration validates as a consumer reads it", () => {
-    expect(declarationProblems(requested, { tools })).toEqual([])
+    expect(declarationProblems(shipped, { tools })).toEqual([])
     expect(sources.rpc).toBe(TOOLS_RPC_ID)
     expect(sources.items.map((item) => item.id)).toEqual(["colab.runs", "colab.runtimes"])
   })
@@ -146,17 +143,11 @@ describe("the source contract's conformance kit", () => {
   })
 
   test("the report is written for the release job", () => {
-    const shipped = JSON.stringify(shippedSources()) === JSON.stringify(requested)
     const report = {
       ok: reports.length === 2 && reports.every((entry) => entry.ok && !entry.incomplete) && extra.length === 4 && extra.every((entry) => entry.ok),
       plugin: PACKAGE_NAME,
       version: PACKAGE_VERSION,
       contract: { package: "@we-the-rebel-alliance/source-contract", tag: "v0.2.0" },
-      notes: shipped
-        ? []
-        : [
-            "Checked against package.json `sources` with contract request 1 applied: `input.source` on both items and the empty `permission.identity` dropped (test/fakes/sources-descriptor.ts). The shipped Day 0 block names no `input`, so no page can name its source as the contract requires, until the request lands.",
-          ],
       sources: reports,
       extra,
     }

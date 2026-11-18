@@ -1,8 +1,7 @@
 // The `sources` declaration against what a consumer of today accepts. Jelly and Memory vendor source-contract v0.1.x
 // until they re-vendor v0.2.0, and v0.1.x refuses keys v0.2.0 added: a declaration or an answer carrying one makes the
 // whole plugin unreadable as a source. This fails when one appears in package.json `sources`, in a page, or in a probe
-// answer. It also pins contract request 1 (test/fakes/sources-descriptor.ts): the one refused key Day 0's block still
-// holds, and the `input` it lacks, so the exception goes as soon as the request lands.
+// answer, and checks package.json's block itself as a consumer reads it.
 import { describe, expect, it } from "vitest"
 import { declarationProblems } from "@we-the-rebel-alliance/source-contract/conformance"
 import { SOURCES_SCHEMA } from "@we-the-rebel-alliance/source-contract/schema"
@@ -12,7 +11,7 @@ import { METHOD_NAMES } from "../../src/tools-rpc.js"
 import { TOOLS } from "../../src/domain/actions.js"
 import { PACKAGE } from "../../src/sources/index.js"
 import { consumerRun, drain, HOME, LAB, sourcesHarness } from "../fakes/sources-harness.js"
-import { PACKAGE_NAME, requestedSources, shippedSources, v01RefusedKeys } from "../fakes/sources-descriptor.js"
+import { PACKAGE_NAME, shippedSources, v01RefusedKeys } from "../fakes/sources-descriptor.js"
 
 const tools = METHOD_NAMES.map((id) => ({ id, readOnly: id === "probe" || TOOLS.find((tool) => tool.name === id)?.class === "read" }))
 
@@ -41,19 +40,18 @@ describe("keys a v0.1.x consumer refuses", () => {
     expect(v01RefusedKeys({ items: [{ permission: { identity: ["x.users.get"] } }] })).toEqual([])
   })
 
-  it("package.json holds none but the empty identity contract request 1 removes", () => {
-    expect(v01RefusedKeys(shippedSources())).toEqual(["sources.items[0].permission.identity (empty)", "sources.items[1].permission.identity (empty)"])
+  it("package.json holds none", () => {
+    expect(v01RefusedKeys(shippedSources())).toEqual([])
   })
 
-  it("with contract request 1 applied it holds none, and the request changes nothing else", () => {
-    const requested = requestedSources()
-    expect(v01RefusedKeys(requested)).toEqual([])
-    expect(declarationProblems(requested, { tools })).toEqual([])
-    expect(SOURCES_SCHEMA.check(requested).ok).toBe(true)
-    const strip = (block: ReturnType<typeof shippedSources>) =>
-      JSON.stringify(block, (key, value) => (key === "input" || (key === "identity" && Array.isArray(value) && value.length === 0) ? undefined : value))
-    expect(strip(requested)).toBe(strip(shippedSources()))
-    expect(JSON.stringify(requested)).not.toBe(JSON.stringify(shippedSources()))
+  it("package.json names each source by its input, and validates as a consumer reads it", () => {
+    const shipped = shippedSources()
+    expect((shipped["items"] as { id: string; input?: unknown }[]).map((item) => [item.id, item.input])).toEqual([
+      ["colab.runs", { source: "runs" }],
+      ["colab.runtimes", { source: "runtimes" }],
+    ])
+    expect(declarationProblems(shipped, { tools })).toEqual([])
+    expect(SOURCES_SCHEMA.check(shipped).ok).toBe(true)
   })
 
   it("no page and no probe answer carries a refused key", async () => {

@@ -103,18 +103,12 @@ idle-shutdown and end-user-credential flags. More than 50 runtimes, or a listing
 | --- | --- |
 | `NEEDS_SIGN_IN` | `runtimes_read`, or `probe` for `runtimes`: the account is not signed in, or its credential is no longer accepted. |
 | `SCOPE_MISSING` | The sign-in lacks the scope the listing needs. |
-| `ACCOUNT_MISMATCH` | `probe` named an account the plugin does not have. |
+| `ACCOUNT_MISMATCH` | The read named an account the plugin does not have, or none when several are set and none is `default`. |
 | `CURSOR_INVALID` | The cursor is not one this source issued for this account. |
 | `SOURCE_UNKNOWN` | The input named a source other than `runs` or `runtimes` (or their ids, `colab.runs` and `colab.runtimes`). |
 | `INPUT_INVALID` | The input does not fit the method, such as a `scope` (neither source reads one). |
 | `TOO_LARGE` | `runtimes_read` past 50 runtimes. |
 | `RATE_LIMITED`, `UNAVAILABLE`, `PERMISSION_DENIED` | Google's answer to the listing; `UNAVAILABLE` names the plugin's own code when it has one. |
-
-> **Pre-release.** Until the next change to the plugin's contract lands: `probe` over the tools RPC answers
-> `UNAVAILABLE`; a source refusal reaches a script as an error carrying the `CODE: …` message rather than as `failed`
-> with `data.code`; and the tool wrapper's own refusals (an account the plugin does not have, an input its schema
-> refuses) come back as a result `{ state, error, message, next }` instead of `ACCOUNT_MISMATCH` or `INPUT_INVALID`.
-> The package's tests call the source functions directly.
 
 ## Status
 

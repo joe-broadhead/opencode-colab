@@ -63,6 +63,7 @@ import {
   type RefusedEvent,
   type SourceEvent,
 } from "@we-the-rebel-alliance/source-contract/events"
+import { isFinal } from "../ledger/store.js"
 import type { Clock, Ledger, LedgerEvent, RunRecord, RuntimeRecord } from "../ports.js"
 
 /** The plugin's package name: every page names it, and cursors are bound to it. */
@@ -121,9 +122,11 @@ export interface RunsDeps {
   readonly ledgerDays: number
 }
 
-/** A run whose end is recorded. `detached` is not final: the code may still be running and the plugin cannot see it. */
-export const isFinal = (run: RunRecord): run is RunRecord & { readonly endedAt: string } =>
-  run.state !== "running" && run.state !== "detached" && typeof run.endedAt === "string" && !Number.isNaN(Date.parse(run.endedAt))
+/**
+ * A run whose end is recorded: Day 0's one definition, which the ledger's own `run.finished` announcement uses too.
+ * `detached` is not final: the code may still be running and the plugin cannot see it.
+ */
+export { isFinal }
 
 /**
  * Whether a ledger entry announces this run: its id, its account, and appended after the run started. Strictly after:

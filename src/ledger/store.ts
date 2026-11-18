@@ -248,9 +248,13 @@ export class FileLedger implements Ledger {
   }
 }
 
-/** A run is final once it has ended in a state that is neither running nor detached. */
-export function isFinal(run: RunRecord): boolean {
-  return run.state !== "running" && run.state !== "detached" && run.endedAt !== undefined
+/**
+ * A run is final once it has ended in a state that is neither running nor detached, at a time that parses. The one
+ * definition `putRun`'s announcement and the `colab.runs` source share (colab-16, LOW 4): a record with an unparsable
+ * `endedAt` is announced by neither, and listed by neither.
+ */
+export function isFinal(run: RunRecord): run is RunRecord & { readonly endedAt: string } {
+  return run.state !== "running" && run.state !== "detached" && typeof run.endedAt === "string" && !Number.isNaN(Date.parse(run.endedAt))
 }
 
 /** Ids become file names, so they are held to a safe shape. */

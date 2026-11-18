@@ -4,11 +4,11 @@
 // record only), must be listed exactly once over the next reads, with no gap — on the strict in-memory ledger and on the
 // file ledger. And two processes — separate file-ledger instances on one folder, as two OpenCode processes are —
 // writing and reading at once lose nothing and list nothing twice.
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { FileLedger } from "../../src/ledger/store.js"
-import type { Ledger } from "../../src/ports.js"
+import type { Ledger, RunRecord } from "../../src/ports.js"
 import { SWEEP_MAX } from "../../src/sources/runs.js"
 import { SourcesLedger } from "../fakes/sources-ledger.js"
 import { consumerRun, drain, enterpriseJob, HOME, sourcesHarness, type Harness } from "../fakes/sources-harness.js"
@@ -54,7 +54,22 @@ function racing(real: Ledger, at: number, inject: () => Promise<void>): { ledger
   return { ledger, calls: () => count, fire }
 }
 
-function harnessOn(kind: "memory" | "file", wrap?: (real: Ledger) => Ledger): { h: Harness; real: () => Ledger } {
+/**
+ * A writer from before the ledger announced runs itself (Day 0's `putRun` appends `run.finished` since contract #16):
+ * it writes the final record and nothing else — on the file ledger, the record file itself, as an older plugin
+ * version left it; the strict in-memory ledger's `putRun` never appends. That is the run only the sweep can list.
+ */
+function olderWriter(kind: "memory" | "file", dir: string, real: () => Ledger): Ledger {
+  if (kind === "memory") return real()
+  return {
+    async putRun(record: RunRecord) {
+      mkdirSync(join(dir, "runs"), { recursive: true, mode: 0o700 })
+      writeFileSync(join(dir, "runs", `${record.runId}.json`), `${JSON.stringify(record)}\n`, { mode: 0o600 })
+    },
+  } as unknown as Ledger
+}
+
+function harnessOn(kind: "memory" | "file", wrap?: (real: Ledger) => Ledger): { h: Harness; real: () => Ledger; older: () => Ledger } {
   let real: Ledger | undefined
   const dir = kind === "file" ? folder() : ""
   const h = sourcesHarness({
@@ -64,7 +79,7 @@ function harnessOn(kind: "memory" | "file", wrap?: (real: Ledger) => Ledger): { 
     },
   })
   h.fakes.clock.current = new Date(T0)
-  return { h, real: () => real! }
+  return { h, real: () => real!, older: () => olderWriter(kind, dir, () => real!) }
 }
 
 async function finish(ledger: Ledger, writer: Writer, end: number) {
@@ -79,7 +94,7 @@ describe("a run that ends during a read", () => {
         it(`is listed once, whichever ledger call of the read it lands before (${kind} ledger, ${writer}'s writer, ${sweeping ? "a read that sweeps" : "no sweep"})`, async () => {
           // How many ledger calls one read makes, sweep included: measured, so every point stays covered as the code moves.
           const probe = harnessOn(kind)
-          if (sweeping) await consumerRun(probe.real(), { runId: "orphan", start: T0 - 2 * MIN, end: T0 - MIN })
+          if (sweeping) await consumerRun(probe.older(), { runId: "orphan", start: T0 - 2 * MIN, end: T0 - MIN })
           const counted = racing(probe.real(), -1, async () => undefined)
           const counter = sourcesHarness({ ledger: () => counted.ledger })
           counter.fakes.clock.current = new Date(T0)
@@ -87,12 +102,12 @@ describe("a run that ends during a read", () => {
           const points = counted.calls()
           expect(points).toBeGreaterThanOrEqual(sweeping ? 6 : 3)
           for (let at = 0; at < points; at++) {
-            const { h, real } = harnessOn(kind)
+            const { h, real, older } = harnessOn(kind)
             if (writer === "E") await enterpriseJob(real(), { runId: "racer", account: HOME, start: T0 - 30 * MIN })
             else await consumerRun(real(), { runId: "racer", start: T0 - 30 * MIN })
             const first = await drain(h.tool, {})
-            // A run D's writer finished with no entry, so the raced read sweeps (and reads the log and records twice).
-            if (sweeping) await consumerRun(real(), { runId: "orphan", start: T0 - 2 * MIN, end: T0 - MIN })
+            // A run an older writer finished with no entry, so the raced read sweeps (and reads the log and records twice).
+            if (sweeping) await consumerRun(older(), { runId: "orphan", start: T0 - 2 * MIN, end: T0 - MIN })
             h.fakes.clock.current = new Date(T0 + 2 * MIN)
             // The next read: the run ends just before the read's `at`-th ledger call.
             const armed = racing(real(), at, () => finish(real(), writer, T0 + MIN))
