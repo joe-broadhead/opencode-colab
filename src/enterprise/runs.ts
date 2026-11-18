@@ -127,6 +127,7 @@ async function record(env: EnterpriseRunsEnv, account: string, job: EnterpriseJo
     ...(finished && job.state !== "JOB_STATE_SUCCEEDED"
       ? { errorCode: job.state === "JOB_STATE_EXPIRED" ? "JOB_TIMEOUT" : job.state === "JOB_STATE_CANCELLED" ? "CANCELLED" : "JOB_FAILED" }
       : {}),
+    ...(existing.estimatedUsd !== undefined ? { estimatedUsd: existing.estimatedUsd } : {}),
     summary: existing.summary,
   }
   // putRun appends run.finished itself on the transition to final (Day 0, colab-15 request 5).
@@ -140,7 +141,7 @@ export const isPendingCreate = (run: RunRecord) => run.backend === "enterprise" 
  * Write the create's intent **before** the API call (review R1). A crash, a Stop or a lost answer then always leaves a
  * record keyed by the client-chosen job id, which `reconcileCreate` finds before any later create.
  */
-export async function openJobCreate(env: { readonly ledger: Ledger; readonly clock: { now(): Date } }, account: string, jobId: string, input: { readonly notebook?: string; readonly summary: string }): Promise<void> {
+export async function openJobCreate(env: { readonly ledger: Ledger; readonly clock: { now(): Date } }, account: string, jobId: string, input: { readonly notebook?: string; readonly summary: string; readonly estimatedUsd?: number }): Promise<void> {
   // Always a fresh pending record: a retried create reuses the id of a record that was settled as never created.
   await env.ledger.putRun({
     runId: jobId,
@@ -152,6 +153,7 @@ export async function openJobCreate(env: { readonly ledger: Ledger; readonly clo
     cellIds: [],
     outputPaths: [],
     errorCode: "UNCERTAIN",
+    ...(input.estimatedUsd !== undefined ? { estimatedUsd: input.estimatedUsd } : {}),
     summary: `${input.summary} (create unconfirmed)`,
   })
 }
