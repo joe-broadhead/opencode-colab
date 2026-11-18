@@ -35,6 +35,11 @@ export const RUNS_PER_RUNTIME = 4
 
 type Input = InputOf<"run">
 
+/** What landed in a notebook (the contract's optional `RunResult.writeBack`): a written hash, or what did not land. */
+type WriteBack =
+  | { readonly state: "written"; readonly path: string; readonly hash: string }
+  | { readonly state: "skipped" | "refused"; readonly error?: ErrorCode; readonly path?: string; readonly runFolder: string }
+
 export interface SourceCell {
   readonly id: string
   readonly type: "code" | "markdown" | "raw"
@@ -273,9 +278,8 @@ export const run: ToolHandler<"run"> = {
     await mkdir(dir, { recursive: true })
     const startedAtMs = ctx.deps.clock.now().getTime()
     const spec = specLabel(found.record.spec)
-    // `session` is contract request 1 (accepted, applied by the contract keeper): a detached scratch run is otherwise
-    // cancellable only by guessing. The assertion keeps this branch compiling until the field lands.
-    const record = {
+    // `session` lets colab_cancel reach a detached scratch run (contract amendment for package D).
+    const record: RunRecord = {
       runId,
       account: ctx.account.alias,
       backend: "colab",
@@ -288,7 +292,7 @@ export const run: ToolHandler<"run"> = {
       outputPaths: [],
       session: name,
       summary: `${input.notebook ? `Running ${selected.length} cell(s) of the notebook` : "Running code"} on ${spec}`,
-    } as RunRecord
+    }
     await ctx.deps.ledger.putRun(record)
     ctx.deps.events.publish({ type: "started", runId, account: ctx.account.alias })
 
@@ -325,7 +329,7 @@ export const run: ToolHandler<"run"> = {
       ctx.deps.events.publish({ type: "finished", runId, state })
     }
 
-    let writeBack: Record<string, unknown> | undefined
+    let writeBack: WriteBack | undefined
     let after: ProbeVerdict | undefined
     /** The after-run probe: once per run, whatever the outcome, with its own signal (review M4). */
     const afterProbe = async (): Promise<ProbeVerdict | undefined> => {
@@ -334,7 +338,7 @@ export const run: ToolHandler<"run"> = {
       return after
     }
 
-    const collect = async (): Promise<{ readonly message?: string; readonly writeBack?: Record<string, unknown> } | undefined> => {
+    const collect = async (): Promise<{ readonly message?: string; readonly writeBack?: WriteBack } | undefined> => {
       // The bound is real time (the timers and the kernel's watchdog are), not the ledger's clock.
       const deadline = Date.now() + timeoutSec * 1000
       try {

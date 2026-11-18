@@ -52,9 +52,8 @@ export const cancel: ToolHandler<"cancel"> = {
     // A run this process no longer collects: reach its kernel through the session name the ledger's notebook gives.
     const record = run.runtime === undefined ? undefined : await runtimeOf(ctx, run.runtime)
     if (!record) throw new ColabError("NOT_FOUND", "The run names no runtime in the plugin's ledger.")
-    // The record's own session name is exact (contract request 1, accepted); the fallbacks cover runs recorded before it.
-    const stored = (run as typeof run & { readonly session?: string }).session
-    const name = stored ?? (run.notebook !== undefined ? sessionName(record, { notebook: run.notebook }) : await scratchSession(record, ctx))
+    // The record's own session name is exact; the fallbacks cover runs recorded before the contract amendment.
+    const name = run.session ?? (run.notebook !== undefined ? sessionName(record, { notebook: run.notebook }) : await scratchSession(record, ctx))
     const session = await ctx.deps.runtime.openSession({ account: record.account, runtimeId: record.id }, { name, path: "/content" }, ctx.call.signal)
     if (input.restart === true) await session.restart(ctx.call.signal)
     else await session.interrupt(ctx.call.signal)

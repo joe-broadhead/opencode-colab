@@ -210,6 +210,24 @@ describe("review 9, M5: folders and the contents API", () => {
   })
 })
 
+describe("review 9, contract amendment: RunRecord.session", () => {
+  it("lets colab_cancel reach a detached run's kernel by the session name it recorded", async () => {
+    const { deps, fakes, record, runtime } = await prepared({ directory: await workspace() })
+    fakes.notebooks.set(NB, [{ id: "a", type: "code", source: "x = 1" }])
+    runtime.gate = gate()
+    runtime.script = () => [iopub("stream", { name: "stdout", text: "working\n" })]
+    const running = (await tool(deps, "run", { runtime: record.id, notebook: { path: NB }, wait: 0, writeBack: false }).result) as { runId: string }
+    const [ledgerRun] = await fakes.ledger.listRuns({ account: "default" })
+    expect(ledgerRun!.session).toMatch(/^oc-0123456789abcdef0123456789abcdef-nb-[0-9a-f]{12}$/)
+    // No live handle: the cancel opens the recorded session name and interrupts that kernel.
+    resetLiveRuns()
+    const cancelled = (await tool(deps, "cancel", { runId: running.runId }).result) as { action: string }
+    expect(cancelled.action).toBe("interrupted")
+    expect(runtime.calls.filter((entry) => entry.method === "openSession").at(-1)?.args[1]).toMatchObject({ name: ledgerRun!.session })
+    expect(runtime.last!.interrupts).toBe(1)
+  })
+})
+
 describe("review 9, the LOWs D took", () => {
   it("LOW 1: a declined write-back edit leaves the run ok, with writeBack skipped and the files kept", async () => {
     const { deps, fakes, record, runtime } = await prepared({ directory: await workspace() })

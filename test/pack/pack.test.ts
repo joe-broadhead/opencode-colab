@@ -37,7 +37,9 @@ run("git", ["init", "--quiet", work], root)
 afterAll(() => rmSync(work, { recursive: true, force: true }), { timeout: 120_000 })
 
 const MAX_FILES = 30
-const MAX_PACKED_BYTES = 150 * 1024
+// 192 KiB: raised from the scaffold's 150 KiB when packages E and D landed together (the tarball was 159 KiB). The
+// family's multi-package plugins use 320 KiB (BigQuery) and 400 KiB (Databricks); this keeps a margin without drifting.
+const MAX_PACKED_BYTES = 192 * 1024
 // The two self-contained entry bundles, and nothing else, in dist/.
 const DIST = ["dist/index.js", "dist/tui.js"]
 // Modules the host serves to plugins at runtime. Everything else must be inlined in the bundle.
