@@ -160,3 +160,7 @@ What each package proves beyond design §16's must-prove column, from the Day 0 
   in lowercase.
 - **Permission-only entries.** `colab.read` and `colab.probe` are declared with no tool of their own; Jelly confirms
   that is acceptable before release (else a real read-only tool carries `colab.read`, as `gws.read` does).
+- **The `colab.runs` owner.** Design §11 names every source's owner `mailto:<email>` from the sign-in. `colab.runs`
+  names `os-user:<user>@<computer>` instead, as boxd's ledger source does: the ledger is local and keyed by account
+  alias, so one alias's runs can span two Google sign-ins, and naming a local file's owner needs no sign-in.
+  `colab.runtimes` keeps the Google account (colab-15, accepted).

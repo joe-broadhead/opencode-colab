@@ -28,7 +28,7 @@ export const METHOD_NAMES: readonly string[] = [...TOOLS.filter((tool) => tool.c
 
 export function methods(runner: Runner): readonly MethodSpec[] {
   // The probe reads accounts and the ledger through the runner, as the read methods do (colab-15 request 2).
-  return [...TOOLS.filter((tool) => tool.class === "read").map((tool) => scriptMethod(tool.name as ToolName, runner)), ...(sourceMethods as (runner: Runner) => readonly MethodSpec[])(runner)]
+  return [...TOOLS.filter((tool) => tool.class === "read").map((tool) => scriptMethod(tool.name as ToolName, runner)), ...sourceMethods(runner)]
 }
 
 /** The next step for each code the module itself raises. Each is one sentence that ends with a full stop. */

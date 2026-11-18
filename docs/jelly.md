@@ -61,6 +61,16 @@ ask the person to sign in: `AUTH_REQUIRED` and `AUTH_SCOPE_MISSING`.
 `jelly.contributes.settings` declares `access`, a choice of three: **Allowed** (`all`, the default), **Ask before
 changes** (`ask-changes`) and **Read only** (`read-only`), with Jelly's own line for each.
 
+## Sources
+
+The `sources` key (beside `jelly`, read by Jelly and Memory with the source contract) declares `colab.runs` (events from
+the plugin's own ledger) and `colab.runtimes` (a snapshot `list`), both free and private, read through the tools RPC
+`google-colab.tools`, with `colab.probe` naming the signed-in owner. A grant for either asserts exactly what it
+declares: the source's own action, then `colab.read` on the operation it reads — both declared read-only, so a grant
+never asks. The declaration holds no key a v0.1.x consumer refuses (`test/unit/sources-declaration.test.ts`), and
+`npm run conformance` runs the contract's kit over both sources and writes the report the release attaches.
+[Scripting](scripting.md#sources) describes both.
+
 ## Versions
 
 Jelly's curated catalogue pins an exact version. The declaration test runs the shared kit, `test/support/jelly-kit.ts`,
