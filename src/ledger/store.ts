@@ -134,8 +134,10 @@ export class FileLedger implements Ledger {
    * Appends one event in constant time, whatever the log's length (colab-16 LOW 6, colab-15 LOW 1): the log is opened
    * for append and only its tail is read, never the whole file.
    *
-   * - **Its number.** `meta.json` is written after the log, so a crash between the two leaves `nextSeq` behind. The
-   *   number is `max(meta.nextSeq, last line's seq + 1)`: never one already used.
+   * - **Its number, never one already used.** `meta.json` (`nextSeq: seq + 1`) is written **before** the line, so a
+   *   crash between the two leaves a gap in the numbers, never a reuse; a reader's cursor passes a gap harmlessly
+   *   (colab-17 LOW 1). The number is `max(meta.nextSeq, last parseable line's seq + 1)`, so a log a version before
+   *   this one left with `meta.json` behind is still numbered past its last event.
    * - **A torn line.** A crash inside the append can leave the last line unterminated. Readers skip a line that does
    *   not parse, and the next append starts on a new line, so the torn line never swallows a real event. A last line
    *   that parses although its newline is missing is a real event, and its number counts.
@@ -146,12 +148,12 @@ export class FileLedger implements Ledger {
     const tail = readTail(path)
     const seq = Math.max(this.readMeta().nextSeq, (tail.lastSeq ?? 0) + 1)
     const full: LedgerEvent = { ...event, seq, at: this.clock.now().toISOString() }
+    this.writeJson(join(this.dir, "meta.json"), { nextSeq: seq + 1 })
     try {
       appendFileSync(path, `${tail.endsWithNewline ? "" : "\n"}${JSON.stringify(full)}\n`, { mode: 0o600 })
     } catch {
       throw new ColabError("LEDGER_UNAVAILABLE", "The ledger's event log could not be written.")
     }
-    this.writeJson(join(this.dir, "meta.json"), { nextSeq: seq + 1 })
     return full
   }
 
@@ -265,8 +267,10 @@ export class FileLedger implements Ledger {
 const TAIL_WINDOW = 4096
 
 /**
- * The log's last line, read from the end in a small window: its seq when it parses, and whether the file ends with a
- * newline (an empty or missing log does). Reads O(one line), never the whole file.
+ * The seq of the log's last line that parses, read from the end in a window that starts at 4 KiB and doubles while it
+ * holds no parseable whole line, so it walks back past every torn or unparseable line (colab-17 LOW 1), bounded by the
+ * file's size; and whether the file ends with a newline (an empty or missing log does). In the usual case it reads one
+ * window: the last line or two, never the whole log.
  */
 export function readTail(path: string): { readonly lastSeq?: number; readonly endsWithNewline: boolean } {
   let fd: number
@@ -279,27 +283,21 @@ export function readTail(path: string): { readonly lastSeq?: number; readonly en
   try {
     const size = fstatSync(fd).size
     if (size === 0) return { endsWithNewline: true }
+    let endsWithNewline = true
     for (let window = TAIL_WINDOW; ; window *= 2) {
       const length = Math.min(window, size)
       const buffer = Buffer.alloc(length)
       readSync(fd, buffer, 0, length, size - length)
       const text = buffer.toString("utf8")
-      const endsWithNewline = text.endsWith("\n")
-      const body = endsWithNewline ? text.slice(0, -1) : text
-      const start = body.lastIndexOf("\n")
-      // The window must hold the whole last line: a newline before it, or the start of the file.
-      if (start === -1 && length < size) continue
-      const line = body.slice(start + 1)
-      const seq = parsedSeq(line)
-      // A torn last line does not parse: the line before it holds the last number used.
-      if (seq === undefined && !endsWithNewline) {
-        const before = body.slice(0, Math.max(0, start))
-        const previous = before.lastIndexOf("\n")
-        if (previous === -1 && start !== -1 && length < size) continue
-        const earlier = parsedSeq(before.slice(previous + 1))
-        return { ...(earlier !== undefined ? { lastSeq: earlier } : {}), endsWithNewline }
+      if (window === TAIL_WINDOW) endsWithNewline = text.endsWith("\n")
+      const lines = text.split("\n")
+      // Unless the window reaches the file's start, its first piece may be the end of a longer line: never trust it.
+      const whole = length < size ? lines.slice(1) : lines
+      for (let index = whole.length - 1; index >= 0; index--) {
+        const seq = parsedSeq(whole[index]!)
+        if (seq !== undefined) return { lastSeq: seq, endsWithNewline }
       }
-      return { ...(seq !== undefined ? { lastSeq: seq } : {}), endsWithNewline }
+      if (length === size) return { endsWithNewline }
     }
   } finally {
     closeSync(fd)

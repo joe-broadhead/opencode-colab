@@ -1,6 +1,6 @@
 // The file ledger and the in-memory one (test/fakes) against the same contract: records, taint once, events with a
 // monotonic seq and an expired cursor, pruning, copy-on-write files with private modes, and the cross-process lock.
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, mkdirSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, mkdirSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -26,6 +26,7 @@ vi.mock("node:fs", async (original) => {
 import { FileLedger, ledgerDir } from "../../src/ledger/store.js"
 import type { Ledger, RunRecord, RuntimeRecord } from "../../src/ports.js"
 import { CPU, FakeClock, MemoryLedger } from "../fakes/index.js"
+import { consumerRun, drain, sourcesHarness } from "../fakes/sources-harness.js"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -204,6 +205,84 @@ describe("the file ledger on disk", () => {
     expect(next.seq).toBe(5)
     const seqs = (await ledger.eventsSince(0, 10)).events.map((event) => event.seq)
     expect(seqs).toEqual([1, 2, 3, 4, 5])
+  })
+
+  const logLine = (seq: number) => `${JSON.stringify({ type: "run.finished", id: `e${seq}`, account: "default", seq, at: "2026-11-17T09:00:00.000Z" })}\n`
+
+  it("P4 (colab-17): meta behind, a torn line, then an append cut after its leading newline: no number reused", async () => {
+    const dir = temp()
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "events.jsonl"), logLine(1) + logLine(2) + logLine(3) + `{"type":"run.finished","id":"t","acc` + "\n")
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ nextSeq: 3 }))
+    const next = await new FileLedger(dir, { ledgerDays: 90 }).append({ type: "run.finished", id: "x", account: "default" })
+    expect(next.seq).toBe(4)
+  })
+
+  it("P5 (colab-17): meta behind and two torn lines in a row: no number reused", async () => {
+    const dir = temp()
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "events.jsonl"), logLine(1) + logLine(2) + logLine(3) + `{"type":"run.finished","id":"t","acc` + `\n{"type":"run.fin`)
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ nextSeq: 3 }))
+    const next = await new FileLedger(dir, { ledgerDays: 90 }).append({ type: "run.finished", id: "x", account: "default" })
+    expect(next.seq).toBe(4)
+  })
+
+  it("walks back past many unparseable lines, beyond the first window, to the last one that parses", async () => {
+    const dir = temp()
+    mkdirSync(dir, { recursive: true })
+    const junk = Array.from({ length: 200 }, (_, index) => `{"torn":${index},"x":"${"y".repeat(60)}`).join("\n")
+    writeFileSync(join(dir, "events.jsonl"), logLine(1) + logLine(2) + logLine(7) + junk)
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ nextSeq: 2 }))
+    expect((await new FileLedger(dir, { ledgerDays: 90 }).append({ type: "run.finished", id: "x", account: "default" })).seq).toBe(8)
+  })
+
+  it("writes meta.json before the line: a crash between them leaves a gap, never a reuse", async () => {
+    const dir = temp()
+    const ledger = new FileLedger(dir, { ledgerDays: 90 })
+    for (const id of ["a", "b"]) await ledger.append({ type: "run.finished", id, account: "default" })
+    // The crash: event 3's meta update landed, its line did not.
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ nextSeq: 4 }))
+    const next = await ledger.append({ type: "run.finished", id: "c", account: "default" })
+    expect(next.seq).toBe(4)
+    expect((await ledger.eventsSince(0, 10)).events.map((event) => event.seq)).toEqual([1, 2, 4])
+    expect((await ledger.eventsSince(2, 10)).expired).toBe(false)
+  })
+
+  it.skipIf(process.getuid?.() === 0)("advances meta.json before it writes the line: a failed append leaves its number unused for good", async () => {
+    const dir = temp()
+    const ledger = new FileLedger(dir, { ledgerDays: 90 })
+    await ledger.append({ type: "run.finished", id: "a", account: "default" })
+    chmodSync(join(dir, "events.jsonl"), 0o400)
+    await expect(ledger.append({ type: "run.finished", id: "b", account: "default" })).rejects.toThrow(/^LEDGER_UNAVAILABLE: /)
+    expect(JSON.parse(readFileSync(join(dir, "meta.json"), "utf8"))).toEqual({ nextSeq: 3 })
+    chmodSync(join(dir, "events.jsonl"), 0o600)
+    expect((await ledger.append({ type: "run.finished", id: "c", account: "default" })).seq).toBe(3)
+  })
+
+  it("a gap in the numbers is harmless to the colab.runs cursor: nothing skipped, nothing listed twice", async () => {
+    const dir = temp()
+    const h = sourcesHarness({ ledger: (fakes, ledgerDays) => new FileLedger(dir, { ledgerDays, clock: fakes.clock }) })
+    const T0 = Date.parse("2026-11-18T09:00:00.000Z")
+    h.fakes.clock.current = new Date(T0)
+    const start = (await drain(h.tool, {})).cursor
+    await consumerRun(h.ledger, { runId: "r1", start: T0 - 60_000, end: T0 })
+    await consumerRun(h.ledger, { runId: "r2", start: T0 - 60_000, end: T0 })
+    const first = await drain(h.tool, { cursor: start, limit: 1 })
+    expect(first.events.map((event) => event.external_id)).toEqual(["r1", "r2"])
+    // A crash after a meta write: the next number is skipped.
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as { nextSeq: number }
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ nextSeq: meta.nextSeq + 1 }))
+    h.fakes.clock.advance(60_000)
+    await consumerRun(h.ledger, { runId: "r3", start: T0, end: T0 + 30_000 })
+    await consumerRun(h.ledger, { runId: "r4", start: T0, end: T0 + 30_000 })
+    const seqs = (await h.ledger.eventsSince(0, 100)).events.filter((event) => event.type === "run.finished").map((event) => event.seq)
+    expect(seqs[2]! - seqs[1]!).toBe(2)
+    const second = await drain(h.tool, { cursor: first.cursor, limit: 1 })
+    expect(second.events.map((event) => event.external_id)).toEqual(["r3", "r4"])
+    expect(second.gaps).toEqual([])
+    const all = await drain(h.tool, { cursor: start, limit: 1 })
+    expect(all.events.map((event) => event.external_id)).toEqual(["r1", "r2", "r3", "r4"])
+    expect(all.gaps).toEqual([])
   })
 
   it("refuses an id that cannot be a file name", async () => {
