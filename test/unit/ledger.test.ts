@@ -1,9 +1,28 @@
 // The file ledger and the in-memory one (test/fakes) against the same contract: records, taint once, events with a
 // monotonic seq and an expired cursor, pruning, copy-on-write files with private modes, and the cross-process lock.
-import { mkdtempSync, readdirSync, rmSync, statSync, mkdirSync, utimesSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, mkdirSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+/** Bytes read through node:fs while `counting` is on: a whole-log read on append shows up here. */
+const reads = { counting: false, bytes: 0 }
+vi.mock("node:fs", async (original) => {
+  const fs = (await original()) as typeof import("node:fs")
+  return {
+    ...fs,
+    readFileSync: ((...args: Parameters<typeof fs.readFileSync>) => {
+      const out = fs.readFileSync(...args)
+      if (reads.counting) reads.bytes += out.length
+      return out
+    }) as typeof fs.readFileSync,
+    readSync: ((...args: Parameters<typeof fs.readSync>) => {
+      const read = fs.readSync(...args)
+      if (reads.counting) reads.bytes += read
+      return read
+    }) as typeof fs.readSync,
+  }
+})
 import { FileLedger, ledgerDir } from "../../src/ledger/store.js"
 import type { Ledger, RunRecord, RuntimeRecord } from "../../src/ports.js"
 import { CPU, FakeClock, MemoryLedger } from "../fakes/index.js"
@@ -140,6 +159,51 @@ describe("the file ledger on disk", () => {
     writeFileSync(join(dir, "meta.json"), JSON.stringify({ nextSeq: 2 }))
     const next = await ledger.append({ type: "run.finished", id: "c", account: "default" })
     expect(next.seq).toBe(3)
+  })
+
+  it("appends to a 50,000-event log reading only its tail, and numbers the event after the last", async () => {
+    const dir = temp()
+    mkdirSync(dir, { recursive: true })
+    const at = "2026-11-17T09:00:00.000Z"
+    const lines = Array.from({ length: 50_000 }, (_, index) => `${JSON.stringify({ type: "run.finished", id: `run-${index + 1}`, account: "default", seq: index + 1, at })}\n`)
+    writeFileSync(join(dir, "events.jsonl"), lines.join(""))
+    writeFileSync(join(dir, "meta.json"), JSON.stringify({ nextSeq: 50_001 }))
+    const size = statSync(join(dir, "events.jsonl")).size
+    expect(size).toBeGreaterThan(4_000_000)
+    const ledger = new FileLedger(dir, { ledgerDays: 90 })
+    for (const id of ["x", "y", "z"]) {
+      reads.bytes = 0
+      reads.counting = true
+      const event = await ledger.append({ type: "run.finished", id, account: "default" })
+      reads.counting = false
+      // The tail window and meta.json, never the log: a few KiB against a log of megabytes.
+      expect(reads.bytes, id).toBeLessThan(16 * 1024)
+      expect(event.seq).toBe(50_001 + ["x", "y", "z"].indexOf(id))
+    }
+    expect((await ledger.eventsSince(50_000, 10)).events.map((event) => [event.seq, event.id])).toEqual([[50_001, "x"], [50_002, "y"], [50_003, "z"]])
+  }, 60_000)
+
+  it("after a crash inside an append, the torn line is skipped and never swallows the next event", async () => {
+    const dir = temp()
+    const ledger = new FileLedger(dir, { ledgerDays: 90 })
+    for (const id of ["a", "b", "c"]) await ledger.append({ type: "run.finished", id, account: "default" })
+    // The crash: half of event 4 reached the log, and meta.json was not updated.
+    writeFileSync(join(dir, "events.jsonl"), `${readFileSync(join(dir, "events.jsonl"), "utf8")}{"type":"run.finished","id":"d","acc`)
+    const next = await ledger.append({ type: "run.finished", id: "e", account: "default" })
+    expect(next.seq).toBe(4)
+    expect((await ledger.eventsSince(0, 10)).events.map((event) => [event.seq, event.id])).toEqual([[1, "a"], [2, "b"], [3, "c"], [4, "e"]])
+  })
+
+  it("a last event whose newline the crash lost still counts: its number is not reused", async () => {
+    const dir = temp()
+    const ledger = new FileLedger(dir, { ledgerDays: 90 })
+    for (const id of ["a", "b", "c"]) await ledger.append({ type: "run.finished", id, account: "default" })
+    const log = join(dir, "events.jsonl")
+    writeFileSync(log, `${readFileSync(log, "utf8")}${JSON.stringify({ type: "run.finished", id: "d", account: "default", seq: 4, at: "2026-11-17T09:00:00.000Z" })}`)
+    const next = await ledger.append({ type: "run.finished", id: "e", account: "default" })
+    expect(next.seq).toBe(5)
+    const seqs = (await ledger.eventsSince(0, 10)).events.map((event) => event.seq)
+    expect(seqs).toEqual([1, 2, 3, 4, 5])
   })
 
   it("refuses an id that cannot be a file name", async () => {

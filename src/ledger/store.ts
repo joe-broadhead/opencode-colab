@@ -1,11 +1,12 @@
 /**
  * The run ledger (design §5): `$XDG_STATE_HOME/opencode-colab/ledger/`, one JSON file per runtime (`runtimes/`) and
- * per run (`runs/`), written copy-on-write (a temp file, then rename), plus `events.jsonl`, all under one
+ * per run (`runs/`), written copy-on-write (a temp file, then rename), plus `events.jsonl`, appended to in constant
+ * time (only its tail is read; pruning rewrites it copy-on-write), all under one
  * cross-process lock, pruned after `ledgerDays`. Files are 0600 and folders 0700. It never holds cell text, tokens or
  * runtime URLs. The ledger is the truth about which runtimes are the plugin's own (design §7.4 step 1).
  */
 import { randomBytes } from "node:crypto"
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { ColabError } from "../domain/errors.js"
@@ -129,16 +130,28 @@ export class FileLedger implements Ledger {
 
   // ── Internals ─────────────────────────────────────────────────────────
 
+  /**
+   * Appends one event in constant time, whatever the log's length (colab-16 LOW 6, colab-15 LOW 1): the log is opened
+   * for append and only its tail is read, never the whole file.
+   *
+   * - **Its number.** `meta.json` is written after the log, so a crash between the two leaves `nextSeq` behind. The
+   *   number is `max(meta.nextSeq, last line's seq + 1)`: never one already used.
+   * - **A torn line.** A crash inside the append can leave the last line unterminated. Readers skip a line that does
+   *   not parse, and the next append starts on a new line, so the torn line never swallows a real event. A last line
+   *   that parses although its newline is missing is a real event, and its number counts.
+   */
   private appendLocked(event: Omit<LedgerEvent, "seq" | "at">): LedgerEvent {
-    // The log is written before meta.json, so a crash between the two leaves nextSeq behind: never reuse a number.
-    const seq = Math.max(this.readMeta().nextSeq, (this.readEvents().at(-1)?.seq ?? 0) + 1)
-    const meta = { nextSeq: seq }
-    const full: LedgerEvent = { ...event, seq: meta.nextSeq, at: this.clock.now().toISOString() }
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 })
     const path = join(this.dir, "events.jsonl")
-    const before = existsSync(path) ? readFileSync(path, "utf8") : ""
-    // Copy-on-write for the log too: a crash leaves the old log or the new one, never half a line.
-    this.writeText(path, `${before}${JSON.stringify(full)}\n`)
-    this.writeJson(join(this.dir, "meta.json"), { nextSeq: meta.nextSeq + 1 })
+    const tail = readTail(path)
+    const seq = Math.max(this.readMeta().nextSeq, (tail.lastSeq ?? 0) + 1)
+    const full: LedgerEvent = { ...event, seq, at: this.clock.now().toISOString() }
+    try {
+      appendFileSync(path, `${tail.endsWithNewline ? "" : "\n"}${JSON.stringify(full)}\n`, { mode: 0o600 })
+    } catch {
+      throw new ColabError("LEDGER_UNAVAILABLE", "The ledger's event log could not be written.")
+    }
+    this.writeJson(join(this.dir, "meta.json"), { nextSeq: seq + 1 })
     return full
   }
 
@@ -245,6 +258,60 @@ export class FileLedger implements Ledger {
     } catch {
       return false
     }
+  }
+}
+
+/** The bytes `readTail` reads first; it doubles the window until it holds a whole last line. */
+const TAIL_WINDOW = 4096
+
+/**
+ * The log's last line, read from the end in a small window: its seq when it parses, and whether the file ends with a
+ * newline (an empty or missing log does). Reads O(one line), never the whole file.
+ */
+export function readTail(path: string): { readonly lastSeq?: number; readonly endsWithNewline: boolean } {
+  let fd: number
+  try {
+    fd = openSync(path, "r")
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { endsWithNewline: true }
+    throw new ColabError("LEDGER_UNAVAILABLE", "The ledger's event log could not be read.")
+  }
+  try {
+    const size = fstatSync(fd).size
+    if (size === 0) return { endsWithNewline: true }
+    for (let window = TAIL_WINDOW; ; window *= 2) {
+      const length = Math.min(window, size)
+      const buffer = Buffer.alloc(length)
+      readSync(fd, buffer, 0, length, size - length)
+      const text = buffer.toString("utf8")
+      const endsWithNewline = text.endsWith("\n")
+      const body = endsWithNewline ? text.slice(0, -1) : text
+      const start = body.lastIndexOf("\n")
+      // The window must hold the whole last line: a newline before it, or the start of the file.
+      if (start === -1 && length < size) continue
+      const line = body.slice(start + 1)
+      const seq = parsedSeq(line)
+      // A torn last line does not parse: the line before it holds the last number used.
+      if (seq === undefined && !endsWithNewline) {
+        const before = body.slice(0, Math.max(0, start))
+        const previous = before.lastIndexOf("\n")
+        if (previous === -1 && start !== -1 && length < size) continue
+        const earlier = parsedSeq(before.slice(previous + 1))
+        return { ...(earlier !== undefined ? { lastSeq: earlier } : {}), endsWithNewline }
+      }
+      return { ...(seq !== undefined ? { lastSeq: seq } : {}), endsWithNewline }
+    }
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function parsedSeq(line: string): number | undefined {
+  try {
+    const seq = (JSON.parse(line) as { seq?: unknown }).seq
+    return typeof seq === "number" && Number.isInteger(seq) ? seq : undefined
+  } catch {
+    return undefined
   }
 }
 
