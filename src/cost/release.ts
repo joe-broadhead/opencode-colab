@@ -124,16 +124,16 @@ export async function harvestRuntime(input: {
   }
 
   const done: string[] = []
+  let total = 0
   for (const entry of collected) {
     const path = harvestPath(input.harvestDir, entry.path)
     if (path === undefined) return { ok: false, files: done, reason: "PATH_REFUSED" }
     const temp = `${path}.tmp-${process.pid}`
     try {
       const chunks: Uint8Array[] = []
-      let bytes = 0
       for await (const chunk of await input.files.files.read(input.target, entry.path, input.signal)) {
-        bytes += chunk.length
-        if (bytes > input.maxBytes) throw new HarvestStop("FILE_TOO_LARGE")
+        total += chunk.length
+        if (total > input.maxBytes) throw new HarvestStop("FILE_TOO_LARGE")
         chunks.push(chunk)
       }
       mkdirSync(dirname(path), { recursive: true })

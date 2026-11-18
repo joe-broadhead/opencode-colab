@@ -210,6 +210,14 @@ describe("the harvest itself", () => {
     expect(answer).toEqual({ ok: false, files: [], reason: "count" })
   })
 
+  it("caps the harvest across files, not per file", async () => {
+    const tree = new CostContents()
+    tree.put("/content/outputs/one.txt", "123456")
+    tree.put("/content/outputs/two.txt", "123456")
+    const answer = await harvestRuntime({ files: new CostRuntime(tree), target, keep: ["/content/outputs/**"], harvestDir: join(tempDir(), "harvest"), maxBytes: 10, signal: signal() })
+    expect(answer).toMatchObject({ ok: false, reason: "FILE_TOO_LARGE", files: ["/content/outputs/one.txt"] })
+  })
+
   it("blocks when the keep files exceed maxDownloadBytes", async () => {
     const tree = new CostContents()
     tree.put("/content/outputs/one.bin", "0123456789")
