@@ -4,7 +4,7 @@
  * secret screen, the ledger record, and a commit that re-reads the notebook. The fakes reproduce the shapes L10 will
  * confirm (directNotebookSource, executionTimeout, customEnvironmentSpec with e2-standard-4); L10 itself remains unrun.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -213,5 +213,32 @@ describe("job.delete", () => {
     const planned = (await runTool("plan", { action: "job.delete", account: "work", params: { job: "oc-job-running" } }, call(), runner)) as { preview: Record<string, any> }
     expect(planned.preview.note).toContain("unverified")
     expect(planned.preview.note).toContain("colab_cancel")
+  })
+})
+
+
+describe("paths through a symlinked directory (macOS's temp dir)", () => {
+  it.skipIf(process.platform === "win32")("resolves a project that is itself behind a symlink", async () => {
+    const real = mkdtempSync(join(tmpdir(), "colab-enterprise-real-"))
+    const holder = mkdtempSync(join(tmpdir(), "colab-enterprise-link-"))
+    directories.push(real, holder)
+    const link = join(holder, "project")
+    symlinkSync(real, link, "dir")
+    const path = join(link, "analysis.ipynb")
+    writeFileSync(path, JSON.stringify(notebook()))
+    const { runner } = setup(OPTIONS, link)
+    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { state: string; preview: Record<string, any> }
+    expect(planned).toMatchObject({ state: "ok", preview: { notebook: { source: "path", ref: "analysis.ipynb" } } })
+  })
+
+  it.skipIf(process.platform === "win32")("still refuses a symlink inside the project, and one that escapes it", async () => {
+    const real = mkdtempSync(join(tmpdir(), "colab-enterprise-inside-"))
+    directories.push(real)
+    writeFileSync(join(real, "analysis.ipynb"), JSON.stringify(notebook()))
+    symlinkSync(join(real, "analysis.ipynb"), join(real, "alias.ipynb"), "file")
+    symlinkSync(tmpdir(), join(real, "outside"), "dir")
+    const { runner } = setup(OPTIONS, real)
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path: join(real, "alias.ipynb") } } }, call(), runner)).toMatchObject({ state: "refused", error: "PATH_REFUSED" })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path: join(real, "outside", "anything.ipynb") } } }, call(), runner)).toMatchObject({ state: "refused", error: "PATH_REFUSED" })
   })
 })
