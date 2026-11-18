@@ -1,24 +1,24 @@
-// Package D, Execution (docs/v1-design.md, File ownership): colab_run (with the code preview in its ask), the consumer
-// side of colab_execution and colab_cancel, colab_upload, colab_download (runtime files; Drive goes to DriveSync, GCS
-// to EnterpriseRuns), capture, write-back, colab_specs / colab_runtimes / colab_files, and the runtime.create and
-// consumer runtime.delete plans (which call Release). Day 0 stubs answer NOT_IMPLEMENTED.
-import { notImplemented } from "../stub.js"
-import type { PlanHandler, PlanHandlers, ToolHandlers } from "../tools/types.js"
+/**
+ * Package D, Execution (docs/v1-design.md, File ownership): `colab_run` (with the code preview in its ask), the consumer
+ * side of `colab_execution` and `colab_cancel`, `colab_upload`, `colab_download` (runtime files; Drive goes to
+ * DriveSync, GCS to EnterpriseRuns), capture, the write-back merge, `colab_specs` / `colab_runtimes` / `colab_files`,
+ * and the `runtime.create` and consumer `runtime.delete` plans (the latter calls package F's one release function).
+ *
+ * Everything reaches other packages through `Deps` (src/deps.ts) and the ports (src/ports.ts): the runtime transport
+ * and the agent-only check are package B's, the notebook store and the Drive pull are package C's, the Enterprise
+ * branches are package E's, and the release is package F's.
+ */
+import { cancel } from "./cancel.js"
+import { download } from "./download.js"
+import { execution } from "./execution.js"
+import { PLAN_HANDLERS as plans } from "./plans.js"
+import { run } from "./run.js"
+import { upload } from "./upload.js"
+import { files, runtimes, specs } from "./views.js"
+import type { PlanHandlers, ToolHandlers } from "../tools/types.js"
 
-export const HANDLERS: ToolHandlers = {
-  specs: { run: async () => notImplemented("colab_specs") },
-  runtimes: { run: async () => notImplemented("colab_runtimes") },
-  files: { run: async () => notImplemented("colab_files") },
-  execution: { run: async () => notImplemented("colab_execution") },
-  run: { run: async () => notImplemented("colab_run") },
-  cancel: { run: async () => notImplemented("colab_cancel") },
-  upload: { run: async () => notImplemented("colab_upload") },
-  download: { run: async () => notImplemented("colab_download") },
-}
+/** The eight tools this package owns. */
+export const HANDLERS: ToolHandlers = { specs, runtimes, files, execution, run, cancel, upload, download }
 
-const stubPlan = (action: string): PlanHandler<never> => ({ preview: async () => notImplemented(`The ${action} plan`), commit: async () => notImplemented(`The ${action} plan`) })
-
-export const PLAN_HANDLERS: PlanHandlers = {
-  "runtime.create": { colab: stubPlan("runtime.create") },
-  "runtime.delete": { colab: stubPlan("runtime.delete") },
-}
+/** The `runtime.create` and consumer `runtime.delete` plans; the enterprise delete and stop are package E's. */
+export const PLAN_HANDLERS: PlanHandlers = plans
