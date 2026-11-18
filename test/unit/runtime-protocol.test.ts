@@ -212,6 +212,8 @@ describe("the runtime protocol", () => {
       await fixture.own()
       const target = { account: "default", runtimeId: RUNTIME_ID }
       const payload = new TextEncoder().encode("value\n1,2,3\n")
+      // The contents API needs the parent: the caller makes it one level per request (review M5, LOW 2).
+      await fixture.ports.runtime.files.mkdir(target, "/content/outputs", fresh())
       const written = await fixture.ports.runtime.files.write(target, "/content/outputs/data.csv", (async function* () {
         yield payload
       })(), fresh())

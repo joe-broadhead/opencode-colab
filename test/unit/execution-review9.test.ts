@@ -6,8 +6,9 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { resetLiveRuns } from "../../src/execution/runs.js"
+import { run as runHandler } from "../../src/execution/run.js"
 import type { RuntimeRecord } from "../../src/ports.js"
 import { toolHandlers } from "../../src/tools/registry.js"
 import { runTool, type Runner } from "../../src/tools/spec.js"
@@ -80,6 +81,58 @@ describe("review 9, M2: the ask is bound to the code", () => {
     expect(metadata.moreCells).toBe(5)
     expect(metadata.moreBytes).toBeGreaterThan(0)
     expect(metadata.moreNote).toContain("sha256 and flags are in allCells")
+  })
+})
+
+describe("review 9 round 2, M2-r2: an ask is never bypassed", () => {
+  it("R6: an ask left open past the old cache, evicted by another call's ask, still binds the run", async () => {
+    const { deps, fakes, record, runtime } = await prepared({ directory: await workspace() })
+    fakes.notebooks.set(NB, [{ id: "a", source: "print('shown')" }])
+    fakes.notebooks.set("other.ipynb", [{ id: "x", source: "print('other')" }])
+    const start = Date.now()
+    let nested = false
+    const permission = {
+      requests: [] as unknown[],
+      assert: async (request: { action: string }) => {
+        permission.requests.push(request)
+        if (request.action !== "colab.run" || nested) {
+          if (nested) throw new Error("the other ask is declined")
+          return
+        }
+        // The person reads for 11 minutes; meanwhile the notebook changes and another call asks.
+        fakes.notebooks.set(NB, [{ id: "a", source: "print('swapped after the ask')" }])
+        vi.setSystemTime(start + 11 * 60_000)
+        nested = true
+        await (toolWith(deps, permission as never, "run", { runtime: record.id, notebook: { path: "other.ipynb" }, wait: 10, writeBack: false }, { callId: "call_other" }).result as Promise<unknown>).catch(() => undefined)
+        nested = false
+      },
+    }
+    vi.useFakeTimers()
+    try {
+      const answer = (await (toolWith(deps, permission as never, "run", { runtime: record.id, notebook: { path: NB }, wait: 10, writeBack: false }).result as Promise<unknown>).catch((error) => error)) as { error?: string }
+      const sent = (runtime.last?.executed ?? []).filter((entry) => !entry.silent).map((entry) => entry.code)
+      expect(sent).not.toContain("print('swapped after the ask')")
+      expect(answer.error).toBe("NOTEBOOK_CHANGED")
+    } finally {
+      vi.useRealTimers()
+      resetLiveRuns()
+    }
+  })
+
+  it("refuses when the ask for the call is missing (expired, evicted, or another process), never falling back", async () => {
+    const { deps, record, runtime } = await prepared({ directory: await workspace() })
+    const ctx = {
+      call: { sessionID: "s", agent: "build", messageID: "m", id: "call_with_no_ask", signal: new AbortController().signal },
+      deps,
+      account: deps.options.accounts[0],
+      providerRead: async () => undefined,
+      hostAssert: async () => undefined,
+    }
+    await expect(runHandler.run({ runtime: record.id, code: "print(1)" } as never, ctx as never)).rejects.toMatchObject({
+      code: "NOTEBOOK_CHANGED",
+      next: expect.stringContaining("Ask again"),
+    })
+    expect(runtime.calls).toHaveLength(0)
   })
 })
 

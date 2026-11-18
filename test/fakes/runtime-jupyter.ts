@@ -388,6 +388,7 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
         if (input.type === "directory") {
           // Jupyter's contents API creates one directory per request and needs its parent
           // (https://jupyter-server.readthedocs.io/en/stable/developers/rest-api.html#post--api-contents-path).
+          // The fake answers 409 for an existing folder; Jupyter answers 200/201, and the client accepts both.
           const clean = target.replace(/\/+$/, "")
           if (clean !== "" && !directories.has(parent)) return notFound(response)
           if (directories.has(clean)) return json(response, 409, { message: "File already exists", reason: "exists" })
@@ -395,7 +396,7 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
           return json(response, 201, { type: "directory", path: clean })
         }
         if (input.format !== "base64" || typeof input.content !== "string") return json(response, 400, { message: "bad contents write" })
-        // A file write into a folder the server does not have is a 404, as Jupyter answers.
+        // The fake answers 404 for a missing parent (Jupyter answers 500); the client makes the parents first.
         if (!directories.has(parent)) return notFound(response)
         const bytes = Buffer.from(input.content, "base64")
         if (typeof input.chunk === "number") {

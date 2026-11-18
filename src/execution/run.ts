@@ -126,10 +126,16 @@ interface Asked {
   readonly at: number
 }
 const asks = new Map<string, Asked>()
-const ASK_TTL_MS = 10 * 60_000
+/** How many unanswered asks are kept: small, because a run consumes its own and a missing ask refuses, never falls back. */
+const ASK_LIMIT = 256
 
 function rememberAsk(callId: string, entry: Asked): void {
-  for (const [id, asked] of asks) if (entry.at - asked.at > ASK_TTL_MS) asks.delete(id)
+  // No time-based sweep: an ask the person is still reading is never evicted by another call's ask. Only a hard size
+  // cap can drop one, and a dropped ask makes its run refuse (review M2-r2).
+  if (asks.size >= ASK_LIMIT) {
+    const oldest = [...asks.entries()].sort((left, right) => left[1].at - right[1].at)[0]
+    if (oldest) asks.delete(oldest[0])
+  }
   asks.set(callId, entry)
 }
 
@@ -246,18 +252,24 @@ export const run: ToolHandler<"run"> = {
 
     // The cells are read once here; the ask's sha256s bound what runs to what the person saw (review M2).
     const selected = input.code !== undefined ? codeCells(input.code) : selectCells((await ctx.deps.notebooks.read(input.notebook!.path, ctx.call.signal)).cells, input.cells)
+    // A run executes only the exact cells its ask showed. The wrapper always calls metadata (and so rememberAsk) before
+    // the assert, at every access level, so a missing entry means the ask expired, was evicted, or belongs to another
+    // process: refuse, and never fall back to the notebook as it is now (review M2-r2).
     const asked = takeAsk(ctx.call.id)
-    if (asked) {
-      const same =
-        asked.runtime === input.runtime &&
-        asked.notebook === input.notebook?.path &&
-        asked.cells.length === selected.length &&
-        asked.cells.every((cell, index) => cell.id === selected[index]!.cell.id && cell.sha256 === `sha256:${sha256(selected[index]!.cell.source)}`)
-      if (!same) {
-        throw new ColabError("NOTEBOOK_CHANGED", "The notebook changed while the ask was open, so no code was sent.", {
-          next: "Read it again with colab_notebook, then run again.",
-        })
-      }
+    if (!asked) {
+      throw new ColabError("NOTEBOOK_CHANGED", "The code preview for this call is no longer available, so the run cannot be the one the person approved. No code was sent.", {
+        next: "Ask again: call colab_run once more so the person sees the code and approves it.",
+      })
+    }
+    const same =
+      asked.runtime === input.runtime &&
+      asked.notebook === input.notebook?.path &&
+      asked.cells.length === selected.length &&
+      asked.cells.every((cell, index) => cell.id === selected[index]!.cell.id && cell.sha256 === `sha256:${sha256(selected[index]!.cell.source)}`)
+    if (!same) {
+      throw new ColabError("NOTEBOOK_CHANGED", "The notebook changed while the ask was open, so no code was sent.", {
+        next: "Read it again with colab_notebook, then run again.",
+      })
     }
 
     // A fresh pre-run probe every time: a clean cached verdict from before a failed run must not clear the next one (M4).

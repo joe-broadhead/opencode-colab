@@ -378,19 +378,16 @@ export function createRuntimeProtocol(env: PortEnv, api: ColabApi, overrides: Ru
 
       async mkdir(target, path, signal) {
         await assertOurs(target)
-        // Jupyter creates one directory per request and requires the parent (design §9.3); 409 means it already exists.
+        // Jupyter creates one directory per request and requires the parent (design §9.3). An existing folder is not an
+        // error: Jupyter answers 200/201 and the fake below answers 409, so both are accepted.
         await rest(target, { method: "PUT", path: `${JUPYTER_PATHS.contents}/${encodePath(path)}`, body: { type: "directory" } }, signal, false, [409])
       },
 
       async write(target, path, bytes, signal) {
         await assertOurs(target)
-        // The contents API does not create parents: walk them top-down first (design §9.3; M5 of the package D review).
-        const parts = runtimePath(path).split("/").filter(Boolean).slice(0, -1)
-        let parent = ""
-        for (const part of parts) {
-          parent = `${parent}/${part}`
-          await rest(target, { method: "PUT", path: `${JUPYTER_PATHS.contents}/${encodePath(parent)}`, body: { type: "directory" } }, signal, false, [409])
-        }
+        // The contents API does not create parents: the caller makes them with `mkdir` first (design §9.3; review M5,
+        // and LOW 2 of round 2 keeps one walk, the caller's). The server answers 404 for a missing parent (Jupyter
+        // answers 500; the port's fakes model the refusal).
         const limit = Math.max(1, maxContentsBytes)
         const put = async (piece: Uint8Array, chunk: number | undefined) => {
           await rest(
