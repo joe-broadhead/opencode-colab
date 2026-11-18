@@ -139,8 +139,9 @@ export const announces = (entry: LedgerEvent, run: RunRecord): boolean =>
   entry.type === "run.finished" && entry.id === run.runId && entry.account === run.account && Date.parse(entry.at) > Date.parse(run.startedAt)
 
 /**
- * The most entries one read's sweep appends. Each file-ledger append rewrites the log under the lock, so a backlog of
- * thousands would hold every writer for seconds (review #15, LOW 1); the rest are swept, and listed, by the next reads.
+ * The most entries one read's sweep appends. The bound keeps one read short and each hold of the ledger's lock brief
+ * (an append is constant-time, but a backlog of thousands is still thousands of lock holds); the rest are swept, and
+ * listed, by the next reads (review #15, LOW 1).
  */
 export const SWEEP_MAX = 200
 
