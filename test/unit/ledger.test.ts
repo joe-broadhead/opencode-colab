@@ -51,6 +51,13 @@ for (const [kind, make] of kinds) {
       expect(await ledger.getRun("missing")).toBeUndefined()
     })
 
+    it("keeps a run's kernel session name, so a detached run can be cancelled", async () => {
+      const ledger = make(new FakeClock())
+      await ledger.putRun(run("run-s", { state: "detached", session: "oc-n0nce-scratch" }))
+      expect((await ledger.getRun("run-s"))?.session).toBe("oc-n0nce-scratch")
+      expect((await ledger.listRuns({ state: "detached" })).map((record) => record.session)).toEqual(["oc-n0nce-scratch"])
+    })
+
     it("taints a runtime once, for good, with one event", async () => {
       const ledger = make(new FakeClock())
       await ledger.putRuntime(runtime("oc-01"))

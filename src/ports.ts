@@ -396,6 +396,11 @@ export interface RunRecord {
   readonly errorCode?: ErrorCode
   /** An Enterprise job's create LRO name; not a credential. */
   readonly operation?: string
+  /**
+   * The kernel session name a consumer run used (`oc-<nonce>-…`): not a credential (the nonce is public, design §7.4),
+   * so `colab_cancel` can reach a detached run.
+   */
+  readonly session?: string
   /** For the colab.runs title: plugin words only, never notebook text. */
   readonly summary?: string
 }

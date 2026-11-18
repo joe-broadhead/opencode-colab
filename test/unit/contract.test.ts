@@ -207,3 +207,20 @@ describe("colab_cancel's result", () => {
     expect(result).toMatchObject({ action: "cancel-requested" })
   })
 })
+
+describe("a run's write-back result", () => {
+  const base = { state: "ok", runId: "r1", cells: [], files: [] }
+  const HASH = `sha256:${"b".repeat(64)}`
+
+  it("says what landed: written with the hash, or skipped or refused with the run folder", () => {
+    for (const output of [CONTRACTS.run.output, CONTRACTS.execution.output]) {
+      expect(ok(output, base)).toBe(true)
+      expect(ok(output, { ...base, writeBack: { state: "written", path: "a.ipynb", hash: HASH } })).toBe(true)
+      expect(ok(output, { ...base, writeBack: { state: "skipped", runFolder: ".colab/runs/r1" } })).toBe(true)
+      expect(ok(output, { ...base, writeBack: { state: "refused", error: "NOTEBOOK_CHANGED", path: "a.ipynb", runFolder: ".colab/runs/r1" } })).toBe(true)
+      expect(ok(output, { ...base, writeBack: { state: "written", path: "a.ipynb" } })).toBe(false)
+      expect(ok(output, { ...base, writeBack: { state: "refused", error: "MADE_UP", runFolder: ".colab/runs/r1" } })).toBe(false)
+      expect(ok(output, { ...base, writeBack: { state: "skipped" } })).toBe(false)
+    }
+  })
+})
