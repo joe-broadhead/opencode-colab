@@ -188,6 +188,16 @@ export const RunResult = {
   cells: z.array(CellResult),
   files: z.array(z.string()),
   truncated: z.boolean().optional(),
+  /**
+   * What landed in the notebook (design §9.3): `written` with the new hash, or `skipped`/`refused` with the code and
+   * the run folder that keeps the outputs. A machine fact; `message` stays prose.
+   */
+  writeBack: z
+    .union([
+      z.object({ state: z.literal("written"), path: z.string(), hash: Hash }).strict(),
+      z.object({ state: z.enum(["skipped", "refused"]), error: z.enum(ERROR_CODES as [string, ...string[]]).optional(), path: z.string().optional(), runFolder: z.string() }).strict(),
+    ])
+    .optional(),
 }
 export const ExecutionOutput = result(RunResult, ["ok", "running", "detached", "cancelled"])
 
