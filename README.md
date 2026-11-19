@@ -6,8 +6,9 @@ and TPUs, or as Colab Enterprise jobs, and bring the results back as files the a
 Unofficial; not affiliated with Google. Google and Colab are trademarks of Google LLC; this unofficial plugin is not
 endorsed by Google.
 
-> **Not yet released.** This is v0.0.1, built in packages on top of a fixed contract. Until every package has landed,
-> a tool whose package has not answers `NOT_IMPLEMENTED`. None of the live checks against Google (L1–L17,
+> **Not yet released.** This is v0.0.1, built in packages on top of a fixed contract. There is no release tag. Until every
+> package has landed, a tool whose package has not answers `NOT_IMPLEMENTED`. An install that is not a tagged release
+> answers `NOT_RELEASED` and sends nothing to Google. None of the live checks against Google (L1–L17,
 > [below](#live-checks-not-yet-run)) has run: everything Google-facing is tested against fakes built from Google's
 > documentation. **L1 decides whether running code on consumer Colab ships enabled.**
 

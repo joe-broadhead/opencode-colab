@@ -13,6 +13,7 @@ import type { ToolName } from "./domain/contract.js"
 import { checkHost } from "./host-version.js"
 import { loadOptions } from "./options.js"
 import { registerPermissionDefaults } from "./permissions.js"
+import { isTaggedRelease, observeFromHost } from "./release.js"
 import { registerSkills, SKILL_IDS, skillPath } from "./skills.js"
 import { registerStatus } from "./status.js"
 import { registerTools } from "./tools.js"
@@ -49,7 +50,9 @@ export function createColabPlugin(seam: ColabSeam = {}) {
     async setup(ctx) {
       const options = loadOptions(ctx.options)
       const hostWarning = checkHost(ctx.app.version, options.allowUntestedHost)
-      const base = createDeps({ options, directory: ctx.location.directory })
+      await observeFromHost(ctx.plugin.list, PLUGIN_ID)
+      const released = isTaggedRelease()
+      const base = createDeps({ options, directory: ctx.location.directory, released })
       const deps = seam.deps ? seam.deps(base) : base
       const registrations: Registration[] = []
       const keep = <R extends Registration>(registration: R): R => {
@@ -65,7 +68,7 @@ export function createColabPlugin(seam: ColabSeam = {}) {
       const getRunner = (): Runner => {
         runner ??= (() => {
           const handlers = toolHandlers(getRunner)
-          return { deps, assert: (request) => ctx.permission.assert(request as never), handler: (name: ToolName) => handlers[name] }
+          return { deps, released, assert: (request) => ctx.permission.assert(request as never), handler: (name: ToolName) => handlers[name] }
         })()
         return runner
       }

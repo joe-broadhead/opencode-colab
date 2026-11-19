@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- A source install, or any install that is not a tagged release, answers `NOT_RELEASED` and sends nothing to Google.
+  `colab_edit` still edits a local notebook. The handlers stay; a tagged install runs them. There is no release tag yet.
+
 - The repository scaffold, in the family's layout: the `jelly` declaration, the build to two self-contained bundles,
   the shared kit (r4.1) and `scripts/check.mjs` as the one check gate.
 - The Day 0 contract: the ports, the twenty tools' schemas and result shapes, the error table, the `colab.*` action

@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import type { OpenCodeClient } from "@opencode/client"
 import { Plugin } from "@opencode/plugin"
 import { PLUGIN_ID } from "../../src/constants.js"
+import { simulateTaggedRelease } from "../../src/release.js"
 import { ColabRpc, type Status } from "../../src/rpc.js"
 import { routeFetch } from "./route-fetch.js"
 
@@ -59,6 +60,9 @@ export interface HostInput {
 let hosts = 0
 
 export async function startHost(input: HostInput = {}) {
+  // This harness loads the package as a local path, which is not a tagged release. Simulate one so the existing
+  // handlers still run. Production does not set this.
+  simulateTaggedRelease(true)
   const base = join(ROOT, `host-${++hosts}`)
   const work = join(base, "work")
   mkdirSync(work, { recursive: true })
