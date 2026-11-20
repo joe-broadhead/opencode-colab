@@ -5,6 +5,8 @@
  * NOT_IMPLEMENTED. Tests build a Deps from test/fakes/ instead.
  */
 import { createAuth } from "./auth/index.js"
+import { ColabError } from "./domain/errors.js"
+import { guardGoogleFetch, isTaggedRelease, NOT_RELEASED_DETAIL, NOT_RELEASED_NEXT } from "./release.js"
 import { createEnterprisePorts } from "./enterprise/index.js"
 import * as cost from "./cost/index.js"
 import { PlanStore } from "./domain/plans.js"
@@ -49,11 +51,15 @@ export interface PortEnv {
   readonly fetch: typeof fetch
 }
 
-export function createDeps(input: { readonly options: Options; readonly directory: string; readonly env?: NodeJS.ProcessEnv; readonly fetch?: typeof fetch }): Deps {
+export function createDeps(input: { readonly options: Options; readonly directory: string; readonly env?: NodeJS.ProcessEnv; readonly fetch?: typeof fetch; readonly released?: () => Promise<boolean> }): Deps {
   const clock: Clock = { now: () => new Date() }
   const ledger = new FileLedger(ledgerDir(input.env), { ledgerDays: input.options.ledgerDays, clock })
-  const auth = createAuth({ options: input.options, clock })
-  const env: PortEnv = { options: input.options, directory: input.directory, clock, auth, ledger, fetch: input.fetch ?? globalThis.fetch }
+  const released = input.released ?? (async () => isTaggedRelease())
+  const fetch = guardGoogleFetch(input.fetch ?? globalThis.fetch, released, () => {
+    throw new ColabError("NOT_RELEASED", NOT_RELEASED_DETAIL, { next: NOT_RELEASED_NEXT })
+  })
+  const auth = createAuth({ options: input.options, clock, fetch })
+  const env: PortEnv = { options: input.options, directory: input.directory, clock, auth, ledger, fetch }
   const runtimePorts = createRuntimePorts(env)
   const enterprisePorts = createEnterprisePorts(env)
   // C may rename its factory createDrivePorts → createNotebookPorts and add `notebooks` to what it returns.

@@ -16,6 +16,7 @@ code), `message` and `next`.
 | `ACCOUNT_UNKNOWN` | refused | The account alias is not configured. | Pass a configured alias; colab_status lists them. |
 | `ACCOUNT_REQUIRED` | refused | More than one account is configured, none is named default, and the call named none. | Pass account with one of the aliases colab_status lists. |
 | `NOT_IMPLEMENTED` | refused | This tool or plan action is declared but not built in this pre-release. | Use another tool, or wait for a release that builds it. |
+| `NOT_RELEASED` | refused | This install is not a tagged release, so the tool did not call Google. | Install a tagged release when one exists. A source checkout does not call Google. |
 | `RULES_NOT_ADDED` | failed | The plugin's default permission rules could not be added, so Colab tools may run without asking. | Restart OpenCode. |
 | `TOOLS_NOT_REGISTERED` | failed | The Colab tools could not be registered. | Restart OpenCode. |
 | `STATUS_UNAVAILABLE` | failed | Colab status is unavailable right now. | Try again in a few seconds; if it persists, restart OpenCode. |

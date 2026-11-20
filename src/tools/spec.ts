@@ -8,6 +8,7 @@
  * `colab.write` / `colab.delete` on their plan's resource in src/plans/route.ts; handlers add only `colab.read`.
  */
 import { SourceError } from "@we-the-rebel-alliance/source-contract/events"
+import { NOT_RELEASED_DETAIL, NOT_RELEASED_NEXT } from "../release.js"
 import type { JsonSchema, MethodClass, PluginMethod } from "@we-the-rebel-alliance/source-contract/tools-rpc"
 import * as z from "zod"
 import { NAMESPACE } from "../constants.js"
@@ -26,6 +27,11 @@ export interface Runner {
   readonly deps: Deps
   readonly assert: Assert
   readonly handler: (name: ToolName) => ToolHandler<ToolName>
+  /**
+   * Resolves false when this install is not a tagged release: a tool that would call Google refuses before its handler.
+   * Absent on a test's runner, so those tests keep using the handlers.
+   */
+  readonly released?: () => Promise<boolean>
 }
 
 /** The tools that assert their own action, on their plan's resource. */
@@ -120,11 +126,18 @@ export const needsWrite = (name: ToolName) => name === "plan" || toolEntry(name)
 function asSourceRefusal(error: unknown): unknown {
   if (!ColabError.is(error)) return error
   if (error.code === "INPUT_INVALID") return new SourceError({ code: "INPUT_INVALID", what: error.detail.replace(/\.$/, ""), next: error.next })
+  if (error.code === "NOT_RELEASED") return new SourceError({ code: "NOT_RELEASED", what: error.detail.replace(/\.$/, ""), next: error.next })
   if (error.code === "ACCOUNT_UNKNOWN" || error.code === "ACCOUNT_REQUIRED") return new SourceError({ code: "ACCOUNT_MISMATCH", what: error.detail.replace(/\.$/, ""), next: error.next })
   return error
 }
 
 export async function runTool(name: ToolName, raw: unknown, call: ToolCall, runner: Runner): Promise<unknown> {
+  // colab_edit is a local notebook edit. Every other tool can call Google, and a source install must not.
+  if (runner.released !== undefined && !(await runner.released()) && name !== "edit") {
+    const error = new ColabError("NOT_RELEASED", NOT_RELEASED_DETAIL, { next: NOT_RELEASED_NEXT })
+    if (toolEntry(name).source) throw asSourceRefusal(error)
+    throw error
+  }
   if (toolEntry(name).source) {
     // A source read: the wrapper's own refusals are thrown as the contract's, before anything else runs.
     try {
