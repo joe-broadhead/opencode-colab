@@ -20,11 +20,10 @@ export interface InstallSource {
   readonly path?: string
 }
 
-let observed: InstallSource | undefined
-
-/** Record the host's description of this install. Call it before the ports are built. */
-export function observeInstall(source: InstallSource | undefined): void {
-  observed = source
+/** The test seam's value, if a test set one. Production never sets it. */
+function forced(): boolean | undefined {
+  const value = (globalThis as typeof globalThis & { [FLAG]?: boolean })[FLAG]
+  return typeof value === "boolean" ? value : undefined
 }
 
 /**
@@ -38,37 +37,90 @@ export function simulateTaggedRelease(value: boolean | undefined): void {
 }
 
 /** True only for a real semver tag on this install, or a test that simulated one. */
-export function isTaggedRelease(source: InstallSource | undefined = observed): boolean {
-  const forced = (globalThis as typeof globalThis & { [FLAG]?: boolean })[FLAG]
-  if (typeof forced === "boolean") return forced
+export function isTaggedRelease(source?: InstallSource): boolean {
+  const value = forced()
+  if (value !== undefined) return value
   if (source?.type === "package") return packageTagged(source)
   if (source?.type === "local") return exactGitTag(source.path)
   if (source?.type === "builtin" || source?.type === "sdk") return false
+  // No report: a source checkout that is exactly at a tag is a release; anything else (a package install's folder,
+  // which has no .git) is not.
   return exactGitTag(packageDir())
 }
 
-/** Read this plugin's source from `ctx.plugin.list`, if the host answers. A failure leaves the git fallback. */
-export async function observeFromHost(list: unknown, pluginId: string): Promise<void> {
-  if (typeof list !== "function") {
-    observeInstall(undefined)
-    return
+/** One install's verdict, resolved from the host's own report of the plugin. */
+export interface ReleaseGate {
+  /** True when this install is a tagged release. Reads the host's report once its entry is there, then caches it. */
+  released(): Promise<boolean>
+}
+
+/**
+ * The host does not list the plugin itself while its setup runs, and a package install's folder has no .git. So the
+ * verdict is read on first use, when `ctx.plugin.list` does list it: a package install's `target` carries the tag
+ * (`…#v0.0.1`), and its `version` is the commit, which is ignored. A checkout at a tag stays a release; a branch, a
+ * dev checkout or an install with no tag is gated. Until the entry appears, the git-tag fallback decides, which fails
+ * closed for a package install.
+ */
+export function createReleaseGate(pluginId: string, list: () => unknown): ReleaseGate {
+  let verdict: boolean | undefined
+  let inflight: Promise<boolean> | undefined
+  const settle = async (): Promise<boolean> => {
+    const source = await sourceFromHost(list, pluginId)
+    if (source === undefined) return isTaggedRelease()
+    verdict = isTaggedRelease(source)
+    return verdict
   }
-  const call = list as (input?: unknown) => Promise<unknown>
-  try {
-    observeInstall(sourceFromList(await call(), pluginId))
-  } catch {
-    try {
-      observeInstall(sourceFromList(await call({}), pluginId))
-    } catch {
-      observeInstall(undefined)
-    }
+  return {
+    async released() {
+      const value = forced()
+      if (value !== undefined) return value
+      if (verdict !== undefined) return verdict
+      inflight ??= settle().finally(() => {
+        inflight = undefined
+      })
+      return inflight
+    },
   }
 }
 
+/** Read this plugin's own entry from `ctx.plugin.list`. Undefined while the host does not list it, or if it fails. */
+/**
+ * A host call bounded in time: a host that never answers must not hold a release decision (and the call behind it)
+ * open, and a failed read leaves the git fallback, which fails closed.
+ */
+async function bounded(answer: Promise<unknown>): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      answer,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("the host did not answer in time")), 1500)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+async function sourceFromHost(list: () => unknown, pluginId: string): Promise<InstallSource | undefined> {
+  const target = list()
+  if (typeof target !== "function") return undefined
+  const call = target as (input?: unknown) => Promise<unknown>
+  for (const arg of [undefined, {}]) {
+    try {
+      const answer = await bounded(arg === undefined ? call() : call(arg))
+      return sourceFromList(answer, pluginId)
+    } catch {
+      // Try the other calling convention, then leave the fallback to decide.
+    }
+  }
+  return undefined
+}
+
 /** The fetch the production ports use. A Google host is refused before `base` when this install is not tagged. */
-export function guardGoogleFetch(base: typeof fetch, released: boolean, refuse: () => never): typeof fetch {
-  return ((input, init) => {
-    if (!released && isGoogleRequest(input)) refuse()
+export function guardGoogleFetch(base: typeof fetch, released: () => Promise<boolean>, refuse: () => never): typeof fetch {
+  return (async (input, init) => {
+    if (isGoogleRequest(input) && !(await released())) refuse()
     return base(input, init)
   }) as typeof fetch
 }
@@ -87,10 +139,9 @@ export function isGoogleRequest(input: RequestInfo | URL): boolean {
 }
 
 function packageTagged(source: InstallSource): boolean {
+  // The host reports the spec in `target` (`…#v0.0.1`) and the resolved commit in `version`; only the tag counts.
   const ref = tagRef(source.target)
-  if (!ref || !SEMVER_TAG.test(ref)) return false
-  if (source.version !== undefined && source.version !== ref && source.version !== ref.slice(1)) return false
-  return true
+  return ref !== undefined && SEMVER_TAG.test(ref)
 }
 
 function tagRef(target: string | undefined): string | undefined {

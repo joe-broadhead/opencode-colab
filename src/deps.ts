@@ -51,10 +51,10 @@ export interface PortEnv {
   readonly fetch: typeof fetch
 }
 
-export function createDeps(input: { readonly options: Options; readonly directory: string; readonly env?: NodeJS.ProcessEnv; readonly fetch?: typeof fetch; readonly released?: boolean }): Deps {
+export function createDeps(input: { readonly options: Options; readonly directory: string; readonly env?: NodeJS.ProcessEnv; readonly fetch?: typeof fetch; readonly released?: () => Promise<boolean> }): Deps {
   const clock: Clock = { now: () => new Date() }
   const ledger = new FileLedger(ledgerDir(input.env), { ledgerDays: input.options.ledgerDays, clock })
-  const released = input.released ?? isTaggedRelease()
+  const released = input.released ?? (async () => isTaggedRelease())
   const fetch = guardGoogleFetch(input.fetch ?? globalThis.fetch, released, () => {
     throw new ColabError("NOT_RELEASED", NOT_RELEASED_DETAIL, { next: NOT_RELEASED_NEXT })
   })

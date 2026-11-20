@@ -28,10 +28,10 @@ export interface Runner {
   readonly assert: Assert
   readonly handler: (name: ToolName) => ToolHandler<ToolName>
   /**
-   * False when this install is not a tagged release: a tool that would call Google refuses before its handler.
+   * Resolves false when this install is not a tagged release: a tool that would call Google refuses before its handler.
    * Absent on a test's runner, so those tests keep using the handlers.
    */
-  readonly released?: boolean
+  readonly released?: () => Promise<boolean>
 }
 
 /** The tools that assert their own action, on their plan's resource. */
@@ -133,7 +133,7 @@ function asSourceRefusal(error: unknown): unknown {
 
 export async function runTool(name: ToolName, raw: unknown, call: ToolCall, runner: Runner): Promise<unknown> {
   // colab_edit is a local notebook edit. Every other tool can call Google, and a source install must not.
-  if (runner.released === false && name !== "edit") {
+  if (runner.released !== undefined && !(await runner.released()) && name !== "edit") {
     const error = new ColabError("NOT_RELEASED", NOT_RELEASED_DETAIL, { next: NOT_RELEASED_NEXT })
     if (toolEntry(name).source) throw asSourceRefusal(error)
     throw error
