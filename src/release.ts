@@ -2,7 +2,7 @@
 // answers no: tools that would call Google refuse before any request. A test may set the flag below to keep using
 // the existing handlers. Production never sets it, and this file does not invent a tag.
 import { execFileSync } from "node:child_process"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -138,10 +138,38 @@ export function isGoogleRequest(input: RequestInfo | URL): boolean {
   return /(^|\.)((googleapis|googleusercontent|google)\.com|google\.internal)$/i.test(hostname)
 }
 
+/** This plugin's own repository and package: a release install comes from it, and no other one is a release here. */
+const OWNER = "joe-broadhead"
+const REPO = "opencode-colab"
+const PACKAGE = "@joe-broadhead/opencode-colab"
+
 function packageTagged(source: InstallSource): boolean {
   // The host reports the spec in `target` (`…#v0.0.1`) and the resolved commit in `version`; only the tag counts.
   const ref = tagRef(source.target)
-  return ref !== undefined && SEMVER_TAG.test(ref)
+  if (ref === undefined || !SEMVER_TAG.test(ref)) return false
+  // A real install records where it came from: a GitHub spec must name this plugin's repository, and the installed
+  // package must be this plugin, so another repo's tag (or a tag-named folder) is not a release.
+  const repo = repositoryIn(source.target)
+  if (repo !== undefined && (repo.owner !== OWNER || repo.name !== REPO)) return false
+  return ownPackage()
+}
+
+/** The GitHub repository a package spec names, in the forms a real install records; undefined for a file or npm spec. */
+function repositoryIn(target: string | undefined): { owner: string; name: string } | undefined {
+  if (target === undefined) return undefined
+  const spec = target.split("#")[0]!
+  const match = /^(?:github:|git\+https:\/\/github\.com\/|https:\/\/github\.com\/|git\+ssh:\/\/git@github\.com\/)([^/]+)\/([^/]+?)(?:\.git)?$/.exec(spec)
+  return match === null ? undefined : { owner: match[1]!, name: match[2]! }
+}
+
+/** True when the installed package is this plugin's own, read from its package.json. */
+function ownPackage(): boolean {
+  try {
+    const manifest = JSON.parse(readFileSync(join(packageDir(), "package.json"), "utf8")) as { name?: unknown }
+    return manifest.name === PACKAGE
+  } catch {
+    return false
+  }
 }
 
 function tagRef(target: string | undefined): string | undefined {
