@@ -1,4 +1,4 @@
-// `npm run conformance`: the source contract's conformance kit (source-contract v0.2.0, `sourceConformance`) over both
+// `npm run conformance`: the source contract's conformance kit (source-contract v0.3.0, `sourceConformance`) over both
 // sources, run through the plugin's own tool wrapper and registry (src/tools/spec.ts `runTool`) on Day 0's fakes and
 // package G's strict ledger — no Google call. The report goes to reports/conformance-report.json, which the release
 // workflow's conformance job reads (scripts/release-rules.mjs: `ok`, `plugin`, `version`).
@@ -147,7 +147,7 @@ describe("the source contract's conformance kit", () => {
       ok: reports.length === 2 && reports.every((entry) => entry.ok && !entry.incomplete) && extra.length === 4 && extra.every((entry) => entry.ok),
       plugin: PACKAGE_NAME,
       version: PACKAGE_VERSION,
-      contract: { package: "@we-the-rebel-alliance/source-contract", tag: "v0.2.0" },
+      contract: { package: "@we-the-rebel-alliance/source-contract", tag: "v0.3.0" },
       sources: reports,
       extra,
     }

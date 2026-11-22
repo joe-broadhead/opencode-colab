@@ -9,7 +9,7 @@ OpenCode server. It uses the tools RPC, `google-colab.tools`, through `opencode 
 opencode api post /api/rpc/google-colab.tools/<method> -H "x-opencode-directory:$PWD" -d '{"input":{"sessionID":"<id>","input":{…}}}'
 ```
 
-The transport is the source contract's (`@we-the-rebel-alliance/source-contract`, tag v0.2.0), shared by the family.
+The transport is the source contract's (`@we-the-rebel-alliance/source-contract`, tag v0.3.0), shared by the family.
 
 | Method | Class | What it does |
 | --- | --- | --- |
@@ -50,7 +50,7 @@ source contract's codes (below), as a consumer expects.
 ## Sources
 
 The plugin declares two sources in `package.json` `sources`, for the
-[source contract](https://github.com/we-the-rebel-alliance/source-contract) v0.2.0. A consumer (Memory, Jelly, your own
+[source contract](https://github.com/we-the-rebel-alliance/source-contract) v0.3.0. A consumer (Memory, Jelly, your own
 script) reads them through the methods above, keeps the cursor, and asks for nothing else.
 
 | Source | Method | Asserts | What it answers |

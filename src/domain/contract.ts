@@ -275,7 +275,7 @@ export const PlanOutput = result({
   preview: z.record(z.string(), z.unknown()),
 })
 
-// ── Source tools (source-contract v0.2.0; package G owns their full input) ─
+// ── Source tools (source-contract v0.3.0; package G owns their full input) ─
 
 /** The source contract's events_list input; G checks it against docs/contract.md and may tighten it. */
 export const EventsListInput = z
