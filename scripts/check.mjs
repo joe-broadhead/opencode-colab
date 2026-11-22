@@ -34,7 +34,7 @@ const stages = {
   typecheck: () => run("tsc", ["--noEmit", "-p", "tsconfig.json"]),
   // Vitest, as opencode-github runs its unit tests (vitest.config.ts defines __PLUGIN_VERSION__ as the build does).
   unit: () => run("vitest", ["run"]),
-  // The `sources` declaration against source-contract v0.2.0's assertDeclaration; package G adds the kit's run, which
+  // The `sources` declaration against source-contract v0.3.0's assertDeclaration; package G adds the kit's run, which
   // writes reports/conformance-report.json.
   conformance: () => run("bun", ["test", "./test/conformance"]),
   kit: () => run("node", ["--test", "scripts/release-kit.test.mjs"]),

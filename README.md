@@ -99,7 +99,7 @@ downloading `/content/outputs`. [Costs](docs/costs.md) has the facts and the rat
 
 ## Sources
 
-Two sources for the [source contract](https://github.com/we-the-rebel-alliance/source-contract) (v0.2.0), read through
+Two sources for the [source contract](https://github.com/we-the-rebel-alliance/source-contract) (v0.3.0), read through
 the tools RPC (`google-colab.tools`) by a consumer that keeps the cursor:
 
 | Source | Kind | What it lists |
