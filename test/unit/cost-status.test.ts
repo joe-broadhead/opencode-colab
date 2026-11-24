@@ -198,7 +198,7 @@ describe("/colab-status and the TUI, through the status RPC", () => {
       skill: { list: async () => ({ data: [] }) },
       options: {},
     }
-    return { ctx, deps: { access: "all" as const, accounts: [{ alias: "default" as const, backend: "colab" as const }], tools: () => ({ registered: 20 }), hostVersion: "2.3.0", skills: [], problems: () => [] } }
+    return { ctx, deps: { access: "all" as const, accounts: [{ alias: "default" as const, backend: "colab" as const }], tools: () => ({ registered: 20 }), hostVersion: "2.4.1", skills: [], problems: () => [] } }
   }
 
   it("answers a status the TUI accepts, with the Cost and Automation rows, from the ledger and the options", async () => {
@@ -221,7 +221,7 @@ describe("/colab-status and the TUI, through the status RPC", () => {
   it("reports the access level's own automation state", async () => {
     const { ctx } = await context()
     const asking = { ...ctx, options: { access: "ask-changes" } }
-    const status = await computeStatus(asking as never, { access: "ask-changes", accounts: [{ alias: "default" as const, backend: "colab" as const }], tools: () => ({ registered: 20 }), hostVersion: "2.3.0", skills: [], problems: () => [] })
+    const status = await computeStatus(asking as never, { access: "ask-changes", accounts: [{ alias: "default" as const, backend: "colab" as const }], tools: () => ({ registered: 20 }), hostVersion: "2.4.1", skills: [], problems: () => [] })
     expect(status.automation).toBe("off (access)")
     expect(costText(status.cost)).toContain("0 running")
   })

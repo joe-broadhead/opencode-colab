@@ -1,8 +1,8 @@
 {
-  "name": "@joe-broadhead/opencode-colab",
-  "version": "0.0.1",
+  "name": "@we-the-rebel-alliance/colab-plugin",
+  "version": "0.0.0",
   "private": true,
-  "description": "Unofficial OpenCode plugin for editing local Jupyter notebooks",
+  "description": "OpenCode plugin for local Jupyter notebooks: find, read and edit .ipynb files",
   "keywords": [
     "opencode",
     "opencode-plugin",
@@ -10,13 +10,13 @@
     "jupyter",
     "notebooks"
   ],
-  "homepage": "https://github.com/joe-broadhead/opencode-colab#readme",
+  "homepage": "https://github.com/we-the-rebel-alliance/colab-plugin#readme",
   "bugs": {
-    "url": "https://github.com/joe-broadhead/opencode-colab/issues"
+    "url": "https://github.com/we-the-rebel-alliance/colab-plugin/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joe-broadhead/opencode-colab.git"
+    "url": "git+https://github.com/we-the-rebel-alliance/colab-plugin.git"
   },
   "license": "MIT",
   "type": "module",
@@ -58,15 +58,16 @@
   "devDependencies": {
     "@babel/core": "7.29.7",
     "@babel/preset-typescript": "7.27.1",
-    "@opencode/client": "2.2.3",
-    "@opencode/plugin": "2.2.3",
-    "@opencode/sdk": "2.2.3",
+    "@opencode/client": "2.4.1",
+    "@opencode/plugin": "2.4.1",
+    "@opencode/sdk": "2.4.1",
     "@opentui/core": "0.8.0",
     "@opentui/solid": "0.8.0",
     "@types/bun": "1.4.4",
     "@types/node": "24.19.2",
     "@we-the-rebel-alliance/source-contract": "github:we-the-rebel-alliance/source-contract#v0.3.0",
     "babel-preset-solid": "1.9.16",
+    "effect": "4.1.0",
     "esbuild": "0.28.2",
     "solid-js": "1.9.18",
     "typescript": "5.9.3",
@@ -74,7 +75,7 @@
     "zod": "4.6.7"
   },
   "opencode": {
-    "host": ">=2.2.3 <2.4.0",
+    "host": ">=2.4.1 <2.5.0",
     "icons": [
       {
         "src": "assets/icon.svg",
@@ -131,8 +132,8 @@
       }
     ],
     "skills": [
-      "opencode-colab",
-      "opencode-colab-notebooks"
+      "colab",
+      "colab-notebooks"
     ],
     "contributes": {
       "settings": [

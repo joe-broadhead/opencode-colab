@@ -3,7 +3,7 @@
 // this package (its built dist/) with options. A probe plugin lends its context to the tests. Every request off the
 // machine is blocked and fails the host's close().
 //
-// Host version: the SDK in devDependencies (2.2.3). HOST_SDK_DIR names a directory whose node_modules holds another
+// Host version: the SDK in devDependencies (2.4.1). HOST_SDK_DIR names a directory whose node_modules holds another
 // @opencode/sdk (scripts/check.mjs installs each tested release outside the lockfile); the host then runs that SDK.
 import { ROOT, SDK_OVERRIDE } from "./isolate.js"
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs"
