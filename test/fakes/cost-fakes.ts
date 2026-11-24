@@ -1,7 +1,7 @@
 /**
  * Package F's own doubles, built on Day 0's (test/fakes/index.ts) as the ownership table says: a Jupyter contents tree
  * that lists one level at a time (directories included, as `/api/contents` does), a runtime protocol with it, and
- * recorders for the host surfaces F registers (a command, posted text, permission asserts).
+ * recorders for the host surfaces F uses (posted text and permission asserts).
  *
  * Shapes are Jupyter Server's REST API (https://jupyter-server.readthedocs.io/en/stable/developers/rest-api.html,
  * design §18 [19]): `/api/contents/<path>` answers one entry for a file or a directory's immediate children, with
