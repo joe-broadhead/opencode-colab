@@ -7,7 +7,7 @@ const text = (id: string) => readFileSync(new URL(`../../skills/${id}/SKILL.md`,
 
 describe("skills", () => {
   it("are the main skill and the notebooks skill", () => {
-    expect([...SKILL_IDS]).toEqual(["opencode-colab", "opencode-colab-notebooks"])
+    expect([...SKILL_IDS]).toEqual(["colab", "colab-notebooks"])
   })
 
   for (const id of SKILL_IDS) {
@@ -25,6 +25,6 @@ describe("skills", () => {
   }
 
   it("refuses a skill with an unknown frontmatter key", () => {
-    expect(() => parseSkill("opencode-colab", "---\nname: opencode-colab\ndescription: x\nextra: y\n---\nbody")).toThrow(/^SKILLS_INVALID: /)
+    expect(() => parseSkill("colab", "---\nname: colab\ndescription: x\nextra: y\n---\nbody")).toThrow(/^SKILLS_INVALID: /)
   })
 })

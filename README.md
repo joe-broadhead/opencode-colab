@@ -1,13 +1,13 @@
-# Colab for OpenCode — local notebook editing
+# Colab for OpenCode — local notebooks
 
-An unofficial OpenCode plugin that finds, reads and edits local Jupyter notebooks. It does not run notebooks or need a Google account.
+`@we-the-rebel-alliance/colab-plugin` finds, reads and edits local Jupyter notebooks. It does not run notebooks and needs no Google account.
 
 ## Install
 
-Requires OpenCode `>=2.2.3 <2.4.0`. Once the first release tag (`v0.0.1`) is available, install it from GitHub:
+OpenCode `>=2.4.1 <2.5.0`, tested on 2.4.1. With the v0.0.0 release:
 
 ```sh
-opencode plugin add 'github:joe-broadhead/opencode-colab#v0.0.1'
+opencode plugin add 'github:we-the-rebel-alliance/colab-plugin#v0.0.0'
 ```
 
 For a source checkout, see [Contributing](CONTRIBUTING.md).

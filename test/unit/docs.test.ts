@@ -1,6 +1,6 @@
 // The docs that pin the contract: every file under src/ and test/ has exactly one owner in docs/v1-design.md's File
 // ownership table and no two owners' patterns overlap; and the editing-only guarantee's three tiers are word for word
-// the same in docs/v1-design.md, the README and the opencode-colab skill.
+// the same in docs/v1-design.md, the README and the colab skill.
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -92,7 +92,7 @@ describe("the editing-only guarantee", () => {
     expect(canonical[1]).toContain("narrow the cross-process window")
   })
 
-  for (const file of ["README.md", "docs/safety.md", "skills/opencode-colab/SKILL.md"]) {
+  for (const file of ["README.md", "docs/safety.md", "skills/colab/SKILL.md"]) {
     it(`is word for word the same in ${file}`, () => {
       expect(tiers(file)).toEqual(canonical)
     })

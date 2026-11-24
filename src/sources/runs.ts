@@ -67,7 +67,7 @@ import { isFinal } from "../ledger/store.js"
 import type { Clock, Ledger, LedgerEvent, RunRecord, RuntimeRecord } from "../ports.js"
 
 /** The plugin's package name: every page names it, and cursors are bound to it. */
-export const PACKAGE = "@joe-broadhead/opencode-colab"
+export const PACKAGE = "@we-the-rebel-alliance/colab-plugin"
 /** The source's name, as `events_list`'s `source` input and every page name it. */
 export const RUNS = "runs"
 export const RUNS_ID = "colab.runs"

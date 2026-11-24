@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url"
 export const NOT_RELEASED_DETAIL = "This install is not a tagged release, so nothing was sent to Google."
 export const NOT_RELEASED_NEXT = "Install a tagged release when one exists. A source checkout does not call Google."
 
-const FLAG = Symbol.for("@joe-broadhead/opencode-colab/tagged-release")
+const FLAG = Symbol.for("@we-the-rebel-alliance/colab-plugin/tagged-release")
 const SEMVER_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/
 
 export interface InstallSource {
@@ -57,7 +57,7 @@ export interface ReleaseGate {
 /**
  * The host does not list the plugin itself while its setup runs, and a package install's folder has no .git. So the
  * verdict is read on first use, when `ctx.plugin.list` does list it: a package install's `target` carries the tag
- * (`…#v0.0.1`), and its `version` is the commit, which is ignored. A checkout at a tag stays a release; a branch, a
+ * (`…#v0.0.0`), and its `version` is the commit, which is ignored. A checkout at a tag stays a release; a branch, a
  * dev checkout or an install with no tag is gated. Until the entry appears, the git-tag fallback decides, which fails
  * closed for a package install.
  */
@@ -139,12 +139,12 @@ export function isGoogleRequest(input: RequestInfo | URL): boolean {
 }
 
 /** This plugin's own repository and package: a release install comes from it, and no other one is a release here. */
-const OWNER = "joe-broadhead"
-const REPO = "opencode-colab"
-const PACKAGE = "@joe-broadhead/opencode-colab"
+const OWNER = "we-the-rebel-alliance"
+const REPO = "colab-plugin"
+const PACKAGE = "@we-the-rebel-alliance/colab-plugin"
 
 function packageTagged(source: InstallSource): boolean {
-  // The host reports the spec in `target` (`…#v0.0.1`) and the resolved commit in `version`; only the tag counts.
+  // The host reports the spec in `target` (`…#v0.0.0`) and the resolved commit in `version`; only the tag counts.
   const ref = tagRef(source.target)
   if (ref === undefined || !SEMVER_TAG.test(ref)) return false
   // A real install records where it came from: a GitHub spec must name this plugin's repository, and the installed

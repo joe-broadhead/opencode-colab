@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 import { type Plugin, Skill } from "@opencode/plugin"
 import { ColabError } from "./domain/errors.js"
 
-export const SKILL_IDS = ["opencode-colab", "opencode-colab-notebooks"] as const
+export const SKILL_IDS = ["colab", "colab-notebooks"] as const
 
 type ParsedSkill = { readonly name: string; readonly description: string; readonly content: string }
 

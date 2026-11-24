@@ -31,7 +31,7 @@ test("loads the exact native, Code Mode, command, skill and read RPC surfaces; l
     expect([...tools.values()].filter((tool) => tool.options?.codemode).map((tool) => tool.id).sort()).toEqual(["colab_find", "colab_notebook"])
     expect((await host.client.integration.list({ location: host.location })).data.filter(({ id }) => id.startsWith("colab-"))).toEqual([])
     expect((await host.client.command.list({ location: host.location })).data.map(({ name }) => name).filter((name) => name.startsWith("colab-"))).toEqual(["colab-status"])
-    expect((await host.probe().skill.list()).data.map(({ id }) => id).filter((id) => id.startsWith("opencode-colab")).sort()).toEqual(["opencode-colab", "opencode-colab-notebooks"])
+    expect((await host.probe().skill.list()).data.map(({ id }) => id).filter((id) => id === "colab" || id === "colab-notebooks").sort()).toEqual(["colab", "colab-notebooks"])
     const answer = await status(host)
     expect(isStatus(answer)).toBe(true)
     expect(answer).toMatchObject({ surface: "editing", access: "all", accounts: [], tools: { registered: 3 }, unguardedAgents: [],
