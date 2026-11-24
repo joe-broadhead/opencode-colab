@@ -2,11 +2,11 @@
  * The tool and action names, in one place (design §6, §7.1, §7.2, §10). Tool ids are `colab_<tool>`; permission
  * actions are `colab.<tool>` (gws's dotted form). Every tool asserts its own action before any network call; every
  * provider read additionally asserts `colab.read` on `<account>:<operation>`; the source contract's probe asserts
- * `colab.probe`. Those two are declared in `jelly.tools` as permission-only, read-only entries. `colab.cleanup` is the
- * `/colab-cleanup` command's action: in the default-rules block, never in `jelly.tools`.
+ * `colab.probe`. Those two are declared with no tool of their own, as permission-only, read-only entries.
+ * `colab.cleanup` is the `/colab-cleanup` command's action: in the default-rules block, and never a tool.
  *
- * Asserted must equal declared: test/unit/jelly.test.ts checks every action here against package.json `jelly.tools`,
- * and test/unit/registry.test.ts checks that each registered tool asserts exactly its action.
+ * Asserted must equal declared: test/unit/registry.test.ts checks that each registered tool asserts exactly its
+ * action, and test/unit/actions.test.ts checks the declared list.
  *
  * This module imports nothing, so a script can load it with Node's type stripping.
  */
@@ -63,12 +63,12 @@ export const actionOf = (name: string) => `${NAMESPACE_PREFIX}.${name}`
 export const READ_ACTION = "colab.read"
 /** The source contract's probe: names the signed-in account, reads no content. */
 export const PROBE_ACTION = "colab.probe"
-/** Declared in `jelly.tools` with no tool of their own: read-only, `effect: "allow"`. */
+/** Declared with no tool of their own: read-only, `effect: "allow"`. */
 export const PERMISSION_ONLY: readonly { readonly action: string; readonly note: string }[] = [
   { action: READ_ACTION, note: "The provider reads every read tool makes" },
   { action: PROBE_ACTION, note: "Names the signed-in account for sources; reads no content" },
 ]
-/** `/colab-cleanup`'s action (design §8.5). Not a tool, so not declared in jelly; the default rules ask for it, and deny it at read-only. */
+/** `/colab-cleanup`'s action (design §8.5). Not a tool; the default rules ask for it, and deny it at read-only. */
 export const CLEANUP_ACTION = "colab.cleanup"
 /** A later tool in the namespace gets this rule's effect: a change's. */
 export const NAMESPACE_ACTION = "colab.*"
@@ -78,7 +78,7 @@ export const READ_TOOL_ACTIONS: readonly string[] = TOOLS.filter((tool) => tool.
 export const CHANGE_TOOL_ACTIONS: readonly string[] = TOOLS.filter((tool) => tool.class !== "read").map((tool) => actionOf(tool.name))
 /** Every action the plugin can assert: the 20 tool actions, `colab.read`, `colab.probe` and `colab.cleanup`. */
 export const ASSERTABLE_ACTIONS: readonly string[] = [...TOOL_ACTIONS, READ_ACTION, PROBE_ACTION, CLEANUP_ACTION]
-/** Every action declared in jelly.tools: the 20 tool actions and the two permission-only reads. */
+/** Every action declared: the 20 tool actions and the two permission-only reads. */
 export const DECLARED_ACTIONS: readonly string[] = [...TOOL_ACTIONS, ...PERMISSION_ONLY.map((entry) => entry.action)]
 
 export function toolEntry(name: string): ToolEntry {

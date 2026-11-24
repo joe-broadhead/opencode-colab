@@ -2,13 +2,13 @@
 
 ## Setup
 
-- Node.js 22.12 or later, with npm. CI uses Node.js 24.
+- Node.js 24, with npm. CI uses Node.js 24.
 - Bun 1.4 (CI uses 1.4.4). The host and pack tests run with `bun test`.
 - macOS or Linux.
 
 ```sh
-git clone https://github.com/joe-broadhead/opencode-colab.git
-cd opencode-colab
+git clone https://github.com/we-the-rebel-alliance/colab-plugin.git
+cd colab-plugin
 npm ci --ignore-scripts
 npm run check
 ```
@@ -27,7 +27,7 @@ npm run build
 ```
 
 ```json
-{ "plugins": [{ "package": "/path/to/opencode-colab" }] }
+{ "plugins": [{ "package": "/path/to/colab-plugin" }] }
 ```
 
 ## `npm run check`
@@ -42,7 +42,7 @@ One command, `scripts/check.mjs`, runs every stage in order and stops at the fir
 | `kit` | The release kit's own tests. |
 | `build` | esbuild bundles `dist/index.js` and `dist/tui.js`, and checks `NOTICE`. |
 | `icons` | The family icon contract. |
-| `host` | The built plugin in an embedded OpenCode host, once per tested release, with every request off loopback blocked. |
+| `host` | The built plugin in an embedded OpenCode 2.4.1 host, with every request off loopback blocked. |
 | `latent` | Synthetic full-plugin host boundary checks on the SDK floor and in-memory conformance of a fixture descriptor. No collector, shipped source declaration, or release report. |
 | `pack` | Packs, installs with scripts disabled and imports both entries. |
 | `forbidden` | The forbidden APIs and private names. |
@@ -52,8 +52,11 @@ One command, `scripts/check.mjs`, runs every stage in order and stops at the fir
 
 ## Packages
 
-v0.1.0 is built in packages A–G on the Day 0 contract. Before you change a file, find its owner in
+The latent full plugin is built in packages A–G on the Day 0 contract. Before you change a file, find its owner in
 [docs/v1-design.md](docs/v1-design.md#file-ownership); a package changes only its own files.
+
+The repository is moving onto plugin-contract v0: the `jelly` and `sources` keys, the copied kit in `scripts/` and the
+tools RPC are replaced there, not extended here.
 
 ## Errors
 
@@ -63,11 +66,10 @@ The error table is `src/domain/errors.ts`. After changing it, run `node scripts/
 ## Releases
 
 Versions follow semantic versioning on the plugin's contract: its options, the tool names and actions, the
-`/colab-status` command, the status RPC, the skill names and the default rules.
+`/colab-status` command, the status RPC, the skill names and the default rules. The repository starts at `0.0.0`; the
+first release of the rebuilt plugin comes with plugin-contract v0.
 
 Each release is the GitHub tag `v<version>`, made only by `.github/workflows/release.yml` after the owner approves the
-`release` environment. While changes land, their notes go under `## [Unreleased]` in `CHANGELOG.md`; a release-prep
-commit runs `node scripts/changelog.mjs release`. `package.json` stays `"private": true` and in canonical form.
+`release` environment. `package.json` stays `"private": true` and in canonical form.
 
-A pull request's CI runs the Linux runners only; the push to `master` runs every runner, Apple-silicon macOS
-(`macos-26`) too, and the release stands on that run. An Intel Mac (`macos-26-intel`) is not required.
+A pull request's CI runs the one required `ci` job on Node 24.

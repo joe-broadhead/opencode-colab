@@ -1,7 +1,7 @@
 /**
  * Package F's own doubles, built on Day 0's (test/fakes/index.ts) as the ownership table says: a Jupyter contents tree
  * that lists one level at a time (directories included, as `/api/contents` does), a runtime protocol with it, and
- * recorders for the host surfaces F registers (hooks, a command, posted text, permission asserts).
+ * recorders for the host surfaces F uses (posted text and permission asserts).
  *
  * Shapes are Jupyter Server's REST API (https://jupyter-server.readthedocs.io/en/stable/developers/rest-api.html,
  * design §18 [19]): `/api/contents/<path>` answers one entry for a file or a directory's immediate children, with
@@ -71,44 +71,7 @@ export class CostRuntime extends FakeRuntimeProtocol {
   }
 }
 
-/** Records the hook callbacks F registers; `refuse` simulates a host that does not offer one. */
-export class RecordingHooks {
-  readonly callbacks = new Map<string, (input: never) => Promise<void> | void>()
-  readonly registered: string[] = []
-  refuse = new Set<string>()
-  /** What `ctx.session.context` answers, newest last; a test sets it to prove the idle check never loops. */
-  contextMessages: { readonly type?: string; readonly metadata?: Readonly<Record<string, unknown>> }[] = []
-  readonly context = async () => this.contextMessages
-  /** Every `ctx.session.synthetic` call, as the idle note posts it. */
-  readonly posts: { readonly text: string; readonly description?: string; readonly metadata?: Record<string, unknown> }[] = []
-  readonly synthetic = async (input: { readonly text: string; readonly description?: string; readonly metadata?: Record<string, unknown> }) => {
-    this.posts.push({ text: input.text, ...(input.description !== undefined ? { description: input.description } : {}), ...(input.metadata !== undefined ? { metadata: input.metadata } : {}) })
-  }
-
-  async hook(name: string, callback: (input: never) => Promise<void> | void) {
-    if (this.refuse.has(name)) throw new Error(`no hook named ${name} on this host`)
-    this.callbacks.set(name, callback)
-    this.registered.push(name)
-    return { dispose: async () => void this.callbacks.delete(name) }
-  }
-
-  async fire(name: string, input: unknown): Promise<void> {
-    await this.callbacks.get(name)?.(input as never)
-  }
-}
-
-/** Records a command F registers and runs it on demand. */
-export class RecordingCommands {
-  readonly commands = new Map<string, { name: string; description?: string; execute: (input: never) => Promise<void> }>()
-
-  async transform(callback: (editor: { add(definition: never): void }) => void) {
-    const editor = { add: (definition: never) => void this.commands.set((definition as { name: string }).name, definition as never) }
-    callback(editor as never)
-    return { dispose: async () => void this.commands.clear() }
-  }
-}
-
-/** Records `ctx.session.synthetic` calls, as `/colab-cleanup` and the idle note post them. */
+/** Records `ctx.session.synthetic` calls, as `/colab-cleanup` posts them. */
 export class RecordingSynthetic {
   readonly posts: { readonly text: string; readonly description?: string; readonly metadata?: Record<string, unknown> }[] = []
 

@@ -14,9 +14,9 @@ import {
   type InstallSource,
 } from "../../src/release.js"
 
-// The host's own report, as stock OpenCode 2.3.2 sends it: the tag is in the spec, and `version` is the resolved commit.
+// The host's own report, as stock OpenCode 2.4.1 sends it: the tag is in the spec, and `version` is the resolved commit.
 const SHA = "8fa625bce989ff7c47a586eaa39340374ba43434"
-const packageSource = (ref: string): InstallSource => ({ type: "package", target: `git+file:///cache/opencode-colab#${ref}`, version: SHA })
+const packageSource = (ref: string): InstallSource => ({ type: "package", target: `git+file:///cache/colab-plugin#${ref}`, version: SHA })
 const listOf = (...items: { id: string; source: InstallSource }[]) => async () => ({ location: { directory: "/p" }, data: items })
 
 describe("a source install does not call Google", () => {
@@ -34,14 +34,14 @@ describe("a source install does not call Google", () => {
     expect(isTaggedRelease(packageSource("v0.0.1-rc.1"))).toBe(true)
     expect(isTaggedRelease(packageSource("master"))).toBe(false)
     // The spec must name this plugin's own repository, in the forms a real install records.
-    expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-colab#v0.0.1", version: SHA })).toBe(true)
-    expect(isTaggedRelease({ type: "package", target: "git+https://github.com/joe-broadhead/opencode-colab.git#v0.0.1", version: SHA })).toBe(true)
-    expect(isTaggedRelease({ type: "package", target: "git+ssh://git@github.com/joe-broadhead/opencode-colab.git#v0.0.1", version: SHA })).toBe(true)
+    expect(isTaggedRelease({ type: "package", target: "github:we-the-rebel-alliance/colab-plugin#v0.0.1", version: SHA })).toBe(true)
+    expect(isTaggedRelease({ type: "package", target: "git+https://github.com/we-the-rebel-alliance/colab-plugin.git#v0.0.1", version: SHA })).toBe(true)
+    expect(isTaggedRelease({ type: "package", target: "git+ssh://git@github.com/we-the-rebel-alliance/colab-plugin.git#v0.0.1", version: SHA })).toBe(true)
     // Another repository's semver tag is not a release of this plugin.
-    expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-gws#v0.0.11", version: SHA })).toBe(false)
-    expect(isTaggedRelease({ type: "package", target: "github:someone/opencode-colab#v0.0.1", version: SHA })).toBe(false)
-    expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-colab" })).toBe(false)
-    expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-colab", version: "0.0.1" })).toBe(false)
+    expect(isTaggedRelease({ type: "package", target: "github:we-the-rebel-alliance/gws-plugin#v0.0.11", version: SHA })).toBe(false)
+    expect(isTaggedRelease({ type: "package", target: "github:someone/colab-plugin#v0.0.1", version: SHA })).toBe(false)
+    expect(isTaggedRelease({ type: "package", target: "github:we-the-rebel-alliance/colab-plugin" })).toBe(false)
+    expect(isTaggedRelease({ type: "package", target: "github:we-the-rebel-alliance/colab-plugin", version: "0.0.1" })).toBe(false)
     expect(isTaggedRelease({ type: "builtin" })).toBe(false)
     expect(isTaggedRelease({ type: "sdk" })).toBe(false)
     expect(isTaggedRelease({})).toBe(false)

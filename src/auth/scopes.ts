@@ -111,7 +111,7 @@ export function missingScopes(granted: readonly string[], needed: readonly strin
 
 /**
  * The sorted union of every scope the plugin may request, across both backends and both levels, with and without
- * Drive: `jelly.signIns[0].scopes` must equal it (design §4, review L7).
+ * Drive: the plugin's declaration carries exactly these scopes (design §4, review L7).
  */
 export const ALL_SCOPES: readonly string[] = unique([
   ...accountScopes({ backend: "colab", access: "read", drive: true }, "read"),

@@ -1,4 +1,4 @@
-// The `sources` declaration against what a consumer of today accepts. Jelly and Memory vendor source-contract v0.1.x
+// The `sources` declaration against what a consumer of today accepts. Some consumers vendor source-contract v0.1.x
 // until they re-vendor v0.2.0, and v0.1.x refuses keys v0.2.0 added: a declaration or an answer carrying one makes the
 // whole plugin unreadable as a source. This fails when one appears in package.json `sources`, in a page, or in a probe
 // answer, and checks package.json's block itself as a consumer reads it.

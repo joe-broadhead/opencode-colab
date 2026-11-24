@@ -1,6 +1,6 @@
 /**
  * Colab's part of the tools RPC (`google-colab.tools`): the plugin value and the method table that the source
- * contract's `tools-rpc` module takes. The module (`@we-the-rebel-alliance/source-contract/tools-rpc`, tag v0.3.0,
+ * contract's `tools-rpc` module takes. The module (`@we-the-rebel-alliance/source-contract/tools-rpc`, commit 2fd55cdc0c6c1067927fefc403a88bfd18c9a971,
  * bundled into `dist/index.js`) is the transport every plugin of the family shares:
  *
  *   POST /api/rpc/google-colab.tools/<method>

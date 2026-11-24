@@ -17,7 +17,7 @@
  * `iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/<email>:generateAccessToken` and reads
  * `{accessToken? no: accessToken, expireTime}` (https://cloud.google.com/iam/docs/create-short-lived-credentials-direct).
  *
- * Not in v0.1.0: Workforce/Workload Identity Federation (`external_account`) credential files; the refusal names the
+ * Not in this build: Workforce/Workload Identity Federation (`external_account`) credential files; the refusal names the
  * live check that would add them (L3). No token, key or refresh token reaches a message.
  */
 import { createSign } from "node:crypto"
@@ -67,9 +67,9 @@ export function gcloudAdcPath(env: NodeJS.ProcessEnv): string | undefined {
 }
 
 /**
- * A managed (hosted) engine disables the project config; Jelly's own agent runtime sets both variables for its managed
- * engines, so their presence is the signal that ADC is not the local person's own credential, and it is refused unless
- * the operator opted in (design §4, ADC_REFUSED).
+ * A managed (hosted) engine disables the project config; the host's own agent runtime sets both variables for its
+ * managed engines, so their presence is the signal that ADC is not the local person's own credential, and it is refused
+ * unless the operator opted in (design §4, ADC_REFUSED).
  */
 export function isManagedHost(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.OPENCODE_DISABLE_PROJECT_CONFIG === "1" || env.OPENCODE_CONFIG_PROJECT_DISABLE === "1"

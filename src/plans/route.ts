@@ -23,7 +23,7 @@ export function planHandler(handlers: PlanHandlers, action: string, backend: Bac
   if (!isPlanAction(action)) throw new ColabError("ACTION_UNSUPPORTED", `There is no plan action ${action}.`, { next: `Use one of: ${Object.keys(PLAN_ACTIONS).join(", ")}.` })
   if (!(PLAN_ACTIONS[action].backends as Partial<Record<Backend, unknown>>)[backend]) {
     const next = action === "runtime.create" && backend === "enterprise" ? 'Plan colab_plan({ action: "job.create", params: { notebook } }) instead: Enterprise runs whole notebooks as jobs.' : `Use an account whose backend has ${action}.`
-    throw new ColabError("ACTION_UNSUPPORTED", `${action} is not available on ${backend} accounts in v0.1.0.`, { next })
+    throw new ColabError("ACTION_UNSUPPORTED", `${action} is not available on ${backend} accounts in this build.`, { next })
   }
   const handler = handlers[action]?.[backend] as PlanHandler<PlanAction> | undefined
   if (!handler) throw new ColabError("NOT_IMPLEMENTED", `The ${action} plan on ${backend} accounts is declared but not built in this pre-release.`)

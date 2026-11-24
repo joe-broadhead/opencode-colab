@@ -81,7 +81,7 @@ type Parsed = z.output<typeof OptionsSchema>
 export type Options = Omit<Parsed, "accounts"> & { readonly accounts: readonly ResolvedAccount[] }
 export type ResolvedAccount = AccountConfig & { readonly oauthClient?: string; readonly scopes?: readonly string[]; readonly budget?: NonNullable<Parsed["accounts"]>[string]["budget"] }
 
-const EXAMPLE = `"plugins": [{ "package": "github:joe-broadhead/opencode-colab#v0.0.1", "options": { "access": "ask-changes" } }]`
+const EXAMPLE = `"plugins": [{ "package": "github:we-the-rebel-alliance/colab-plugin#v<version>", "options": { "access": "ask-changes" } }]`
 
 /** The defaults, with no options at all: one `default` account, backend colab, interactive (design §4). */
 export function loadOptions(raw: unknown): Options {

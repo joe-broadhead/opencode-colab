@@ -9,7 +9,7 @@
  *   token Google returned at sign-in (package A keeps its claims with the credential), or an ADC key's service-account
  *   email. It calls no Google API.
  *
- * No owner carries `verified: false`: Jelly and Memory still vendor source-contract v0.1.x, which refuses the key
+ * No owner carries `verified: false`: some consumers still vendor source-contract v0.1.x, which refuses the key
  * (SC-SOURCES-BRIEF, CORRECTIONS 5). Where Google does not vouch for an email — a `token` account, an ADC credential
  * with no readable email, an ID token whose email Google marks unverified — the owner is the plugin's own synthetic,
  * scheme-qualified id, `colab:account:<alias>`, and its label says why. It is never presented as the person's email.

@@ -1,7 +1,7 @@
 /**
  * Package G's harness: the plugin's real tool wrapper (src/tools/spec.ts `runTool`) and registry over Day 0's fakes,
  * with the strict ledger (sources-ledger.ts), a recording permission, the source probe, the run writers the source
- * must cope with, and a consumer that reads a source the way Memory's collector does: page after page with the cursor
+ * must cope with, and a consumer that reads a source the way a collector does: page after page with the cursor
  * the last page gave, each page checked against the contract (`resultProblems`).
  *
  * The run writers are the ledger's real writers, by shape (src/enterprise/runs.ts `record`; package D's

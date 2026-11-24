@@ -120,7 +120,7 @@ export async function chooseCompute(ctx: HandlerContext, params: ComputeParams, 
     const templates = await ctx.deps.vertex.listTemplates(ctx.account.alias, ctx.call.signal)
     const found = templates.find((entry) => templateName(entry) === params.template || templateName(entry).endsWith(`/notebookRuntimeTemplates/${params.template}`))
     if (!found) {
-      throw new ColabError("NOT_FOUND", `No notebook runtime template matches "${params.template}".`, { next: "Use a template id colab_specs lists; templates are read-only in v0.1.0." })
+      throw new ColabError("NOT_FOUND", `No notebook runtime template matches "${params.template}".`, { next: "Use a template id colab_specs lists; templates are read-only in this build." })
     }
     const compute = templateMachine(found)
     if (!compute.machine) throw new ColabError("ESTIMATE_UNKNOWN", "The template names no machine type, so its cost cannot be estimated.", { next: "Use a template with a machineSpec, or name machine instead." })

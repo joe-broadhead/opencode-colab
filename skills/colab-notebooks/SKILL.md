@@ -1,5 +1,5 @@
 ---
-name: opencode-colab-notebooks
+name: colab-notebooks
 description: Inspect and edit local nbformat 4 notebooks with cell selectors, exact hashes and atomic file writes.
 ---
 

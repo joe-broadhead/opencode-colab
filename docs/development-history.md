@@ -1,12 +1,12 @@
 # Development history (contributors only)
 
-These are historical development notes, not release notes or installation instructions. They describe the original full-plugin work retained in the source tree alongside the local notebook code. Provider functionality, provider skills and source collection are not in the v0.0.1 editing build, even when installed from its release tag. References to previous commands and reports describe development work, not current package entry points.
+These are historical development notes, not release notes or installation instructions. They describe the original full-plugin work retained in the source tree alongside the local notebook code. Provider functionality, provider skills and source collection are not in the editing build, even when installed from its release tag. References to previous commands, names and reports describe development work, not current package entry points.
 
-- The repository scaffold, in the family's layout: the `jelly` declaration, the build to two self-contained bundles,
+- The repository scaffold, in the family's layout: the declaration key, the build to two self-contained bundles,
   the shared kit (r4.1) and `scripts/check.mjs` as the one check gate.
 - The Day 0 contract: the ports, the twenty tools' schemas and result shapes, the error table, the `colab.*` action
   names, the plan store with `colab_plan` → `colab_write` / `colab_delete`, the run ledger, the `access` default rules,
-  the tool registry with stubs, the `jelly` and `sources` declarations, and fakes for every port.
+  the tool registry with stubs, the declaration key and `sources`, and fakes for every port.
 - Package C, notebooks: the nbformat 4 model (byte-stable unchanged files, ids derived in memory, outputs merged by
   cell id), `colab_find`, `colab_notebook`, `colab_edit`, the Drive pull with sync records, the `drive.create`,
   `drive.update` and `drive.trash` plans with outputs stripped by default, the foreign-origin warning and the source
@@ -38,6 +38,6 @@ These are historical development notes, not release notes or installation instru
   guarantee, costs, the sources) and `opencode-colab-notebooks` with ten worked examples, each run against the fakes by
   the tests.
 - The docs: the README, [Safety](safety.md) (the guarantee, every known limit, the live checks not yet run),
-  and the sources in [Scripting](scripting.md) and [In Jelly](jelly.md).
+  and the sources in [Scripting](scripting.md).
 - Package F, cost, cleanup and status: harvest-then-release, the idle rule and automation, budgets, `colab_status`,
   the hooks, `/colab-cleanup`, and the Cost and Automation rows.

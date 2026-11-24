@@ -1,5 +1,5 @@
 ---
-name: opencode-colab
+name: colab
 description: Find, read and safely edit local Jupyter notebooks without running their code or using Google.
 ---
 

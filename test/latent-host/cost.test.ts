@@ -1,4 +1,4 @@
-// The built plugin in an embedded OpenCode host, on each of the six tested releases: H2's default rules at every access
+// The built plugin in an embedded OpenCode host, on the one tested release: H2's default rules at every access
 // level over `colab.*`, `colab.read`, `colab.probe` and the command action `colab.cleanup`; and H9's automation consent
 // plus `/colab-cleanup`'s person-only prompt — a report at read-only that takes nothing, and one prompt per runtime at
 // `all`, with no tool `source`, whose refusal changes nothing. Nothing leaves the machine: the harness fails the host's

@@ -11,7 +11,7 @@ import { gcsParts } from "./ids.js"
 /** The scopes a Vertex AI notebook call and a bucket read take. L3 decides whether the narrower pair replaces these. */
 export const ENTERPRISE_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"] as const
 // TODO(L3): if the notebook REST methods accept `aiplatform` + `devstorage.read_only` (the notebook MCP's scope), the
-// enterprise sign-in becomes that pair instead of cloud-platform; §4 and the jelly scope list change with it.
+// enterprise sign-in becomes that pair instead of cloud-platform; §4 and the declared scope list change with it.
 
 export interface EnterpriseSettings {
   readonly alias: string

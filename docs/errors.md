@@ -34,7 +34,7 @@ The editing-only build does not return provider, run or source errors. The table
 | `AUTH_WRITE_UNCONFIRMED` | refused | Read and write access was chosen in the sign-in form without confirming the write scopes. | Sign in again and confirm the write scopes, or choose Read-only. |
 | `ACCOUNT_READ_ONLY` | refused | The account's access is read, so the plugin makes no change on it: no run, upload, edit, download, pause, plan or commit (design §4). Nothing ran. | Set accounts.<alias>.access to write and sign in again. |
 | `ADC_UNAVAILABLE` | refused | Application Default Credentials found nothing. | Use interactive mode, or set GOOGLE_APPLICATION_CREDENTIALS for an enterprise account. |
-| `ADC_REFUSED` | refused | ADC on a colab account, or ADC in Jelly without allowAdcInHost. | Use interactive mode; ADC is for enterprise accounts only. |
+| `ADC_REFUSED` | refused | ADC in a managed host that does not set allowAdcInHost. | Sign in interactively, or ask the operator to set allowAdcInHost: true. |
 | `COLAB_API_UNAVAILABLE` | refused | Google refused the Colab API for this client or project. | Notebook editing still works; runs need an enterprise account; the operator enables colaboratory.googleapis.com. |
 | `API_DISABLED` | refused | The Vertex AI, Compute, Dataform or Drive API is off in the project. | Open the enable link in the message. |
 | `PERMISSION_DENIED` | refused | IAM refused the call; the message names the permission Google named. | Ask an admin for the named role (docs/auth.md). |
@@ -78,7 +78,7 @@ The editing-only build does not return provider, run or source errors. The table
 | `JOB_UNCANCELLABLE` | refused | Cancel did not stop the job. | Wait for the timeout; the message shows what remains. |
 | `RESULTS_UNAVAILABLE` | failed | The output notebook is not in the bucket. | Check the job's state with colab_jobs, and the bucket. |
 | `SHARE_UNSUPPORTED` | refused | Sharing is not part of this plugin. | Share with the gws plugin. |
-| `ACTION_UNSUPPORTED` | refused | IAM, templates, setDefault and Enterprise runtime creation are not part of v0.1.0. | Use the Google Cloud console. |
+| `ACTION_UNSUPPORTED` | refused | IAM, templates, setDefault and Enterprise runtime creation are not part of this build. | Use the Google Cloud console. |
 | `PLAN_NOT_FOUND` | refused | No plan has this id. | Run colab_plan first. |
 | `PLAN_ALREADY_USED` | refused | This plan was already committed, or its commit is running. | Create a new plan to repeat the change; check the earlier result first. |
 | `PLAN_EXPIRED` | refused | The plan is older than planTtlSeconds. | Create a new plan. |

@@ -67,7 +67,7 @@ export interface Ours {
 
 /**
  * The runtime must be a record of this plugin's own, for this account, ready and untainted. A missing or foreign
- * record is RUNTIME_NOT_OURS (no override in v0.1.0), an ended one is RUNTIME_GONE, and a tainted one answers its own
+ * record is RUNTIME_NOT_OURS (no override in this build), an ended one is RUNTIME_GONE, and a tainted one answers its own
  * code. This runs before any network call in every tool that names a runtime.
  */
 export function ours(record: RuntimeRecord | undefined, account: string, _id: string): Ours {

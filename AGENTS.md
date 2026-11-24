@@ -1,20 +1,22 @@
 # Repository rules
 
-This repository builds `@joe-broadhead/opencode-colab`, an unofficial OpenCode plugin for local notebook editing.
-The shipped entry `src/editing/` must not import provider implementations. Full runtime, Enterprise and source code
-is latent and covered by synthetic unit tests. User docs: `README.md`, `docs/configuration.md`, `docs/errors.md`;
-contributor docs: `docs/v1-design.md` (the Day 0 contract and the **file ownership table**), `docs/architecture.md`,
-`CONTRIBUTING.md`.
+This repository builds `@we-the-rebel-alliance/colab-plugin`, an OpenCode plugin for local notebook editing, on the
+roadmap to plugin-contract v0 (we-the-rebel-alliance/plugin-contract#50). The shipped entry in `src/editing/` registers
+`colab_find`, `colab_notebook` and `colab_edit`; it must not import provider implementations. The full runtime,
+Enterprise and source code under `src/` is latent, covered by synthetic tests, and not reachable from the package
+entry. User docs: `README.md`, `docs/configuration.md`, `docs/errors.md`; contributor docs: `docs/v1-design.md` (the
+Day 0 contract and the **file ownership table**), `docs/architecture.md`, `CONTRIBUTING.md`.
 
 ## Platform
 
-- Use only public APIs of `@opencode/plugin` 2.2.3. The supported host range is exactly `>=2.2.3 <2.4.0`, in
+- Use only public APIs of `@opencode/plugin` 2.4.1. The supported host range is exactly `>=2.4.1 <2.5.0`, in
   `package.json` `opencode.host`, `SUPPORTED_HOST` in `src/constants.ts` and `HOST_RANGE` in `scripts/check.mjs`.
-  Never write it as `^2.2.3`.
-- Test against stock OpenCode 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.1 and 2.3.2. `TESTED_HOSTS` in `src/constants.ts` is the
-  one list.
+  Never write it as `^2.4.1`.
+- Test against stock OpenCode 2.4.1. `TESTED_HOSTS` in `src/constants.ts` is the one list.
 - Keep the plugin ids `google-colab` (server and status RPC), `google-colab.tools` (tools RPC) and `google-colab.tui`
-  (TUI), the namespace `colab` (tools `colab_<tool>`, actions `colab.<tool>`).
+  (TUI), and the namespace `colab` (tools `colab_<tool>`, actions `colab.<tool>`) until the contract rebuild renames
+  them.
+- No per-request hooks: cost and fleet state are read through status, never pushed into a request. No tool is pinned.
 
 ## Forbidden
 
@@ -28,8 +30,8 @@ contract's tools RPC).
 
 - Work is split into Day 0 and packages A–G. **Each file has one owner**, listed in `docs/v1-design.md`, File
   ownership. A package edits only its own files; a change to a Day 0 file (the ports, the contract, the error and
-  action tables, the registry, the plan route, the ledger, the rules, `package.json`'s `jelly` and `sources`) is a
-  contract change and goes through its own pull request.
+  action tables, the registry, the plan route, the ledger, the rules, `package.json`'s `jelly` key) is a contract
+  change and goes through its own pull request.
 - Packages reach each other only through `src/ports.ts` and `Deps` (`src/deps.ts`), never by importing another
   package's module. Every port has a fake in `test/fakes/`.
 
@@ -53,7 +55,7 @@ contract's tools RPC).
   rules and host approvals still apply; no permission hook supplies editing defaults.
 - Every shipped tool asserts its own `colab.<tool>` once in `src/editing/tools.ts`; file reads and edits also use the
   host's file permissions. The latent wrapper in `src/tools/spec.ts` adds `colab.read` only for provider reads.
-  Asserted equals declared: `test/unit/editing.test.ts`, `test/unit/jelly.test.ts` and `test/unit/registry.test.ts`.
+  Asserted equals declared: `test/unit/editing.test.ts` and `test/unit/registry.test.ts`.
 - Transforms are synchronous and never throw.
 - The plugin's own errors are `ColabError(code, message, extras)`, from the one table in `src/domain/errors.ts`.
 - `dist/` holds exactly two self-contained bundles, `index.js` and `tui.js`.
@@ -64,7 +66,7 @@ contract's tools RPC).
   carries their licences.
 - Ship prebuilt `dist/` and no `.d.ts` files. No install, `prepare` or `prepack` scripts.
 - The shared kit files are byte-for-byte copies, pinned in `scripts/check-copies.mjs`. Change them in every plugin at
-  once.
+  once. The contract rebuild replaces them with `plugin-kit`.
 - Releases come only from `.github/workflows/release.yml`, approved by the owner. Never push a tag or a `release/*`
   branch.
 

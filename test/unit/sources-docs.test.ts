@@ -35,7 +35,7 @@ const slug = (heading: string) =>
     .replace(/ /g, "-")
 
 describe("links", () => {
-  const files = ["README.md", "CHANGELOG.md", ...readdirSync(join(ROOT, "docs")).map((file) => `docs/${file}`), "skills/opencode-colab/SKILL.md", "skills/opencode-colab-notebooks/SKILL.md"].filter((file) => file.endsWith(".md"))
+  const files = ["README.md", "CHANGELOG.md", ...readdirSync(join(ROOT, "docs")).map((file) => `docs/${file}`), "skills/colab/SKILL.md", "skills/colab-notebooks/SKILL.md"].filter((file) => file.endsWith(".md"))
 
   it("resolve to files and headings in the repository", () => {
     const problems: string[] = []

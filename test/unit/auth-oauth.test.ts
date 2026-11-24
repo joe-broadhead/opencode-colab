@@ -96,7 +96,7 @@ describe("the Google sign-in flow (design §4)", () => {
     expect(http.calls).toHaveLength(0)
   })
 
-  it("L14 — the host's relay redirect (the Jelly sign-in) is used for the exchange and only its path is accepted", async () => {
+  it("L14 — the host's relay redirect (the host's sign-in) is used for the exchange and only its path is accepted", async () => {
     const http = new FakeHttp()
     http.on("oauth2.googleapis.com", "/token", 200, tokenResponse({ refresh: "1//relay" }))
     const port = await freePort()

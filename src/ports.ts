@@ -489,7 +489,7 @@ export type RunEvent =
   | { readonly type: "cell"; readonly runId: string; readonly cellId: string; readonly state: "ok" | "error" | "running" }
   | { readonly type: "finished"; readonly runId: string; readonly state: RunRecord["state"] }
 
-/** Package D publishes; F (status, hooks) and G (colab.runs) subscribe. */
+/** Package D publishes; a subscriber receives each event until it unsubscribes. */
 export interface RunEvents {
   publish(event: RunEvent): void
   subscribe(listener: (event: RunEvent) => void): () => void

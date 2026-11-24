@@ -16,9 +16,6 @@ const schema = z.strictObject({
   maxInlineBytes: Bytes.default(32 * 1024),
   maxDownloadBytes: Bytes.default(2 * 1024 ** 3),
   allowedRoots: z.array(z.string().min(1).regex(/^[^:\\\u0000-\u001f\u007f]+$/).refine((path) => !path.split("/").includes(".."))).default([]),
-  // Accepted local compatibility settings; this build creates neither a work directory nor a ledger.
-  workDir: z.string().min(1).default(".colab"),
-  ledgerDays: z.number().int().min(1).max(3650).default(90),
   allowUntestedHost: z.boolean().default(false),
 })
 
