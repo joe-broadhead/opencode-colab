@@ -132,7 +132,7 @@ export function signInForm(alias: string, account: ResolvedAccount, configured: 
       key: "clientJson",
       type: "string",
       title: "OAuth client JSON",
-      description: 'Google\'s downloaded client JSON, {"installed": …} or {"web": …}. A host fills it (Jelly provides its Google client this way); it replaces the client ID and secret. Kept with the sign-in in OpenCode\'s credential store.',
+      description: 'Google\'s downloaded client JSON, {"installed": …} or {"web": …}. A host fills it (the host provides its Google client this way); it replaces the client ID and secret. Kept with the sign-in in OpenCode\'s credential store.',
       required: false,
       hidden: true,
     },

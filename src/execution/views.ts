@@ -129,7 +129,7 @@ export const specs: ToolHandler<"specs"> = {
 /** `colab_runtimes`: the agent's view, the plugin's own first, with taint, idle, lease, keep and $/h where known. */
 export const runtimes: ToolHandler<"runtimes"> = {
   async run(input: InputOf<"runtimes">, ctx) {
-    // A consumer runtime is a colab account's record; an enterprise account has no ledger runtimes in v0.1.0.
+    // A consumer runtime is a colab account's record; an enterprise account has no ledger runtimes in this build.
     const records =
       ctx.account.backend === "colab"
         ? [...(await ctx.deps.ledger.listRuntimes({ account: ctx.account.alias }))].sort((left, right) => left.createdAt.localeCompare(right.createdAt))

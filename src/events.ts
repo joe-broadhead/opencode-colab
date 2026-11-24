@@ -1,5 +1,5 @@
-// Run events in one process: package D publishes a run's start, cells and end; status, hooks and the colab.runs source
-// subscribe. A listener that throws never stops the others or the publisher.
+// Run events in one process: package D publishes a run's start, cells and end, and any listener it has receives them.
+// A listener that throws never stops the others or the publisher.
 import type { RunEvent, RunEvents } from "./ports.js"
 
 export function createRunEvents(): RunEvents {

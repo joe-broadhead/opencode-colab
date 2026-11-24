@@ -2,11 +2,11 @@
 
 These are historical development notes, not release notes or installation instructions. They describe the original full-plugin work retained in the source tree alongside the local notebook code. Provider functionality, provider skills and source collection are not in the editing build, even when installed from its release tag. References to previous commands, names and reports describe development work, not current package entry points.
 
-- The repository scaffold, in the family's layout: the `jelly` declaration, the build to two self-contained bundles,
+- The repository scaffold, in the family's layout: the declaration key, the build to two self-contained bundles,
   the shared kit (r4.1) and `scripts/check.mjs` as the one check gate.
 - The Day 0 contract: the ports, the twenty tools' schemas and result shapes, the error table, the `colab.*` action
   names, the plan store with `colab_plan` → `colab_write` / `colab_delete`, the run ledger, the `access` default rules,
-  the tool registry with stubs, the `jelly` and `sources` declarations, and fakes for every port.
+  the tool registry with stubs, the declaration key and `sources`, and fakes for every port.
 - Package C, notebooks: the nbformat 4 model (byte-stable unchanged files, ids derived in memory, outputs merged by
   cell id), `colab_find`, `colab_notebook`, `colab_edit`, the Drive pull with sync records, the `drive.create`,
   `drive.update` and `drive.trash` plans with outputs stripped by default, the foreign-origin warning and the source

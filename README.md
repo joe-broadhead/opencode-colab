@@ -4,11 +4,9 @@
 
 ## Install
 
-OpenCode `>=2.4.1 <2.5.0`, tested on 2.4.1. With the v0.0.0 release:
+OpenCode `>=2.4.1 <2.5.0`, tested on 2.4.1.
 
-```sh
-opencode plugin add 'github:we-the-rebel-alliance/colab-plugin#v0.0.0'
-```
+Install from a release: `opencode plugin add github:we-the-rebel-alliance/colab-plugin#v<version>`. The first release on plugin-contract is `v0.0.0` (phase 4b).
 
 For a source checkout, see [Contributing](CONTRIBUTING.md).
 

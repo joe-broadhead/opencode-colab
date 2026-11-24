@@ -69,7 +69,7 @@ export const ERRORS = {
     "Set accounts.<alias>.access to write and sign in again.",
   ),
   ADC_UNAVAILABLE: entry("refused", "Application Default Credentials found nothing.", "Use interactive mode, or set GOOGLE_APPLICATION_CREDENTIALS for an enterprise account."),
-  ADC_REFUSED: entry("refused", "ADC on a colab account, or ADC in Jelly without allowAdcInHost.", "Use interactive mode; ADC is for enterprise accounts only."),
+  ADC_REFUSED: entry("refused", "ADC in a managed host that does not set allowAdcInHost.", "Sign in interactively, or ask the operator to set allowAdcInHost: true."),
   COLAB_API_UNAVAILABLE: entry(
     "refused",
     "Google refused the Colab API for this client or project.",
@@ -130,7 +130,7 @@ export const ERRORS = {
   JOB_UNCANCELLABLE: entry("refused", "Cancel did not stop the job.", "Wait for the timeout; the message shows what remains."),
   RESULTS_UNAVAILABLE: entry("failed", "The output notebook is not in the bucket.", "Check the job's state with colab_jobs, and the bucket."),
   SHARE_UNSUPPORTED: entry("refused", "Sharing is not part of this plugin.", "Share with the gws plugin."),
-  ACTION_UNSUPPORTED: entry("refused", "IAM, templates, setDefault and Enterprise runtime creation are not part of v0.1.0.", "Use the Google Cloud console."),
+  ACTION_UNSUPPORTED: entry("refused", "IAM, templates, setDefault and Enterprise runtime creation are not part of this build.", "Use the Google Cloud console."),
   // ── Plans ─────────────────────────────────────────────────────────────
   PLAN_NOT_FOUND: entry("refused", "No plan has this id.", "Run colab_plan first."),
   PLAN_ALREADY_USED: entry("refused", "This plan was already committed, or its commit is running.", "Create a new plan to repeat the change; check the earlier result first."),

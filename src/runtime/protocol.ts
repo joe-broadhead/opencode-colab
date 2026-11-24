@@ -34,7 +34,7 @@ import { checkConnection, runtimePath, runtimeUrl, type CheckedConnection } from
 import { connectTextSocket, type TextSocket } from "./websocket.js"
 import { cancelWatchdog, startWatchdog } from "./watchdog.js"
 
-/** The kernel the plugin asks for: Python is the only kernel v0.1.0 supports (design §3, non-goals). */
+/** The kernel the plugin asks for: Python is the only kernel this build supports (design §3, non-goals). */
 const KERNEL_NAME = "python3"
 /** Refreshed five minutes before `expireTime` (design §7.4). */
 const REFRESH_SKEW_MS = 5 * 60_000
