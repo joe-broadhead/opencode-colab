@@ -1,7 +1,7 @@
 # Scripting and Code Mode
 
 Only the read tools `find` and `notebook` are exposed through `google-colab.tools`. Code Mode likewise exposes `colab_find` and `colab_notebook`, not `colab_edit`. This package declares no sources or probe.
-The read RPC uses the source-contract tools transport, pinned to tag v0.3.0.
+The read RPC uses the source-contract tools transport, pinned to commit `2fd55cdc0c6c1067927fefc403a88bfd18c9a971` (source-contract 0.3.0).
 
 Call `POST /api/rpc/google-colab.tools/describe` with `{"input":{}}` to see the exact schemas. For a read, send the call to the same location as an existing session with a selected agent, using `x-opencode-directory` or `location[directory]`:
 
