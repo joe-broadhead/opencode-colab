@@ -12,7 +12,6 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import type { OpenCodeClient } from "@opencode/client"
 import { Plugin } from "@opencode/plugin"
 import { PLUGIN_ID } from "../../src/constants.js"
-import { simulateTaggedRelease } from "../../src/release.js"
 import { ColabRpc, type Status } from "../../src/rpc.js"
 import { routeFetch } from "./route-fetch.js"
 
@@ -21,8 +20,6 @@ const SDK = join(SDK_OVERRIDE ? realpathSync(SDK_OVERRIDE) : REPO, "node_modules
 const manifest = JSON.parse(readFileSync(join(SDK, "package.json"), "utf8")) as { version: string; exports: { ".": { import: string } } }
 /** The OpenCode release under test: the version of the SDK that runs the host. */
 export const SDK_VERSION = manifest.version
-
-if (!existsSync(join(REPO, "dist", "index.js"))) throw new Error("dist/ is missing. Run npm run build first.")
 
 export type Rule = { action: string; resource: string; effect: "allow" | "ask" | "deny" }
 
@@ -55,20 +52,21 @@ export interface HostInput {
   readonly config?: () => Record<string, unknown>
   /** The version the host reports to plugins; defaults to the SDK's. */
   readonly version?: string
+  /** A fixture package built in the test temp root, never the shipped artifact. */
+  readonly fixture?: string
 }
 
 let hosts = 0
 
 export async function startHost(input: HostInput = {}) {
-  // This harness loads the package as a local path, which is not a tagged release. Simulate one so the existing
-  // handlers still run. Production does not set this.
-  simulateTaggedRelease(true)
+  const pluginPackage = input.fixture ?? REPO
+  if (!existsSync(join(pluginPackage, "dist", "index.js"))) throw new Error("The requested plugin bundle is missing. Run npm run build first.")
   const base = join(ROOT, `host-${++hosts}`)
   const work = join(base, "work")
   mkdirSync(work, { recursive: true })
   const blockedBefore = router.blocked.length
   const config = {
-    plugins: [{ package: REPO, options: input.options ?? {} }],
+    plugins: [{ package: pluginPackage, options: input.options ?? {} }],
     // Keep the built-in local providers from probing their default ports.
     providers: { lmstudio: { settings: { baseURL: "" } }, ollama: { settings: { baseURL: "" } }, vllm: { settings: { baseURL: "" } } },
     ...input.config?.(),

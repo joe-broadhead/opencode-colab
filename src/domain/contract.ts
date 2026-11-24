@@ -9,7 +9,9 @@
  * `trust: "untrusted"`. Read tools write only new files inside `workDir`, never over an existing path.
  */
 import * as z from "zod"
-import { ERROR_CODES, WARNING_CODES } from "./errors.js"
+import { ERROR_CODES } from "./errors.js"
+import { CellSelector, CellView, EditOp, Hash, result } from "./notebook-contract.js"
+export { CellSelector, CellView, EditOp, Failure, Hash, OutputPreview, Warning } from "./notebook-contract.js"
 import { PLAN_ACTION_NAMES } from "./actions.js"
 
 // ── Shared pieces ───────────────────────────────────────────────────────
@@ -26,44 +28,12 @@ export const LocalPath = z.string().min(1).max(4096)
 export const RuntimePath = z.string().min(1).max(4096).regex(/^\//, "use an absolute path on the runtime, such as /content/data.csv")
 export const DriveFileId = z.string().min(1).max(256)
 export const GcsUri = z.string().regex(/^gs:\/\/[^/]+(?:\/.*)?$/, "use gs://bucket/path")
-/** A sha256 of the file the agent read, as colab_notebook returns it. */
-export const Hash = z.string().regex(/^sha256:[0-9a-f]{64}$/, "use the hash colab_notebook returned")
-
-export const Warning = z.enum(WARNING_CODES as [string, ...string[]])
-const Trust = z.literal("untrusted")
-
-/** A refusal or failure: the code, what happened, and one concrete next step. */
-export const Failure = z.object({
-  state: z.enum(["refused", "failed"]),
-  error: z.enum(ERROR_CODES as [string, ...string[]]),
-  message: z.string(),
-  next: z.string(),
-  reason: z.string().optional(),
-  retryAfterSec: z.number().nonnegative().optional(),
-  warnings: z.array(Warning).optional(),
-})
-export type Failure = z.output<typeof Failure>
-
-const common = { warnings: z.array(Warning).optional(), trust: Trust.optional(), next: z.string().optional(), message: z.string().optional() }
-
-/** A tool's result: its success shape, or a Failure. */
-function result<S extends z.ZodRawShape>(shape: S, states: readonly [string, ...string[]] = ["ok"]) {
-  return z.union([z.object({ state: z.enum(states), ...common, ...shape }), Failure])
-}
-
 /** A notebook: the working copy, a Drive file (pulled first by colab_download), a GCS object, or a run's output. */
 export const NotebookRef = z.union([
   z.object({ path: LocalPath }).strict(),
   z.object({ drive: DriveFileId }).strict(),
   z.object({ gcs: GcsUri }).strict(),
   z.object({ run: RunId }).strict(),
-])
-
-/** Cells by nbformat id, index, or a range; ids missing in v4.0–4.4 are derived in memory and never written by reads. */
-export const CellSelector = z.union([
-  z.literal("all"),
-  z.array(z.union([z.string().min(1), z.number().int().nonnegative()])).min(1).max(500),
-  z.object({ from: z.union([z.string(), z.number().int().nonnegative()]), to: z.union([z.string(), z.number().int().nonnegative()]) }).strict(),
 ])
 
 export const RuntimeSpecKey = z.object({
@@ -88,17 +58,6 @@ export const RuntimeView = z.object({
   usdPerHour: z.number().optional(),
   idleShutdownMinutes: z.number().nullable().optional(),
   euc: z.boolean().optional(),
-})
-
-export const OutputPreview = z.object({ type: z.string(), mime: z.string().optional(), bytes: z.number().int().nonnegative(), preview: z.string().max(300).optional() })
-export const CellView = z.object({
-  id: z.string(),
-  index: z.number().int().nonnegative(),
-  type: z.enum(["code", "markdown", "raw"]),
-  /** ≤ 2,000 characters, marked, secret-screened. */
-  source: z.string(),
-  outputs: z.array(OutputPreview),
-  executionCount: z.number().int().nullable(),
 })
 
 export const RichOutput = z.object({ mime: z.string(), path: z.string(), bytes: z.number().int().nonnegative(), width: z.number().optional(), height: z.number().optional() })
@@ -287,17 +246,6 @@ export const RuntimesReadOutput = z.record(z.string(), z.unknown())
 
 // ── Change tools ────────────────────────────────────────────────────────
 
-const NewCell = z.object({ type: z.enum(["code", "markdown", "raw"]), source: z.string().max(200_000), metadata: z.record(z.string(), z.unknown()).optional() }).strict()
-const CellRef = z.union([z.string().min(1), z.number().int().nonnegative()])
-export const EditOp = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("create"), cells: z.array(NewCell).max(500).optional(), kernel: z.string().max(64).optional() }).strict(),
-  z.object({ op: z.literal("insert"), at: z.union([z.number().int().nonnegative(), z.object({ after: CellRef }).strict(), z.object({ before: CellRef }).strict()]), cell: NewCell }).strict(),
-  z.object({ op: z.literal("replace"), cell: CellRef, source: z.string().max(200_000) }).strict(),
-  z.object({ op: z.literal("delete"), cell: CellRef }).strict(),
-  z.object({ op: z.literal("move"), cell: CellRef, to: z.number().int().nonnegative() }).strict(),
-  z.object({ op: z.literal("clearOutputs"), cells: CellSelector.optional() }).strict(),
-  z.object({ op: z.literal("setMetadata"), cell: CellRef.optional(), metadata: z.record(z.string(), z.unknown()) }).strict(),
-])
 export const EditInput = z
   .object({ account: Account, path: LocalPath, ifHash: Hash.optional(), ops: z.array(EditOp).min(1).max(200) })
   .strict()

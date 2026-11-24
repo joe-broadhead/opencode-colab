@@ -11,7 +11,7 @@ import { METHOD_NAMES } from "../../src/tools-rpc.js"
 import { TOOLS } from "../../src/domain/actions.js"
 import { PACKAGE } from "../../src/sources/index.js"
 import { consumerRun, drain, HOME, LAB, sourcesHarness } from "../fakes/sources-harness.js"
-import { PACKAGE_NAME, shippedSources, v01RefusedKeys } from "../fakes/sources-descriptor.js"
+import { PACKAGE_NAME, latentSources, v01RefusedKeys } from "../fakes/sources-descriptor.js"
 
 const tools = METHOD_NAMES.map((id) => ({ id, readOnly: id === "probe" || TOOLS.find((tool) => tool.name === id)?.class === "read" }))
 
@@ -41,11 +41,11 @@ describe("keys a v0.1.x consumer refuses", () => {
   })
 
   it("package.json holds none", () => {
-    expect(v01RefusedKeys(shippedSources())).toEqual([])
+    expect(v01RefusedKeys(latentSources())).toEqual([])
   })
 
   it("package.json names each source by its input, and validates as a consumer reads it", () => {
-    const shipped = shippedSources()
+    const shipped = latentSources()
     expect((shipped["items"] as { id: string; input?: unknown }[]).map((item) => [item.id, item.input])).toEqual([
       ["colab.runs", { source: "runs" }],
       ["colab.runtimes", { source: "runtimes" }],
@@ -72,7 +72,7 @@ describe("keys a v0.1.x consumer refuses", () => {
 describe("the declaration and the code agree", () => {
   it("names the package, and each source's maxBytes as the code caps it", () => {
     expect(PACKAGE).toBe(PACKAGE_NAME)
-    const items = shippedSources()["items"] as { id: string; maxBytes: number }[]
+    const items = latentSources()["items"] as { id: string; maxBytes: number }[]
     expect(items.map((item) => [item.id, item.maxBytes])).toEqual([
       ["colab.runs", RUNS_MAX_BYTES],
       ["colab.runtimes", RUNTIMES_MAX_BYTES],

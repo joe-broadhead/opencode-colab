@@ -3,7 +3,7 @@
 ## Setup
 
 - Node.js 22.12 or later, with npm. CI uses Node.js 24.
-- Bun 1.4 (CI uses 1.4.4). The conformance, host and pack tests run with `bun test`.
+- Bun 1.4 (CI uses 1.4.4). The host and pack tests run with `bun test`.
 - macOS or Linux.
 
 ```sh
@@ -16,6 +16,8 @@ npm run check
 No dependency needs install scripts, and OpenCode installs plugins without them, so always pass `--ignore-scripts`.
 
 ### Run your checkout in OpenCode
+
+The shipped entry is editing-only. Provider modules remain latent and are tested with synthetic fixtures.
 
 Build it, then add the clone's path to `plugins` in your OpenCode config instead of the release install:
 
@@ -36,11 +38,11 @@ One command, `scripts/check.mjs`, runs every stage in order and stops at the fir
 | --- | --- |
 | `typecheck` | `tsc` over `src/` and the tests. |
 | `unit` | Vitest over `test/unit/`. |
-| `conformance` | The `sources` declaration against the source contract's `assertDeclaration`, under Bun; package G adds the kit run. |
 | `kit` | The release kit's own tests. |
 | `build` | esbuild bundles `dist/index.js` and `dist/tui.js`, and checks `NOTICE`. |
 | `icons` | The family icon contract. |
 | `host` | The built plugin in an embedded OpenCode host, once per tested release, with every request off loopback blocked. |
+| `latent` | Synthetic full-plugin host boundary checks on the SDK floor and in-memory conformance of a fixture descriptor. No collector, shipped source declaration, or release report. |
 | `pack` | Packs, installs with scripts disabled and imports both entries. |
 | `forbidden` | The forbidden APIs and private names. |
 | `copies` | The shared kit files against their pinned hashes. |

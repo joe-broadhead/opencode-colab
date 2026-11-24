@@ -19,6 +19,6 @@ export function hostEditRequests(target: WorkspaceTarget): HostAssertRequest[] {
 }
 
 /** Asserts each request, in order; the first denial stops the call. */
-export async function assertHostEdits(ctx: HandlerContext, target: WorkspaceTarget): Promise<void> {
+export async function assertHostEdits(ctx: Pick<HandlerContext, "hostAssert">, target: WorkspaceTarget): Promise<void> {
   for (const request of hostEditRequests(target)) await ctx.hostAssert(request)
 }

@@ -1,9 +1,10 @@
 # Repository rules
 
-This repository builds `@joe-broadhead/opencode-colab`, an unofficial OpenCode plugin that edits Jupyter notebooks,
-runs them on Google Colab runtimes it creates or as Colab Enterprise jobs, and brings the outputs back as files. User
-docs: `README.md`, `docs/configuration.md`, `docs/errors.md`; contributor docs: `docs/v1-design.md` (the Day 0
-contract and the **file ownership table**), `docs/architecture.md`, `CONTRIBUTING.md`.
+This repository builds `@joe-broadhead/opencode-colab`, an unofficial OpenCode plugin for local notebook editing.
+The shipped entry `src/editing/` must not import provider implementations. Full runtime, Enterprise and source code
+is latent and covered by synthetic unit tests. User docs: `README.md`, `docs/configuration.md`, `docs/errors.md`;
+contributor docs: `docs/v1-design.md` (the Day 0 contract and the **file ownership table**), `docs/architecture.md`,
+`CONTRIBUTING.md`.
 
 ## Platform
 
@@ -13,7 +14,7 @@ contract and the **file ownership table**), `docs/architecture.md`, `CONTRIBUTIN
 - Test against stock OpenCode 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.1 and 2.3.2. `TESTED_HOSTS` in `src/constants.ts` is the
   one list.
 - Keep the plugin ids `google-colab` (server and status RPC), `google-colab.tools` (tools RPC) and `google-colab.tui`
-  (TUI), the namespace `colab` (tools `colab_<tool>`, actions `colab.<tool>`) and the integrations `colab-<alias>`.
+  (TUI), the namespace `colab` (tools `colab_<tool>`, actions `colab.<tool>`).
 
 ## Forbidden
 
@@ -32,7 +33,7 @@ contract's tools RPC).
 - Packages reach each other only through `src/ports.ts` and `Deps` (`src/deps.ts`), never by importing another
   package's module. Every port has a fake in `test/fakes/`.
 
-## Colab
+## Latent full plugin
 
 - **Agent-only runtimes.** Code runs, files list and files move only on runtimes the plugin created (ledger record),
   never on one the person or another client uses. The guarantee is worded in three parts (guaranteed / best effort /
@@ -47,10 +48,12 @@ contract's tools RPC).
 
 ## Design
 
-- Permission defaults go through `ctx.agent.transform`, right after each agent's base `* * allow`. No permission hook
-  decides them. User rules and saved approvals keep winning.
-- Every tool asserts its own action `colab.<tool>` once, before any network call, in `src/tools/spec.ts`; provider
-  reads add `colab.read`. Asserted equals declared: `test/unit/jelly.test.ts` and `test/unit/registry.test.ts`.
+- Permission defaults go through `ctx.agent.transform`, right after the base `* * allow` when present. On hosts that
+  omit transformed rules for a custom agent, restricted edits fail closed without a scoped rule. Explicit Colab
+  rules and host approvals still apply; no permission hook supplies editing defaults.
+- Every shipped tool asserts its own `colab.<tool>` once in `src/editing/tools.ts`; file reads and edits also use the
+  host's file permissions. The latent wrapper in `src/tools/spec.ts` adds `colab.read` only for provider reads.
+  Asserted equals declared: `test/unit/editing.test.ts`, `test/unit/jelly.test.ts` and `test/unit/registry.test.ts`.
 - Transforms are synchronous and never throw.
 - The plugin's own errors are `ColabError(code, message, extras)`, from the one table in `src/domain/errors.ts`.
 - `dist/` holds exactly two self-contained bundles, `index.js` and `tui.js`.

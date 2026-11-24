@@ -1,18 +1,18 @@
 /**
- * The `sources` declaration as package.json ships it, and the keys a source-contract v0.1.x consumer refuses.
+ * The fixture for the latent full build’s `sources` declaration, and the keys a source-contract v0.1.x consumer refuses.
  * test/unit/sources-declaration.test.ts fails when one of those keys appears in the declaration, a page or a probe.
  */
 import { readFileSync } from "node:fs"
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
-const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { name: string; version: string; sources: { [key: string]: Json } }
+const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { name: string; version: string }
 
 export const PACKAGE_NAME = pkg.name
 export const PACKAGE_VERSION = pkg.version
 
-/** package.json `sources`, as shipped. */
-export const shippedSources = (): { [key: string]: Json } => structuredClone(pkg.sources)
+/** The latent declaration, not part of the shipped package. */
+export const latentSources = (): { [key: string]: Json } => JSON.parse(readFileSync(new URL("../fixtures/latent-sources.json", import.meta.url), "utf8"))
 
 /**
  * Every place in a `sources` block that a v0.1.x consumer refuses (source-contract v0.2.0 CHANGELOG: keys "a plugin

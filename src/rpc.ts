@@ -25,6 +25,7 @@ export type CostRow = {
 
 export type Status = {
   readonly version: string
+  readonly surface: "editing" | "full"
   readonly access: Access
   readonly accounts: readonly AccountRow[]
   /** How many tools are registered. */
@@ -62,6 +63,7 @@ const cost = object(
 export const STATUS_SCHEMA = object(
   {
     version: text,
+    surface: { enum: ["editing", "full"] },
     access: { enum: ACCESS_VALUES },
     accounts: { type: "array", items: account },
     tools: object({ registered: count }, ["registered"]),
@@ -75,7 +77,7 @@ export const STATUS_SCHEMA = object(
     automation: { enum: AUTOMATION_STATES },
     nextStep: text,
   },
-  ["version", "access", "accounts", "tools", "unguardedAgents", "host", "cost", "automation", "nextStep"],
+  ["version", "surface", "access", "accounts", "tools", "unguardedAgents", "host", "cost", "automation", "nextStep"],
 )
 
 export const ColabRpc = Rpc.define({
@@ -111,6 +113,7 @@ export function isStatus(value: unknown): value is Status {
   const { tools, host } = value
   return (
     isText(value.version) &&
+    (value.surface === "editing" || value.surface === "full") &&
     ACCESS_VALUES.includes(value.access as never) &&
     Array.isArray(value.accounts) && value.accounts.every(isAccount) &&
     isRecord(tools) && only(tools, ["registered"]) && isCount(tools.registered) &&
@@ -163,12 +166,14 @@ export function costText(cost: CostRow): string {
 
 /** The status as labelled rows, in the order the dialog and /colab-status show them. */
 export function statusRows(status: Status): StatusRow[] {
+  const editing = status.surface === "editing"
   return [
-    { label: "Accounts", value: status.accounts.map((item) => `${item.alias} (${item.backend})`).join(", ") },
-    { label: "Access", value: ACCESS_TEXT[status.access] },
+    { label: "Build", value: editing ? "Editing only (no runtime or Google request)" : "Full" },
+    { label: "Accounts", value: editing ? "none (editing only)" : status.accounts.map((item) => `${item.alias} (${item.backend})`).join(", ") },
+    { label: "Access", value: editing ? EDITING_ACCESS_TEXT[status.access] : ACCESS_TEXT[status.access] },
     { label: "Tools", value: `${status.tools.registered} registered` },
     { label: "Agents without default rules", value: status.unguardedAgents.length > 0 ? status.unguardedAgents.join(", ") : "none" },
-    { label: "Cost", value: costText(status.cost) },
+    { label: "Cost", value: editing ? "none (editing only)" : costText(status.cost) },
     { label: "Automation", value: automationText(status.automation) },
     ...(status.cost.attention?.length ? [{ label: "Attention", value: status.cost.attention.join(" ") }] : []),
     ...(status.shadowedSkills?.length ? [{ label: "Skills", value: status.shadowedSkills.map((skill) => `${skill.id} replaced by ${skill.path}`).join("; ") }] : []),
@@ -176,6 +181,12 @@ export function statusRows(status: Status): StatusRow[] {
     { label: "OpenCode", value: describeHost(status) },
     { label: "Next step", value: status.nextStep },
   ]
+}
+
+const EDITING_ACCESS_TEXT: Record<Access, string> = {
+  all: "local reads and edits allowed; host file permissions still apply",
+  "ask-changes": "local reads allowed; edits ask first",
+  "read-only": "local reads allowed; edits denied by default",
 }
 
 export function formatStatus(status: Status): string {

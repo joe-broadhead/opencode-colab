@@ -1,3 +1,3 @@
-import { createColabPlugin } from "./plugin.js"
+import { createEditingPlugin } from "./editing/plugin.js"
 
-export default createColabPlugin()
+export default createEditingPlugin()
