@@ -90,8 +90,8 @@ it("the editing permission bridge only forwards local tool and host-file actions
   expect(host.mock.calls.map(([entry]) => entry.action)).toEqual(["colab.find", "colab.notebook", "colab.edit", "edit", "read", "external_directory"])
 })
 it("accepts only local options; provider options name the refused field", () => {
-  const local = loadEditingOptions({ access: "ask-changes", maxInlineBytes: "1MiB", maxDownloadBytes: 400, allowedRoots: ["data"], workDir: ".local", ledgerDays: 2, allowUntestedHost: true })
-  expect(local).toEqual({ access: "ask-changes", maxInlineBytes: 1024 ** 2, maxDownloadBytes: 400, allowedRoots: ["data"], workDir: ".local", ledgerDays: 2, allowUntestedHost: true })
+  const local = loadEditingOptions({ access: "ask-changes", maxInlineBytes: "1MiB", maxDownloadBytes: 400, allowedRoots: ["data"], allowUntestedHost: true })
+  expect(local).toEqual({ access: "ask-changes", maxInlineBytes: 1024 ** 2, maxDownloadBytes: 400, allowedRoots: ["data"], allowUntestedHost: true })
   const keys = new Set([...Object.keys(loadOptions({})), "oauthClient", "redirectUri", "callbackPort", "rates", "acess"])
   for (const key of [...keys].filter((key) => !Object.hasOwn(local, key))) {
     expect(() => loadEditingOptions({ [key]: true })).toThrow(new RegExp(`OPTIONS_INVALID:.*${key}.*Remove`))
