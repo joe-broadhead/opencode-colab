@@ -3,9 +3,8 @@
 // this package (its built dist/) with options. A probe plugin lends its context to the tests. Every request off the
 // machine is blocked and fails the host's close().
 //
-// Host version: the SDK in devDependencies (2.4.1). HOST_SDK_DIR names a directory whose node_modules holds another
-// @opencode/sdk (scripts/check.mjs installs each tested release outside the lockfile); the host then runs that SDK.
-import { ROOT, SDK_OVERRIDE } from "./isolate.js"
+// Host version: the SDK in devDependencies (2.4.1), the only tested release.
+import { ROOT } from "./isolate.js"
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -16,7 +15,7 @@ import { ColabRpc, type Status } from "../../src/rpc.js"
 import { routeFetch } from "./route-fetch.js"
 
 const REPO = realpathSync(fileURLToPath(new URL("../../", import.meta.url)))
-const SDK = join(SDK_OVERRIDE ? realpathSync(SDK_OVERRIDE) : REPO, "node_modules", "@opencode", "sdk")
+const SDK = join(REPO, "node_modules", "@opencode", "sdk")
 const manifest = JSON.parse(readFileSync(join(SDK, "package.json"), "utf8")) as { version: string; exports: { ".": { import: string } } }
 /** The OpenCode release under test: the version of the SDK that runs the host. */
 export const SDK_VERSION = manifest.version
