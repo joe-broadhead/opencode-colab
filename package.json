@@ -2,7 +2,7 @@
   "name": "@joe-broadhead/opencode-colab",
   "version": "0.0.1",
   "private": true,
-  "description": "Unofficial OpenCode plugin for Google Colab and Colab Enterprise",
+  "description": "Unofficial OpenCode plugin for editing local Jupyter notebooks",
   "keywords": [
     "opencode",
     "opencode-plugin",
@@ -47,9 +47,9 @@
     "typecheck": "node scripts/check.mjs typecheck",
     "build": "node scripts/check.mjs build",
     "test": "node scripts/check.mjs unit",
-    "conformance": "node scripts/check.mjs conformance",
     "test:kit": "node scripts/check.mjs kit",
     "test:host": "node scripts/check.mjs host",
+    "test:latent": "node scripts/check.mjs latent",
     "test:pack": "node scripts/check.mjs pack",
     "lint": "node scripts/check-forbidden.mjs --self-test && node scripts/check.mjs forbidden copies",
     "icons": "node scripts/check.mjs icons",
@@ -106,29 +106,11 @@
   },
   "jelly": {
     "title": "Colab",
-    "summary": "Edit notebooks, run them on Colab CPUs, GPUs and TPUs, and bring the results back.",
+    "summary": "Find, read and edit local Jupyter notebooks without a Google account.",
     "icon": "assets/icon.svg",
-    "cost": "Colab spends your compute units (free tier without them); Colab Enterprise bills your Cloud project, about $0.20-$5/hour. Enterprise jobs have a compute cost cap and a 1-hour limit. At Allowed, idle runtimes it started are released after 20 min and their files outside /content/outputs are deleted.",
-    "admin": "allow this OAuth client if your organisation restricts Google sign-ins, and for Colab Enterprise grant you Colab Enterprise User and Service Account User on a billed project",
+    "cost": "No Colab compute: the plugin edits local files and makes no Google requests.",
+    "admin": "No sign-in, OAuth client or Cloud project is needed.",
     "tools": [
-      {
-        "name": "colab.status",
-        "permission": "colab.status",
-        "effect": "allow",
-        "readOnly": true
-      },
-      {
-        "name": "colab.specs",
-        "permission": "colab.specs",
-        "effect": "allow",
-        "readOnly": true
-      },
-      {
-        "name": "colab.runtimes",
-        "permission": "colab.runtimes",
-        "effect": "allow",
-        "readOnly": true
-      },
       {
         "name": "colab.find",
         "permission": "colab.find",
@@ -142,156 +124,15 @@
         "readOnly": true
       },
       {
-        "name": "colab.files",
-        "permission": "colab.files",
-        "effect": "allow",
-        "readOnly": true
-      },
-      {
-        "name": "colab.execution",
-        "permission": "colab.execution",
-        "effect": "allow",
-        "readOnly": true
-      },
-      {
-        "name": "colab.jobs",
-        "permission": "colab.jobs",
-        "effect": "allow",
-        "readOnly": true
-      },
-      {
-        "name": "colab.schedules",
-        "permission": "colab.schedules",
-        "effect": "allow",
-        "readOnly": true
-      },
-      {
-        "name": "colab.plan",
-        "permission": "colab.plan",
-        "effect": "allow",
-        "readOnly": true
-      },
-      {
-        "name": "colab.events_list",
-        "permission": "colab.events_list",
-        "effect": "allow",
-        "readOnly": true
-      },
-      {
-        "name": "colab.runtimes_read",
-        "permission": "colab.runtimes_read",
-        "effect": "allow",
-        "readOnly": true
-      },
-      {
-        "name": "colab.read",
-        "permission": "colab.read",
-        "effect": "allow",
-        "readOnly": true,
-        "note": "The provider reads every read tool makes"
-      },
-      {
-        "name": "colab.probe",
-        "permission": "colab.probe",
-        "effect": "allow",
-        "readOnly": true,
-        "note": "Names the signed-in account for sources; reads no content"
-      },
-      {
         "name": "colab.edit",
         "permission": "colab.edit",
         "effect": "allow",
         "readOnly": false
-      },
-      {
-        "name": "colab.run",
-        "permission": "colab.run",
-        "effect": "allow",
-        "readOnly": false,
-        "note": "Runs code only on runtimes it created; refuses any where it sees your credentials or another client (best effort)"
-      },
-      {
-        "name": "colab.cancel",
-        "permission": "colab.cancel",
-        "effect": "allow",
-        "readOnly": false
-      },
-      {
-        "name": "colab.upload",
-        "permission": "colab.upload",
-        "effect": "allow",
-        "readOnly": false
-      },
-      {
-        "name": "colab.download",
-        "permission": "colab.download",
-        "effect": "allow",
-        "readOnly": false
-      },
-      {
-        "name": "colab.pause",
-        "permission": "colab.pause",
-        "effect": "allow",
-        "readOnly": false
-      },
-      {
-        "name": "colab.write",
-        "permission": "colab.write",
-        "effect": "allow",
-        "readOnly": false
-      },
-      {
-        "name": "colab.delete",
-        "permission": "colab.delete",
-        "effect": "allow",
-        "readOnly": false,
-        "note": "Releases runtimes (files and memory lost) and deletes jobs and schedules"
       }
     ],
     "skills": [
       "opencode-colab",
       "opencode-colab-notebooks"
-    ],
-    "signIns": [
-      {
-        "id": "google-colab",
-        "label": "Google (Colab)",
-        "integration": "colab-*",
-        "scopes": [
-          "https://www.googleapis.com/auth/cloud-platform",
-          "https://www.googleapis.com/auth/colaboratory",
-          "https://www.googleapis.com/auth/colaboratory.readonly",
-          "https://www.googleapis.com/auth/drive.file",
-          "https://www.googleapis.com/auth/userinfo.email",
-          "openid"
-        ],
-        "relay": {
-          "redirectField": "redirectUri",
-          "portField": "callbackPort"
-        },
-        "account": {
-          "option": "accounts",
-          "label": "Account name",
-          "placeholder": "personal",
-          "value": {
-            "mode": "interactive",
-            "backend": "colab"
-          },
-          "description": "A short name for this Google account. Choose Colab (your own Colab and compute units) or Colab Enterprise (a Google Cloud project) when you sign in."
-        },
-        "hostClient": {
-          "id": "google",
-          "field": "clientJson",
-          "replaces": [
-            "clientId",
-            "clientSecret"
-          ]
-        },
-        "needed": [
-          "AUTH_REQUIRED",
-          "AUTH_SCOPE_MISSING"
-        ]
-      }
     ],
     "contributes": {
       "settings": [
@@ -299,7 +140,7 @@
           "key": "access",
           "label": "Access",
           "type": "string",
-          "description": "How much the plugin's tools may do. Generates default rules for agents with a base allow; running code, creating runtimes, jobs and schedules, uploads, Drive pushes and deletes are changes.",
+          "description": "How much the plugin’s tools may do. Generates default rules for agents with a base allow; editing a local notebook is a change.",
           "choices": [
             {
               "value": "all",
@@ -321,67 +162,5 @@
         }
       ]
     }
-  },
-  "sources": {
-    "contractVersion": 1,
-    "rpc": "google-colab.tools",
-    "probe": {
-      "action": "colab.probe"
-    },
-    "items": [
-      {
-        "id": "colab.runs",
-        "kind": "events",
-        "reads": "x-colab/run",
-        "tool": "events_list",
-        "input": {
-          "source": "runs"
-        },
-        "accounts": {
-          "named": true
-        },
-        "permission": {
-          "events": "colab.events_list",
-          "operations": [
-            "colab.ledger.list"
-          ]
-        },
-        "private": true,
-        "cost": {
-          "class": "free"
-        },
-        "maxBytes": 131072,
-        "retentionDays": 90
-      },
-      {
-        "id": "colab.runtimes",
-        "kind": "snapshot",
-        "tool": "runtimes_read",
-        "input": {
-          "source": "runtimes"
-        },
-        "output": "list",
-        "accounts": {
-          "named": true
-        },
-        "permission": {
-          "tool": "colab.runtimes_read",
-          "operations": [
-            "colaboratory.runtimes.list",
-            "aiplatform.projects.locations.notebookRuntimes.list"
-          ]
-        },
-        "private": true,
-        "cost": {
-          "class": "free"
-        },
-        "maxAgeSec": 60,
-        "maxBytes": 32768,
-        "urlHosts": [
-          "colab.research.google.com",
-          "console.cloud.google.com"
-        ]
-      }
-    ]
   }
 }

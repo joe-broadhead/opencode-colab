@@ -4,6 +4,8 @@ Generated from `src/domain/errors.ts` by `node scripts/errors-doc.mjs`; a unit t
 message reads `CODE: What happened. Next step: What to do.` A tool result that fails carries `state`, `error` (the
 code), `message` and `next`.
 
+The editing-only build does not return provider, run or source errors. The table retains those codes for the latent full plugin.
+
 ## Errors
 
 | Code | state | Meaning | Next step |
@@ -17,6 +19,8 @@ code), `message` and `next`.
 | `ACCOUNT_REQUIRED` | refused | More than one account is configured, none is named default, and the call named none. | Pass account with one of the aliases colab_status lists. |
 | `NOT_IMPLEMENTED` | refused | This tool or plan action is declared but not built in this pre-release. | Use another tool, or wait for a release that builds it. |
 | `NOT_RELEASED` | refused | This install is not a tagged release, so the tool did not call Google. | Install a tagged release when one exists. A source checkout does not call Google. |
+| `EXECUTION_UNAVAILABLE` | refused | This build edits local notebooks only. | Use colab_find, colab_notebook or colab_edit with local input. |
+| `EDIT_UNAVAILABLE` | refused | This location cannot safely perform the requested notebook write. | Use an existing folder on a supported local Linux filesystem, or edit the notebook in your notebook editor. |
 | `RULES_NOT_ADDED` | failed | The plugin's default permission rules could not be added, so Colab tools may run without asking. | Restart OpenCode. |
 | `TOOLS_NOT_REGISTERED` | failed | The Colab tools could not be registered. | Restart OpenCode. |
 | `STATUS_UNAVAILABLE` | failed | Colab status is unavailable right now. | Try again in a few seconds; if it persists, restart OpenCode. |
@@ -59,8 +63,8 @@ code), `message` and `next`.
 | `NOTEBOOK_CHANGED` | refused | The file differs from ifHash, or changed during a run (the outputs are kept under .colab/runs). | Read it again with colab_notebook, then edit. |
 | `LOCAL_CHANGED` | refused | A pull would overwrite local edits that were not pushed. | Push first, or pull to another path. |
 | `PATH_REFUSED` | refused | The path is outside the project and the allowed roots, or is a symlink. | Use a path inside the project. |
-| `FILE_EXISTS` | refused | The destination exists and overwrite was not set. | Pass overwrite: true after the person agrees. |
-| `FILE_TOO_LARGE` | refused | The file is over the size cap. | Split it, or raise maxUploadBytes or maxDownloadBytes. |
+| `FILE_EXISTS` | refused | The destination already exists. | Choose a different path, or read the existing notebook and edit it with its current hash. |
+| `FILE_TOO_LARGE` | refused | The file is over the size cap. | Split the notebook or raise maxDownloadBytes for local notebook reads. |
 | `UPLOAD_SECRET_REFUSED` | refused | The file is secret-shaped (an env file, a key, a credential). | Don't upload it; the person may set allowSecretUpload. |
 | `DRIVE_CONFLICT` | refused | Drive's head revision differs from the sync record's base. | Pull to another path, merge, and plan again. |
 | `COST_CAP` | refused | The Enterprise compute estimate is over the cap. | Pick a smaller machine or a shorter timeout, or pass maxUsd up to maxJobUsdCeiling. |

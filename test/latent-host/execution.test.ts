@@ -20,6 +20,7 @@ const context = (sessionID: string, index: number) =>
     messageID: `msg_hostexec_${index}`,
     id: `call_hostexec_${index}`,
     progress: async () => undefined,
+    signal: AbortSignal.timeout(15_000),
   }) as never
 
 const execute = async (host: Awaited<ReturnType<typeof startHost>>, id: string, input: unknown, index: number) => {

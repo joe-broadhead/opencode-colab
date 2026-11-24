@@ -1,71 +1,28 @@
-// Package G's docs say what the code guarantees and no more (design §16): the guarantee's three tiers word for word in
-// docs/safety.md too (test/unit/docs.test.ts pins the README and the skill); every live check named, with L1 as the
-// gate for consumer execution; the plan-then-commit shape in the README; every option documented; and every relative
-// link and anchor resolving.
+// Public editing-build documentation, local configuration and repository links.
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { dirname, join, normalize } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
+import { loadEditingOptions } from "../../src/editing/options.js"
 import { loadOptions } from "../../src/options.js"
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url))
 const read = (file: string) => readFileSync(join(ROOT, file), "utf8")
 
-/** The three tiers' bullets, whitespace collapsed, as test/unit/docs.test.ts reads them. */
-function tiers(file: string): string[] {
-  const text = read(file)
-  const start = text.indexOf("- **Guaranteed:**")
-  if (start === -1) return []
-  return text
-    .slice(start)
-    .split(/\n\n/)[0]!
-    .split(/\n(?=- \*\*)/)
-    .map((bullet) => bullet.replace(/\s+/g, " ").trim())
-}
-
-const LIVE_CHECKS = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L7b", "L7c", "L8", "L8b", "L9", "L10", "L11", "L12", "L13", "L14", "L15", "L16", "L17"]
-
-describe("docs/safety.md", () => {
-  it("carries the guarantee word for word", () => {
-    expect(tiers("docs/safety.md")).toEqual(tiers("docs/v1-design.md"))
-  })
-
-  it("lists every live check in its table, and says L1 decides whether consumer execution ships", () => {
-    const table = read("docs/safety.md").split("## Live checks not yet run")[1]!
-    for (const check of LIVE_CHECKS) expect(table, check).toMatch(new RegExp(`^\\| (\\*\\*)?${check}(\\*\\*)? \\|`, "m"))
-    expect(table).toMatch(/decides whether consumer execution ships enabled/)
-  })
-
-  it("names the sources' limits: retention, this machine's ledger, the detached run, the sweep's write, the synthetic owner, colab.jobs", () => {
-    const limits = read("docs/safety.md").split("## Known limits")[1]!.split("## Live checks")[0]!
-    for (const phrase of ["`ledgerDays` (90)", "another computer", "`detached`", "the only write a source read makes", "`colab:account:<alias>`", "`colab.jobs`", "L13", "L11", "L8b", "L17"]) expect(limits, phrase).toContain(phrase)
-  })
+it("explains L1, the local path and permission rules, and does not advertise full tools", () => {
+  expect(read("README.md")).toMatch(/L1; it is outside this build/)
+  expect(read("docs/safety.md")).toContain("Symbolic links".toLowerCase())
+  expect(read("docs/scripting.md")).toContain("Only the read tools `find` and `notebook`")
+  for (const file of ["README.md", "docs/scripting.md", "docs/safety.md"]) expect(read(file), file).not.toMatch(/colab_(?:run|plan|write|download)\(/)
 })
 
-describe("the README", () => {
-  it("names every live check and the L1 gate", () => {
-    const text = read("README.md")
-    for (const check of LIVE_CHECKS) expect(text, check).toContain(check)
-    expect(text).toMatch(/L1 decides whether running code on consumer Colab ships enabled/)
-  })
-
-  it("shows colab_plan with the action's parameters under params, and the commit with only the planId", () => {
-    const text = read("README.md")
-    expect(text).toMatch(/colab_plan\(\{ "action": "runtime\.create", "params": \{/)
-    expect(text).toMatch(/colab_write\(\{ "planId": "[^"]+" \}\)/)
-  })
-
-  it("says named accounts are read-only until access is write", () => {
-    for (const file of ["README.md", "skills/opencode-colab/SKILL.md", "docs/configuration.md"]) expect(read(file), file).toMatch(/named account[^.]*read-only until/i)
-  })
-})
-
-describe("docs/configuration.md", () => {
-  it("documents every option the plugin takes", () => {
-    const text = read("docs/configuration.md")
-    const keys = Object.keys(loadOptions({})).concat(["oauthClient", "redirectUri", "callbackPort", "rates"])
-    for (const key of keys) expect(text, key).toContain(`\`${key}\``)
-  })
+it("documents all accepted local options and the refusal of every latent provider option", () => {
+  const text = read("docs/configuration.md")
+  const local = Object.keys(loadEditingOptions({}))
+  for (const key of local) expect(text, key).toContain(`\`${key}\``)
+  const refused = [...Object.keys(loadOptions({})), "oauthClient", "redirectUri", "callbackPort", "rates"].filter((key) => !local.includes(key))
+  for (const key of refused) expect(text, key).toContain(`\`${key}\``)
+  expect(text).toContain("OPTIONS_INVALID")
 })
 
 /** GitHub's heading anchor: lowercase, punctuation dropped, spaces to hyphens. */

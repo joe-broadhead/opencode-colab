@@ -1,22 +1,13 @@
-/**
- * The `jelly` section of package.json, which Jelly reads without loading the plugin. The shared kit checks it against
- * Jelly's plugin authors' standard; the tests below add what only Colab declares:
- *
- * - asserted equals declared: every action a tool asserts is declared, and every declared action is asserted;
- * - `colab.read` and `colab.probe` are permission-only, read-only entries;
- * - a port of Jelly's `accessRules` gives every action the plugin can assert a rule at each access level, and reads
- *   never ask or deny;
- * - with an export of Jelly's contracts at hand (`JELLY_CONTRACTS`, the `protocol/contracts/src` folder of a
- *   `git archive` of Jelly's default branch, inside this repository's `.source-jelly/` so zod resolves), the
- *   declaration also passes Jelly's own `PluginDeclarationSchema`. CI has no export, so that case is skipped there.
- */
+// Shipped declaration checks plus the latent full registry’s asserted-action invariant.
+import { readFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 import { SourceError } from "@we-the-rebel-alliance/source-contract/events"
 import { describe, expect, it } from "vitest"
-import { ASSERTABLE_ACTIONS, CLEANUP_ACTION, DECLARED_ACTIONS, PERMISSION_ONLY, READ_ACTION, TOOLS, actionOf } from "../../src/domain/actions.js"
+import { DECLARED_ACTIONS, READ_ACTION, TOOLS, actionOf } from "../../src/domain/actions.js"
 import type { ToolName } from "../../src/domain/contract.js"
-import { loadOptions } from "../../src/options.js"
-import { defaultRules, effectOf } from "../../src/permissions.js"
+import { loadEditingOptions } from "../../src/editing/options.js"
+import { surfaceRules, SURFACE_DECLARED_ACTIONS, SURFACE_TOOLS } from "../../src/editing/tools.js"
+import { effectOf } from "../../src/permissions.js"
 import { SKILL_IDS } from "../../src/skills.js"
 import { sourceMethods } from "../../src/sources/index.js"
 import { toolHandlers } from "../../src/tools/registry.js"
@@ -27,8 +18,15 @@ import { ACCESS_CHOICES, type PluginSetting, settingsProblems } from "../support
 
 const ROOT = new URL("../../", import.meta.url)
 const manifest = readPackage(ROOT)
-type SignIn = { id: string; label: string; integration: string; scopes: string[]; needed: string[] }
-const jelly = manifest.jelly as Declaration & { tools: DeclaredTool[]; signIns: SignIn[]; contributes: { settings: PluginSetting[] } }
+const jelly = manifest.jelly as Declaration & { tools: DeclaredTool[]; contributes: { settings: PluginSetting[] } }
+
+it("carries the pinned Jelly family block exactly once", () => {
+  const block = /<!-- family-block:start -->[\s\S]*?<!-- family-block:end -->/g
+  const vendored = readFileSync(new URL("scripts/jelly-family-block.md", ROOT), "utf8").match(block)
+  const documented = readFileSync(new URL("docs/jelly.md", ROOT), "utf8").match(block)
+  expect(vendored).toHaveLength(1)
+  expect(documented).toEqual(vendored)
+})
 
 const call = (id: string) => ({ sessionID: "ses_test", agent: "build", messageID: "msg_test", id, signal: new AbortController().signal })
 
@@ -94,27 +92,19 @@ async function assertedActions(): Promise<Map<ToolName, string[]>> {
 
 describe("the jelly declaration", () => {
   it("follows the plugin authors' standard, with the effects the plugin's own default rules give", () => {
-    const problems = declarationProblems(ROOT, { effectOf: effectFromRules(defaultRules()), registered: DECLARED_ACTIONS, actionPermissions: true })
+    const problems = declarationProblems(ROOT, { effectOf: effectFromRules(surfaceRules()), registered: SURFACE_DECLARED_ACTIONS, actionPermissions: true })
     expect(problems).toEqual([])
   })
 
-  it("declares the 20 tools and the two permission-only reads, 22 entries, 14 read-only", () => {
-    expect(jelly.tools.map((tool) => tool.permission).sort()).toEqual([...DECLARED_ACTIONS].sort())
-    expect(jelly.tools).toHaveLength(22)
-    expect(jelly.tools.filter((tool) => tool.readOnly)).toHaveLength(14)
-    for (const tool of TOOLS) {
-      const declared = jelly.tools.find((entry) => entry.permission === actionOf(tool.name))!
-      expect(declared.name, tool.name).toBe(actionOf(tool.name))
-      expect(declared.effect).toBe("allow")
-      expect(declared.readOnly === true, tool.name).toBe(tool.class === "read")
-    }
-    for (const entry of PERMISSION_ONLY) {
-      expect(jelly.tools.find((tool) => tool.permission === entry.action)).toEqual({ name: entry.action, permission: entry.action, effect: "allow", readOnly: true, note: entry.note })
-      expect(TOOLS.some((tool) => actionOf(tool.name) === entry.action), `${entry.action} has no tool of its own`).toBe(false)
-    }
+  it("declares exactly three local tools and no sign-in or sources", () => {
+    expect(jelly.tools).toEqual(SURFACE_TOOLS.map(({ action, codemode }) => ({ name: action, permission: action, effect: "allow", readOnly: codemode })))
+    expect(jelly.tools).toHaveLength(3)
+    expect(jelly.tools.filter((tool) => tool.readOnly)).toHaveLength(2)
+    expect(jelly).not.toHaveProperty("signIns")
+    expect(manifest).not.toHaveProperty("sources")
   })
 
-  it("asserted equals declared: each tool asserts exactly its own action, once, before anything runs", async () => {
+  it("latent registry: each tool asserts exactly its own action, once, before anything runs", async () => {
     const asserted = await assertedActions()
     // Package-neutral: a built tool also asserts colab.read for its provider reads, and OpenCode's own host actions
     // (edit, external_directory, read) through hostAssert; its own action comes first, once.
@@ -131,26 +121,11 @@ describe("the jelly declaration", () => {
     expect(jelly.skills).toEqual([...SKILL_IDS])
   })
 
-  it("declares one Google sign-in with the sorted union of every scope, the host client and the sign-in codes", () => {
-    expect(jelly.signIns).toHaveLength(1)
-    const signIn = jelly.signIns[0]!
-    expect(signIn).toMatchObject({ id: "google-colab", integration: "colab-*", needed: ["AUTH_REQUIRED", "AUTH_SCOPE_MISSING"] })
-    expect(signIn.scopes).toEqual([...new Set(signIn.scopes)].sort())
-    expect(signIn.scopes).toEqual([
-      "https://www.googleapis.com/auth/cloud-platform",
-      "https://www.googleapis.com/auth/colaboratory",
-      "https://www.googleapis.com/auth/colaboratory.readonly",
-      "https://www.googleapis.com/auth/drive.file",
-      "https://www.googleapis.com/auth/userinfo.email",
-      "openid",
-    ])
-  })
-
   it("states the cost and the admin step within Jelly's limits", () => {
     expect(lineProblems("cost", jelly.cost, 300)).toEqual([])
     expect(lineProblems("admin", jelly.admin, 200)).toEqual([])
-    expect(jelly.cost).toMatch(/released after 20 min/)
-    expect(jelly.cost).toMatch(/compute cost cap/)
+    expect(jelly.cost).toMatch(/no Google requests/)
+    expect(jelly.admin).toMatch(/No sign-in/)
   })
 
   it("declares access with Jelly's own words and the parser's default", () => {
@@ -158,7 +133,7 @@ describe("the jelly declaration", () => {
     expect(settingsProblems(settings)).toEqual([])
     expect(settings.map((setting) => setting.key)).toEqual(["access"])
     expect(settings[0]!.choices).toEqual(ACCESS_CHOICES)
-    expect(settings[0]!.default).toBe(loadOptions({}).access)
+    expect(settings[0]!.default).toBe(loadEditingOptions({}).access)
   })
 })
 
@@ -187,25 +162,23 @@ function jellyEffect(access: string, action: string): string {
 }
 
 describe("Jelly's access rules, simulated over every action the plugin can assert", () => {
-  const reads = new Set([...TOOLS.filter((tool) => tool.class === "read").map((tool) => actionOf(tool.name)), ...PERMISSION_ONLY.map((entry) => entry.action)])
+  const reads = new Set<string>(SURFACE_TOOLS.filter((tool) => tool.codemode).map((tool) => tool.action))
   const expected: Record<string, { read: string; change: string }> = {
     all: { read: "allow", change: "allow" },
     "ask-changes": { read: "allow", change: "ask" },
     "read-only": { read: "allow", change: "deny" },
   }
   for (const access of ["all", "ask-changes", "read-only"] as const) {
-    it(`at ${access}: reads (colab.read and colab.probe included) allow; changes follow the choice; colab.cleanup takes the namespace rule`, () => {
-      for (const action of ASSERTABLE_ACTIONS) {
+    it(`at ${access}: local reads allow and editing follows the choice`, () => {
+      for (const action of SURFACE_DECLARED_ACTIONS) {
         const want = reads.has(action) ? expected[access]!.read : expected[access]!.change
         expect(jellyEffect(access, action), `${action} at ${access}`).toBe(want)
       }
-      expect(jellyEffect(access, CLEANUP_ACTION)).toBe(expected[access]!.change)
     })
 
-    it(`at ${access}: the plugin's own default rules agree with Jelly for every tool action; colab.cleanup asks, and is denied at read-only as in Jelly`, () => {
-      const rules = [{ action: "*", resource: "*", effect: "allow" as const }, ...defaultRules(access)]
-      for (const action of DECLARED_ACTIONS) expect(effectOf(rules, action), `${action} at ${access}`).toBe(jellyEffect(access, action))
-      expect(effectOf(rules, CLEANUP_ACTION)).toBe(access === "read-only" ? "deny" : "ask")
+    it(`at ${access}: the plugin's own default rules agree with Jelly for every tool action`, () => {
+      const rules = [{ action: "*", resource: "*", effect: "allow" as const }, ...surfaceRules(access)]
+      for (const action of SURFACE_DECLARED_ACTIONS) expect(effectOf(rules, action), `${action} at ${access}`).toBe(jellyEffect(access, action))
     })
   }
 })
@@ -213,7 +186,7 @@ describe("Jelly's access rules, simulated over every action the plugin can asser
 const contracts = process.env.JELLY_CONTRACTS
 
 describe("Jelly's own PluginDeclarationSchema", () => {
-  it.skipIf(!contracts)("accepts the declaration, with no unknown field, with and without the sources block", async () => {
+  it.skipIf(!contracts)("accepts the declaration, with no unknown field", async () => {
     const module = (await import(pathToFileURL(`${contracts}/plugin-contract.ts`).href)) as {
       PluginDeclarationSchema: { safeParse(value: unknown): { success: boolean; error?: { issues: { path: unknown[]; message: string }[] } } }
       unknownDeclarationFields(value: unknown): string[]
@@ -223,7 +196,6 @@ describe("Jelly's own PluginDeclarationSchema", () => {
       return result.success ? [] : (result.error?.issues ?? []).map((issue) => `${issue.path.join(".")}: ${issue.message}`)
     }
     expect(issues(jelly)).toEqual([])
-    expect(issues({ ...jelly, sources: (manifest as { sources?: unknown }).sources })).toEqual([])
     expect(module.unknownDeclarationFields(jelly)).toEqual([])
   })
 })

@@ -15,9 +15,10 @@ import { arch, platform } from "node:os"
 import { basename, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { PLUGIN_ID, SUPPORTED_HOST, TESTED_HOSTS } from "../../src/constants.js"
-import { defaultRules, type Rule } from "../../src/permissions.js"
+import { type Rule } from "../../src/permissions.js"
+import { METHOD_NAMES, surfaceRules } from "../../src/editing/tools.js"
 import { SKILL_IDS } from "../../src/skills.js"
-import { METHOD_NAMES, TOOLS_RPC_ID } from "../../src/tools-rpc.js"
+const TOOLS_RPC_ID = `${PLUGIN_ID}.tools`
 
 const root = fileURLToPath(new URL("../..", import.meta.url))
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
@@ -28,6 +29,8 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   devDependencies: Record<string, string>
   dependencies?: unknown
   peerDependencies?: unknown
+  sources?: unknown
+  jelly?: { signIns?: unknown }
 }
 // Outside the repository, so nothing resolves from the repository's own node_modules.
 const work = realpathSync(mkdtempSync(join(realpathSync("/tmp"), "colab-pack-")))
@@ -104,27 +107,10 @@ function install(withHostPackages: boolean): string {
 
 const installedPackage = (withHostPackages: boolean) => join(install(withHostPackages), "node_modules", ...pkg.name.split("/"))
 
-/** The packed plugin as a release install is: a git repo with the version's tag, dist committed and no dev scripts. */
-function releaseRepo(): { spec: string; dir: string } {
-  const dir = project("release-repo")
-  run("tar", ["-xzf", join(work, pack().filename), "--strip-components=1", "-C", dir], dir)
-  const release = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as Record<string, unknown>
-  delete release.devDependencies
-  delete release.scripts
-  writeFileSync(join(dir, "package.json"), `${JSON.stringify(release, null, 2)}\n`)
-  run("git", ["init", "--quiet"], dir)
-  run("git", ["add", "-A"], dir)
-  // dist/ is git-ignored on master; a release commit carries it.
-  run("git", ["add", "-f", "dist"], dir)
-  run("git", ["-c", "user.name=pack test", "-c", "user.email=pack@example.invalid", "commit", "-qm", "release"], dir)
-  run("git", ["tag", `v${pkg.version}`], dir)
-  return { spec: `git+file://${dir}#v${pkg.version}`, dir }
-}
-
 /** Calls a read tool through the tools RPC as a session of the build agent. */
-async function callRead(host: Awaited<ReturnType<typeof serve>>, method = "specs"): Promise<{ status: number; text: string }> {
+async function callRead(host: Awaited<ReturnType<typeof serve>>, method = "find", input = {}): Promise<{ status: number; text: string }> {
   const { data } = await host.api<{ data: { id: string } }>("POST", "/api/session", { title: "pack test", agent: "build", location: { directory: host.directory } })
-  return host.raw("POST", `/api/rpc/${TOOLS_RPC_ID}/${method}`, { input: { sessionID: data.id, input: {} } })
+  return host.raw("POST", `/api/rpc/${TOOLS_RPC_ID}/${method}`, { input: { sessionID: data.id, input } })
 }
 
 
@@ -162,6 +148,12 @@ describe("package tarball", () => {
     expect(pkg.dependencies).toBeUndefined()
     expect(pkg.peerDependencies).toBeUndefined()
   }, 300_000)
+
+  test("installed manifest has no source declaration or sign-in", () => {
+    const installed = JSON.parse(readFileSync(join(installedPackage(false), "package.json"), "utf8")) as typeof pkg
+    expect(installed).not.toHaveProperty("sources")
+    expect(installed.jelly).not.toHaveProperty("signIns")
+  })
 
   test("installs with scripts disabled and loads both entry points under Bun, next to the host packages", () => {
     const consumer = install(true)
@@ -213,7 +205,7 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
         const permissions = data.find((agent) => agent.id === "build")?.permissions
         return permissions?.some((rule) => rule.action === "colab.*") ? permissions : undefined
       })
-      const rules = defaultRules()
+      const rules = surfaceRules()
       const base = build.findIndex((rule) => rule.action === "*" && rule.resource === "*" && rule.effect === "allow")
       expect(base).toBeGreaterThanOrEqual(0)
       expect(build.slice(base + 1, base + 1 + rules.length)).toEqual(rules)
@@ -222,22 +214,37 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
       expect(output).toMatchObject({
         version: pkg.version,
         access: "all",
-        accounts: [{ alias: "default", backend: "colab" }],
+        surface: "editing",
+        accounts: [],
+        tools: { registered: 3 },
+        cost: { runtimeHoursToday: 0, runtimesRunning: 0 },
+        automation: "off",
         unguardedAgents: ["reviewer"],
         host: { version, range: SUPPORTED_HOST, tested: true },
       })
       expect(output).not.toHaveProperty("problems")
       expect(output).not.toHaveProperty("shadowedSkills")
 
-      // The tools RPC answers with no model: its id, and exactly the read tools and the source probe.
+      // Only the two local reads answer with no model.
       const { output: described } = await host.api<{ output: { id: string; methods: { name: string }[] } }>("POST", `/api/rpc/${TOOLS_RPC_ID}/describe`, { input: {} })
       expect(described.id).toBe(TOOLS_RPC_ID)
       expect(described.methods.map((method) => method.name)).toEqual([...METHOD_NAMES])
 
-      // The tarball installed as a local path is a dev build with no tag, so the gate refuses before Google.
-      const gated = await callRead(host)
-      expect(gated.status).toBe(400)
-      expect(gated.text).toContain("NOT_RELEASED")
+      const read = await callRead(host)
+      expect(read.status).toBe(200)
+      expect(JSON.parse(read.text)).toMatchObject({ output: { state: "ok", notebooks: [] } })
+      const path = "example.ipynb"
+      const fixture = '{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[]}'
+      writeFileSync(join(host.directory, path), fixture)
+      const notebook = await callRead(host, "notebook", { notebook: { path } })
+      expect(notebook.status).toBe(200)
+      expect(JSON.parse(notebook.text)).toMatchObject({ output: { state: "ok", trust: "untrusted", nbformat: "4.5", cells: [] } })
+      expect(readFileSync(join(host.directory, path), "utf8")).toBe(fixture)
+      for (const absent of ["edit", "run", "probe", "events_list", "runtimes_read"]) {
+        const result = await callRead(host, absent)
+        expect(result.status).toBe(400)
+        expect(result.text).toMatch(/unknown|not found/i)
+      }
 
       // The project's agents are exactly OpenCode's own and the one its config defines: nothing came from a folder
       // above the temp root.
@@ -248,26 +255,6 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
       expect(own.sort((a, b) => a.id.localeCompare(b.id))).toEqual([...SKILL_IDS].sort().map((id) => ({ id, path: join(installed, "skills", id, "SKILL.md") })))
     } catch (error) {
       throw new Error(`${(error as Error).message}\n--- opencode ${version} log ---\n${host.log().slice(-3000)}`)
-    } finally {
-      await host.close()
-    }
-  }, 600_000)
-})
-
-describe("a real release install on stock OpenCode 2.3.2", () => {
-  test("a tagged package spec is not gated: the handler runs", async () => {
-    const release = releaseRepo()
-    const host = await serve("2.3.2", release.spec, "-release")
-    try {
-      await host.until("the plugin finishes loading", async () => {
-        const { data } = await host.api<{ data: { id: string; state: { status: string } }[] }>("GET", "/api/plugin")
-        const found = data.find((item) => item.id === PLUGIN_ID)
-        return found && found.state.status !== "loading" ? found : undefined
-      })
-      const call = await callRead(host)
-      expect(call.status).toBe(200)
-      expect(call.text).toContain("AUTH_REQUIRED")
-      expect(call.text).not.toContain("NOT_RELEASED")
     } finally {
       await host.close()
     }

@@ -1,28 +1,7 @@
 # Architecture
 
-The plugin is one server bundle (`dist/index.js`) and one TUI bundle (`dist/tui.js`). The server part registers, in
-order: the default permission rules, the `colab` namespace and its twenty tools, the auth integrations, status
-(`/colab-status` and the status RPC), the tools RPC for scripts, the skills, and the cost automation.
+`src/index.ts` loads the standalone entry in `src/editing/`. It registers exactly three native tools, two read-only tools RPC methods, the status command and RPC, access rules and the two local notebook skills. The explicit local contracts do not resolve Google accounts or accept cloud references. Local notebook code handles nbformat, path validation, permissions and atomic edits. The shipped entry never constructs any provider port, even a stub.
 
-- **Contract** (`src/domain/`): the tools' schemas and result shapes, the error table, the action names and the plan
-  actions. One definition each; the model's tools and the tools RPC are built from it.
-- **Ports** (`src/ports.ts`, `src/deps.ts`): every boundary — Google's APIs, the runtime's Jupyter server, the
-  agent-only check, the ledger, the plan store — as an interface. Each package implements its own; tests use the fakes
-  in `test/fakes/`.
-- **Tools** (`src/tools/`): one wrapper parses, resolves the account, asserts `colab.<tool>` once, runs the owning
-  package's handler and maps errors to results.
-- **Plans** (`src/domain/plans.ts`, `src/plans/route.ts`): `colab_plan` previews a costly or destructive change and
-  stores a single-use plan; `colab_write` and `colab_delete` commit it.
-- **Ledger** (`src/ledger/`): which runtimes are the plugin's own, every run, and the events the `colab.runs` source
-  reads.
-- **Packages** behind the ports: auth (`src/auth/`), the runtime transport and the agent-only check (`src/runtime/`),
-  notebooks and Drive (`src/notebooks/`), execution (`src/execution/`), Enterprise jobs and schedules
-  (`src/enterprise/`), cost, cleanup and status (`src/cost/`), and the sources (`src/sources/`).
-- **Sources** (`src/sources/`): `colab_events_list` pages the ledger's log for `colab.runs` (a cursor on the log's
-  sequence number, so a run is listed when its end is recorded), `colab_runtimes_read` answers the `colab.runtimes`
-  snapshot from one listing call, and `probe` names the owner from the stored sign-in. They are the source contract's
-  reads, through the same wrapper as every tool, and refuse with the contract's codes.
-- **Tools RPC** (`src/tools-rpc.ts`): the twelve read tools and the probe as methods for scripts, through the source
-  contract's transport. Changes are never methods.
+`dist/index.js` and `dist/tui.js` are independent bundles. The first contains local workspace operations and the tools RPC transport. The second presents local status. Neither imports provider implementations. Build and pack tests enforce the graph and package shape.
 
-The packages and who owns each file: [v0.1.0: the Day 0 contract and file ownership](v1-design.md).
+The [full design](v1-design.md) documents the latent full plugin. Provider, execution and source implementations are retained for isolated unit tests but are not reachable from the package entry. A future full build would need a new surface review and live evidence.

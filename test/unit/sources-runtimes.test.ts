@@ -1,17 +1,16 @@
 // The `colab.runtimes` snapshot (src/sources/runtimes.ts): one `output.list` per account, validated as a consumer
-// validates it (source-contract's `acceptAnswer` against the installed descriptor), with the one listing operation
+// validates it (source-contract's `acceptAnswer` against the latent descriptor fixture), with the one listing operation
 // asserted as `colab.read`, TOO_LARGE past 50 items or a cut listing, and Google's refusals in the contract's codes.
-import { readFileSync } from "node:fs"
 import { acceptAnswer } from "@we-the-rebel-alliance/source-contract/read"
 import { SOURCES_SCHEMA } from "@we-the-rebel-alliance/source-contract/schema"
 import { describe, expect, it } from "vitest"
 import { ColabError } from "../../src/domain/errors.js"
 import type { EnterpriseRuntime, Listed } from "../../src/ports.js"
 import { CPU, T4 } from "../fakes/index.js"
+import { latentSources } from "../fakes/sources-descriptor.js"
 import { HOME, LAB, ourRuntime, sourcesHarness } from "../fakes/sources-harness.js"
 
-const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { sources: unknown }
-const checked = SOURCES_SCHEMA.check(pkg.sources)
+const checked = SOURCES_SCHEMA.check(latentSources())
 if (!checked.ok) throw new Error(checked.problems.join("; "))
 const declared = checked.value.items.find((item) => item.id === "colab.runtimes")!
 

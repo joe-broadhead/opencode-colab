@@ -1,5 +1,5 @@
 // The docs that pin the contract: every file under src/ and test/ has exactly one owner in docs/v1-design.md's File
-// ownership table and no two owners' patterns overlap; and the agent-only guarantee's three tiers are word for word
+// ownership table and no two owners' patterns overlap; and the editing-only guarantee's three tiers are word for word
 // the same in docs/v1-design.md, the README and the opencode-colab skill.
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -83,16 +83,16 @@ function tiers(file: string): string[] {
   return block.split(/\n(?=- \*\*)/).map((bullet) => bullet.replace(/\s+/g, " ").trim())
 }
 
-describe("the agent-only guarantee", () => {
+describe("the editing-only guarantee", () => {
   const canonical = tiers("docs/v1-design.md")
 
   it("has three tiers in docs/v1-design.md: guaranteed, best effort, cannot see", () => {
     expect(canonical.map((bullet) => /^- \*\*([^:]+):\*\*/.exec(bullet)?.[1])).toEqual(["Guaranteed", "Best effort", "Cannot see"])
-    expect(canonical[1]).toContain("The session nonce is not a secret")
-    expect(canonical[1]).toContain("Only a release or a kernel restart ends such background processes")
+    expect(canonical[1]).toContain("checks the destination hash and rechecks the opened directory's identity before publishing")
+    expect(canonical[1]).toContain("narrow the cross-process window")
   })
 
-  for (const file of ["README.md", "skills/opencode-colab/SKILL.md"]) {
+  for (const file of ["README.md", "docs/safety.md", "skills/opencode-colab/SKILL.md"]) {
     it(`is word for word the same in ${file}`, () => {
       expect(tiers(file)).toEqual(canonical)
     })

@@ -1,20 +1,5 @@
-// `npm run conformance`: the source contract's conformance kit (source-contract v0.3.0, `sourceConformance`) over both
-// sources, run through the plugin's own tool wrapper and registry (src/tools/spec.ts `runTool`) on Day 0's fakes and
-// package G's strict ledger — no Google call. The report goes to reports/conformance-report.json, which the release
-// workflow's conformance job reads (scripts/release-rules.mjs: `ok`, `plugin`, `version`).
-//
-// - **Grants are the contract's own.** The kit derives them from the declaration (`permission.sessionRules`), and no
-//   grant is written here: declared equals asserted, over- and under-granting both fail (the Databricks H2 ruling).
-// - **Every applicable check runs.** `colab.runs` declares `atomicPages` (one read of the local ledger answers the
-//   page, so no single run can fail on its own) and **not** `noExpiry`: the ledger prunes after `ledgerDays`, so the
-//   expired-cursor and gap-once checks run on a real expired cursor. `colab.runtimes` runs one snapshot per backend, so
-//   both declared listing operations are asserted.
-// - **The declaration checked is package.json's own**, as shipped.
-// - **Beyond the kit**, the report's `extra` records what the design asks and the kit has no case for: an account
-//   mismatch at the probe, the list snapshot validated as a consumer validates it, and TOO_LARGE.
+// Synthetic conformance of latent source code only. No installed declaration or release evidence is produced.
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
 import { encodeBoundCursor } from "@we-the-rebel-alliance/source-contract/cursor"
 import { assertConformance, declarationProblems, sourceConformance, type ConformanceReport, type PageCase, type SessionContext } from "@we-the-rebel-alliance/source-contract/conformance"
 import { acceptAnswer } from "@we-the-rebel-alliance/source-contract/read"
@@ -27,17 +12,16 @@ import { TOOLS } from "../../src/domain/actions.js"
 import type { ToolName } from "../../src/domain/contract.js"
 import { CPU, T4 } from "../fakes/index.js"
 import { callOf, consumerRun, enterpriseJob, HOME, LAB, ourRuntime, sourcesHarness } from "../fakes/sources-harness.js"
-import { PACKAGE_NAME, PACKAGE_VERSION, shippedSources } from "../fakes/sources-descriptor.js"
+import { PACKAGE_NAME, PACKAGE_VERSION, latentSources } from "../fakes/sources-descriptor.js"
 
-const ROOT = join(import.meta.dir, "..", "..")
 const NOW = Date.parse("2026-11-17T12:00:00.000Z")
 const MIN = 60_000
 const HOUR = 3_600_000
 const DAY = 86_400_000
 const iso = (ms: number) => new Date(ms).toISOString()
 
-const shipped = shippedSources()
-const checked = SOURCES_SCHEMA.check(shipped)
+const fixture = latentSources()
+const checked = SOURCES_SCHEMA.check(fixture)
 if (!checked.ok) throw new Error(`the sources declaration is invalid: ${checked.problems.join("; ")}`)
 const sources = checked.value
 const tools = METHOD_NAMES.map((id) => ({ id, readOnly: id === "probe" || TOOLS.find((tool) => tool.name === id)?.class === "read" }))
@@ -86,7 +70,7 @@ const extra: { name: string; ok: boolean; detail: string }[] = []
 
 describe("the source contract's conformance kit", () => {
   test("the declaration validates as a consumer reads it", () => {
-    expect(declarationProblems(shipped, { tools })).toEqual([])
+    expect(declarationProblems(fixture, { tools })).toEqual([])
     expect(sources.rpc).toBe(TOOLS_RPC_ID)
     expect(sources.items.map((item) => item.id)).toEqual(["colab.runs", "colab.runtimes"])
   })
@@ -142,7 +126,7 @@ describe("the source contract's conformance kit", () => {
     for (const entry of extra) expect(entry.ok, `${entry.name}: ${entry.detail}`).toBe(true)
   })
 
-  test("the report is written for the release job", () => {
+  test("has two complete synthetic runs and all four extra checks", () => {
     const report = {
       ok: reports.length === 2 && reports.every((entry) => entry.ok && !entry.incomplete) && extra.length === 4 && extra.every((entry) => entry.ok),
       plugin: PACKAGE_NAME,
@@ -151,8 +135,6 @@ describe("the source contract's conformance kit", () => {
       sources: reports,
       extra,
     }
-    mkdirSync(join(ROOT, "reports"), { recursive: true })
-    writeFileSync(join(ROOT, "reports", "conformance-report.json"), `${JSON.stringify(report, null, 2)}\n`)
     expect(report.ok).toBe(true)
   })
 })

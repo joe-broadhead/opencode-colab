@@ -5,8 +5,9 @@
  * `ctx.location.directory`); `workDir` is relative to it.
  */
 import { randomBytes } from "node:crypto"
-import { lstat, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises"
-import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path"
+import { constants } from "node:fs"
+import { lstat, mkdir, open, readFile, rename, stat, unlink, writeFile, type FileHandle } from "node:fs/promises"
+import { dirname, isAbsolute, join, normalize, parse, relative, resolve, sep } from "node:path"
 import { ColabError } from "../domain/errors.js"
 import { redact } from "../redact.js"
 
@@ -16,7 +17,9 @@ export interface WorkspaceTarget {
   /** Relative to the project when inside it; otherwise the absolute path. */
   readonly relative: string
   readonly insideProject: boolean
+  readonly regularFileOnly?: true
 }
+export type NotebookTarget = WorkspaceTarget & { readonly approvedRoot: string; readonly regularFileOnly: true }
 
 interface PathOptions {
   readonly directory: string
@@ -63,6 +66,28 @@ export async function resolveWorkspacePath(path: string, options: PathOptions): 
   return { absolute, relative: insideProject ? relative(project, absolute) : absolute, insideProject }
 }
 
+/** Check the local path syntax before doing any filesystem work. */
+export function assertNotebookPathSyntax(path: string): void {
+  if (!/\.ipynb$/i.test(path) || /[:\\\u0000-\u001f\u007f]/.test(path) || path.split("/").includes("..")) {
+    refused("Use a local .ipynb path without parent traversal.")
+  }
+}
+
+/** An editing path names a regular .ipynb, never a URI, parent traversal or symbolic link. */
+export async function resolveNotebookPath(path: string, options: PathOptions): Promise<NotebookTarget> {
+  assertNotebookPathSyntax(path)
+  const target = await resolveWorkspacePath(path, options)
+  await refuseSymlinks(parse(target.absolute).root, target.absolute)
+  const info = await lstat(target.absolute).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error
+    return undefined
+  })
+  if (info && !info.isFile()) refused("The path is not a regular notebook file.")
+  const project = resolve(options.directory)
+  const approvedRoot = target.insideProject ? project : options.allowedRoots.map((root) => resolve(project, root)).find((root) => under(root, target.absolute))!
+  return { ...target, approvedRoot, regularFileOnly: true }
+}
+
 /** `true` when a path is the project or inside it, without touching the filesystem. */
 export function insideProject(directory: string, path: string): boolean {
   const project = normalize(isAbsolute(directory) ? directory : resolve(directory))
@@ -75,8 +100,39 @@ async function sizeRefusal(bytes: number, maxBytes: number): Promise<never> {
   })
 }
 
+export async function readRegularFile(file: FileHandle, maxBytes: number): Promise<Uint8Array> {
+  const info = await file.stat()
+  if (!info.isFile()) refused("The path is not a regular notebook file.")
+  if (info.size > maxBytes) await sizeRefusal(info.size, maxBytes)
+  const chunks: Buffer[] = []
+  let size = 0
+  while (true) {
+    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes - size + 1))
+    const { bytesRead } = await file.read(chunk)
+    if (bytesRead === 0) return Buffer.concat(chunks, size)
+    size += bytesRead
+    if (size > maxBytes) await sizeRefusal(size, maxBytes)
+    chunks.push(chunk.subarray(0, bytesRead))
+  }
+}
+
 /** Reads a local file, refusing one over the cap before it is read into memory. */
 export async function readWorkspaceFile(target: WorkspaceTarget, maxBytes: number): Promise<Uint8Array> {
+  if (target.regularFileOnly) {
+    try {
+      const file = await open(target.absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+      try {
+        return await readRegularFile(file, maxBytes)
+      } finally {
+        await file.close()
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === "ENOENT") throw new ColabError("NOT_FOUND", "There is no notebook at that path.")
+      if (code === "ELOOP") refused("The path is, or passes through, a symbolic link.")
+      throw error
+    }
+  }
   let size: number
   try {
     const info = await stat(target.absolute)

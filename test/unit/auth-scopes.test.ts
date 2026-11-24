@@ -1,9 +1,7 @@
-// §15.1 auth: the scope sets per backend and level, the local check, and the union Jelly's declaration carries.
-import { readFileSync } from "node:fs"
+// §15.1 latent auth: the scope sets per backend and level, the local check, and the complete scope union.
 import { describe, expect, it } from "vitest"
 import { accountScopes, ALL_SCOPES, missingScopes, SCOPES, shortScopes, widerThanAccess, writeScopes } from "../../src/auth/scopes.js"
 
-const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { jelly: { signIns: { scopes: string[] }[] } }
 const colab = { backend: "colab" as const, access: "write" as const, drive: true }
 const enterprise = { backend: "enterprise" as const, access: "write" as const }
 
@@ -35,8 +33,15 @@ describe("the sign-in's scopes (design §4)", () => {
     expect(scopes).toContain(SCOPES.aiplatform)
   })
 
-  it("§15.1 auth — the sorted union of every scope is exactly jelly.signIns[0].scopes", () => {
-    expect([...ALL_SCOPES].sort()).toEqual([...pkg.jelly.signIns[0]!.scopes].sort())
+  it("§15.1 auth — the latent sign-in has only the reviewed scope union", () => {
+    expect([...ALL_SCOPES].sort()).toEqual([
+      "https://www.googleapis.com/auth/cloud-platform",
+      "https://www.googleapis.com/auth/colaboratory",
+      "https://www.googleapis.com/auth/colaboratory.readonly",
+      "https://www.googleapis.com/auth/drive.file",
+      "https://www.googleapis.com/auth/userinfo.email",
+      "openid",
+    ])
     expect(ALL_SCOPES).toContain(SCOPES.cloudPlatform)
   })
 

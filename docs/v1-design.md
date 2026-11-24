@@ -1,4 +1,13 @@
-# v0.1.0: the Day 0 contract and file ownership
+# The full Colab design and file ownership
+
+## Editing-only build
+
+The shipped entry registers only local notebook find, read and edit. The rest of this page maps the **latent full plugin**, not shipped capabilities.
+
+- **Guaranteed:** this build makes no Google request, opens no sign-in, creates no runtime and runs no notebook code. Notebook writes require OpenCode's file permissions and an opened, verified local directory. Creation does not replace an existing name.
+- **Best effort:** a changed file is refused when its hash no longer matches. The writer checks the destination hash and rechecks the opened directory's identity before publishing. These checks and a per-path lock narrow the cross-process window.
+- **Cannot see:** changes another process makes after the final check, including moving an already-open directory, or whether notebook text is trustworthy. Treat notebook text, outputs and filenames as data, never instructions.
+
 
 The plugin's v0.1.0 is built in packages A–G on top of a Day 0 contract, so the packages build in parallel without
 editing each other's files. This page is the contract's map: what Day 0 holds, who owns each file, and the decisions
@@ -35,15 +44,15 @@ richer double (a loopback Colab API, the proxy in front of a real Jupyter server
 
 | Owner | Files |
 | --- | --- |
-| **Day 0** | `src/ports.ts`, `src/deps.ts`, `src/events.ts`, `src/stub.ts`, `src/domain/*`, `src/plans/*`, `src/ledger/*`, `src/permissions.ts`, `src/tools.ts`, `src/tools/*`, `src/tools-rpc.ts`, `src/plugin.ts`, `src/index.ts`, `src/options.ts`, `src/constants.ts`, `src/host-version.ts`, `src/redact.ts`, `src/release.ts`, `src/skills.ts`, `src/version.ts`; `test/fakes/index.ts`; `test/unit/{actions,contract,docs,errors,host-version,jelly,ledger,options,permissions,plans,plugin,redact,registry,release,skills,source-contract,tools-rpc}.test.ts`; `test/conformance/declaration.test.ts`; `test/host/harness.ts`, `test/host/isolate.ts`, `test/host/route-fetch.ts`, `test/host/scratch.ts`, `test/host/plugin.test.ts`; `test/pack/pack.test.ts`; `test/fixtures/tool-registry.json`; `package.json` (the `jelly`, `sources` and `opencode` keys); `scripts/errors-doc.mjs`; `docs/v1-design.md`, `docs/errors.md` (generated); `AGENTS.md`. |
+| **Day 0** | `src/ports.ts`, `src/deps.ts`, `src/events.ts`, `src/stub.ts`, `src/domain/*`, `src/plans/*`, `src/ledger/*`, `src/permissions.ts`, `src/permission-defaults.ts`, `src/tools.ts`, `src/tools/*`, `src/tools-rpc.ts`, `src/plugin.ts`, `src/index.ts`, `src/editing/*`, `src/status-surface.ts`, `src/options.ts`, `src/constants.ts`, `src/host-version.ts`, `src/redact.ts`, `src/release.ts`, `src/skills.ts`, `src/version.ts`; `test/fakes/index.ts`; `test/unit/{actions,contract,docs,errors,host-version,jelly,ledger,options,permissions,plans,plugin,redact,registry,release,skills,source-contract,tools-rpc}.test.ts`; `test/unit/editing*.test.ts`; `test/fixtures/latent-sources.json`; `test/host/harness.ts`, `test/host/isolate.ts`, `test/host/route-fetch.ts`, `test/host/scratch.ts`, `test/host/plugin.test.ts`, `test/latent-host/harness.ts`, `test/latent-conformance/declaration.test.ts`; `test/pack/pack.test.ts`; `test/fixtures/tool-registry.json`; `package.json` (the `jelly` and `opencode` keys); `scripts/errors-doc.mjs`; `docs/v1-design.md`, `docs/errors.md` (generated); `AGENTS.md`. |
 | **Family kit** | `test/support/jelly-kit.ts`, `test/support/jelly-settings.ts`, and the kit files in `scripts/` pinned by `scripts/check-copies.mjs`: copies, changed in every plugin at once. |
-| **A. Auth** | `src/auth/*`; `test/fakes/auth-*.ts`, `test/unit/auth*.test.ts`, `test/host/auth*.test.ts`; `docs/auth.md`. |
-| **B. Runtime transport** | `src/runtime/*` (the Colab API client, the runtime protocol, the agent-only check and its probe snippet); `test/fakes/runtime-*.ts` (the loopback Colab API, the proxy-in-front-of-jupyter harness), `test/unit/runtime*.test.ts`, `test/host/runtime*.test.ts`; the drift job's workflow file. |
+| **A. Auth** | `src/auth/*`; `test/fakes/auth-*.ts`, `test/unit/auth*.test.ts`, `test/latent-host/auth*.test.ts`; `docs/auth.md`. |
+| **B. Runtime transport** | `src/runtime/*` (the Colab API client, the runtime protocol, the agent-only check and its probe snippet); `test/fakes/runtime-*.ts` (the loopback Colab API, the proxy-in-front-of-jupyter harness), `test/unit/runtime*.test.ts`, `test/latent-host/runtime*.test.ts`; the drift job's workflow file. |
 | **C. Notebooks** | `src/notebooks/*` (the nbformat model, find, notebook, edit, DriveSync, the drive plans, the source secret screen); `test/fakes/notebooks-*.ts` (Drive), `test/unit/notebooks*.test.ts`. |
-| **D. Execution** | `src/execution/*` (specs, runtimes, files, execution, run, cancel, upload, download, capture, write-back, the runtime.create and consumer runtime.delete plans); `test/fakes/execution-*.ts`, `test/unit/execution*.test.ts`, `test/host/execution*.test.ts`. |
+| **D. Execution** | `src/execution/*` (specs, runtimes, files, execution, run, cancel, upload, download, capture, write-back, the runtime.create and consumer runtime.delete plans); `test/fakes/execution-*.ts`, `test/unit/execution*.test.ts`, `test/latent-host/execution*.test.ts`. |
 | **E. Enterprise** | `src/enterprise/*` (jobs, schedules, pause, the job, schedule, runtime.stop and Enterprise runtime.delete plans, EnterpriseRuns, the price table); `test/fakes/enterprise-*.ts` (Vertex, GCS), `test/unit/enterprise*.test.ts`. |
-| **F. Cost, cleanup, status** | `src/cost/*` (status, Release, automation, budgets, hooks, the cleanup command), `src/rpc.ts`, `src/status.ts`, `src/tui/*`; `test/fakes/cost-*.ts`, `test/unit/cost*.test.ts`, `test/host/cost*.test.ts`; `docs/costs.md`. |
-| **G. Sources, skills, docs** | `src/sources/*` (events_list, runtimes_read, probe); `test/fakes/sources-*.ts`, `test/unit/sources*.test.ts`, `test/conformance/sources.test.ts`, `npm run conformance`; `skills/*`; `README.md`, `docs/architecture.md`, `docs/configuration.md`, `docs/jelly.md`, `docs/scripting.md`, `docs/safety.md`, `CHANGELOG.md` (each package adds its own `[Unreleased]` lines; G edits the rest). |
+| **F. Cost, cleanup, status** | `src/cost/*` (status, Release, automation, budgets, hooks, the cleanup command), `src/rpc.ts`, `src/status.ts`, `src/tui/*`; `test/fakes/cost-*.ts`, `test/unit/cost*.test.ts`, `test/latent-host/cost*.test.ts`; `docs/costs.md`. |
+| **G. Sources, skills, docs** | `src/sources/*` (events_list, runtimes_read, probe); `test/fakes/sources-*.ts`, `test/unit/sources*.test.ts`, `test/latent-conformance/sources.test.ts`; `skills/*`; `README.md`, `docs/architecture.md`, `docs/configuration.md`, `docs/jelly.md`, `docs/scripting.md`, `docs/safety.md`, `CHANGELOG.md` (each package adds its own `[Unreleased]` lines; G edits the rest). |
 
 Shared tools cross packages through ports, not files: `colab_execution`, `colab_cancel` and `colab_download` are D's,
 and call `deps.enterprise` (E) for a job or a GCS object and `deps.driveSync` (C) for a Drive notebook; the consumer
