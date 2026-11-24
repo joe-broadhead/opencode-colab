@@ -2,7 +2,17 @@
 
 An unofficial OpenCode plugin that finds, reads and edits local Jupyter notebooks. It does not run notebooks or need a Google account.
 
-Requires OpenCode `>=2.2.3 <2.4.0`. This first release is still in development. See [Contributing](CONTRIBUTING.md) for a source checkout.
+## Install
+
+Requires OpenCode `>=2.2.3 <2.4.0`. Once the first release tag (`v0.0.1`) is available, install it from GitHub:
+
+```sh
+opencode plugin add 'github:joe-broadhead/opencode-colab#v0.0.1'
+```
+
+For a source checkout, see [Contributing](CONTRIBUTING.md).
+
+## Tools
 
 | Tool | What it does | Code Mode / scripting |
 | --- | --- | --- |
@@ -10,7 +20,7 @@ Requires OpenCode `>=2.2.3 <2.4.0`. This first release is still in development. 
 | `colab_notebook` | Read a local notebook's cells, outputs, kernel and hash. | Read |
 | `colab_edit` | Create a notebook or edit its cells, metadata and outputs in one atomic write. | Direct tool only |
 
-Read before editing an existing notebook and pass its exact `ifHash`. If it changed, read again and review before retrying. Paths must name local `.ipynb` files and stay within the project or an explicit allowed root. Symbolic links and glob metacharacters in notebook paths are refused. Editing requires Linux with procfs and a supported local filesystem, plus an existing destination folder. Find, read and status do not need those write primitives.
+Read before editing an existing notebook and pass its exact `ifHash`. If it changed, read again and review before retrying.
 
 ## Editing-only guarantee
 
@@ -20,6 +30,15 @@ Read before editing an existing notebook and pass its exact `ifHash`. If it chan
 
 Use `access: "ask-changes"` to ask before every edit or `"read-only"` to deny edits by default. The default is `"all"`; OpenCode's own file permissions and explicit Colab rules still apply. On hosts that omit the default rules on a custom agent, restricted edits refuse unless the host has an applicable scoped rule. `/colab-status` shows the active build, rules and skills.
 
-There is no execution, Enterprise, cloud file access, sign-in, source collection or compute cost. Consumer runtime creation still requires live check L1; it is outside this build.
+## Known limits
+
+- Notebook paths must stay within the project or an explicit allowed root. Symbolic links and glob metacharacters in notebook paths are refused. Find searches only the workspace.
+- Writes require Linux with procfs and an approved root on an ext-family filesystem, XFS, Btrfs or tmpfs. The destination folder must already exist, belong to the host user and not be writable by other users or groups. Writes cannot cross a mount below the approved root. There is no fallback writer on macOS, Windows, network filesystems or overlay mounts. Find, read and status do not need the write primitives.
+- Directory and file rechecks do not protect against changes by another process after the final check. Use a stable directory tree you control.
+- There is no Google sign-in, notebook execution, Enterprise, cloud data access, source collection or compute cost.
+
+## Further reading
+
+Consumer runtime creation still requires live check L1; it is outside this build.
 
 See [configuration](docs/configuration.md), [scripting](docs/scripting.md), [safety](docs/safety.md) and [errors](docs/errors.md).

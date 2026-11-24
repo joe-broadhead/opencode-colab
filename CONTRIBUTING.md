@@ -18,6 +18,7 @@ No dependency needs install scripts, and OpenCode installs plugins without them,
 ### Run your checkout in OpenCode
 
 The shipped entry is editing-only. Provider modules remain latent and are tested with synthetic fixtures.
+See [development history](docs/development-history.md) for work outside the release notes.
 
 Build it, then add the clone's path to `plugins` in your OpenCode config instead of the release install:
 
