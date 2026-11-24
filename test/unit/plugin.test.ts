@@ -1,10 +1,10 @@
-// The server part's wiring, on a fake host context: what package F's cost registration reports reaches status as
-// problems (colab-10 contract request 3), and nothing else in setup depends on F's hooks.
+// The server part's wiring, on a fake host context: setup completes on a host that offers nothing beyond the parts
+// it reads, and status answers from the registered tools and rules alone.
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { costProblem, createColabPlugin } from "../../src/plugin.js"
+import { createColabPlugin } from "../../src/plugin.js"
 import { ColabRpc, type Status } from "../../src/rpc.js"
 import { fakeDeps } from "../fakes/index.js"
 
@@ -25,7 +25,7 @@ function fakeHost(directory: string) {
   const handlers: { status?: (input: object, helpers: { error: (...args: unknown[]) => unknown }) => Promise<Status> } = {}
   const known: Record<string, unknown> = {
     options: {},
-    app: { version: "2.2.3" },
+    app: { version: "2.4.1" },
     location: { directory },
     agent: { transform: async () => disposable, list: async () => ({ data: [] }), get: async () => ({ data: { permissions: [] } }) },
     skill: { transform: async () => disposable, list: async () => ({ data: [] }) },
@@ -41,24 +41,19 @@ function fakeHost(directory: string) {
 }
 
 describe("the server part's wiring", () => {
-  it("puts the hooks package F's registration could not add into status's problems, one sentence each", async () => {
+  it("completes setup and answers status with no problems", async () => {
     const directory = mkdtempSync(join(tmpdir(), "colab-plugin-"))
     dirs.push(directory)
     const { ctx, handlers } = fakeHost(directory)
-    // A host that refuses `experimental.idle`: F reports the hook it could not register.
-    const plugin = createColabPlugin({ deps: () => fakeDeps({ directory }).deps, cost: async () => ({ dispose: async () => undefined, problems: ["idle"] }) })
+    const plugin = createColabPlugin({ deps: () => fakeDeps({ directory }).deps })
     const dispose = await (plugin as unknown as { setup(ctx: unknown): Promise<() => Promise<void>> }).setup(ctx)
     try {
       const status = await handlers.status!({}, { error: () => undefined })
-      expect(status.problems).toEqual(["The idle cost check is off on this OpenCode version (no `experimental.idle` hook); automation and `/colab-cleanup` still work."])
+      expect(status).toMatchObject({ access: "all", host: { version: "2.4.1", tested: true } })
+      expect(status.problems).toBeUndefined()
+      expect(status.tools).toEqual({ registered: 20 })
     } finally {
       await dispose()
     }
-  })
-
-  it("words each kind of cost problem as one sentence", () => {
-    expect(costProblem("experimental.idle")).toBe(costProblem("idle"))
-    expect(costProblem("compaction")).toBe("The compaction cost hook is off on this OpenCode version; automation and `/colab-cleanup` still work.")
-    expect(costProblem("The context line is off on this host.")).toBe("The context line is off on this host.")
   })
 })

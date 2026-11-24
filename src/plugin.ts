@@ -23,25 +23,10 @@ import { methods, PLUGIN } from "./tools-rpc.js"
 
 type Registration = { dispose(): Promise<void> }
 
-/** What `registerCost` returns: its disposal, and the hooks this host refused (design §8.4). */
-export type CostRegistration = Registration & { readonly problems?: readonly string[] }
-
 /** Internal seam: tests replace the ports (test/fakes) and package F's registration without touching the host wiring. */
 export interface ColabSeam {
   readonly deps?: (base: Deps) => Deps
-  readonly cost?: (ctx: never, deps: Deps) => Promise<CostRegistration>
-}
-
-/**
- * One sentence per hook package F could not register, for status's problems (design §8.4, boxd C.6). F reports a
- * hook's name (`idle` for `experimental.idle`); a full sentence passes through unchanged.
- */
-export function costProblem(problem: string): string {
-  if (problem === "idle" || problem === "experimental.idle") {
-    return "The idle cost check is off on this OpenCode version (no `experimental.idle` hook); automation and `/colab-cleanup` still work."
-  }
-  if (/\s/.test(problem) && problem.endsWith(".")) return problem
-  return `The ${problem} cost hook is off on this OpenCode version; automation and \`/colab-cleanup\` still work.`
+  readonly cost?: (ctx: never, deps: Deps) => Promise<Registration>
 }
 
 export function createColabPlugin(seam: ColabSeam = {}) {
@@ -73,7 +58,7 @@ export function createColabPlugin(seam: ColabSeam = {}) {
       }
       try {
         keep(await registerPermissionDefaults(ctx, options.access, report("rules")))
-        keep(await registerTools(ctx, { access: options.access, runner: getRunner, report: report("tools") }))
+        keep(await registerTools(ctx, { runner: getRunner, report: report("tools") }))
         // The doctor's print(1) needs the ledger, the agent-only check and the runtime protocol: A reaches them only
         // through Deps (AuthEnv.deps, A's own field). Passed as a value, so the call compiles before A adds the field.
         const authEnv = { options, clock: deps.clock, deps }
@@ -93,8 +78,7 @@ export function createColabPlugin(seam: ColabSeam = {}) {
         const stopTools = await registerToolsRpc(ctx as never, { plugin: PLUGIN, methods: methods(getRunner()) })
         keep({ dispose: stopTools })
         keep(await registerSkills(ctx))
-        const cost = keep((await (seam.cost ?? (registerCost as ColabSeam["cost"])!)(ctx as never, deps)) as CostRegistration)
-        for (const problem of cost.problems ?? []) problems.set(`cost:${problem}`, costProblem(problem))
+        keep(await (seam.cost ?? (registerCost as ColabSeam["cost"])!)(ctx as never, deps))
       } catch (error) {
         await cleanup().catch(() => undefined)
         throw error

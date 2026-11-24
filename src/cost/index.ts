@@ -1,10 +1,10 @@
 /**
  * Package F, Cost, cleanup, status (docs/v1-design.md, File ownership): `colab_status`, the one release function, the
- * opt-in budgets, the automation owner and the Jupyter idle rule, `/colab-cleanup`, and the three hooks. `src/status.ts`,
- * `src/rpc.ts` and `src/tui/` grow the same status for `/colab-status` and the dialog.
+ * opt-in budgets, the automation owner and the Jupyter idle rule, and `/colab-cleanup`. `src/status.ts`, `src/rpc.ts`
+ * and `src/tui/` grow the same status for `/colab-status` and the dialog.
  *
  * The pieces and the design sections they build: §8.3 (automation, harvest-then-release), §8.4 (cost and cleanup
- * blocks, hooks), §8.5 (the person's command and budgets), §16 F.
+ * blocks; cost is read through status, never pushed into a request), §8.5 (the person's command and budgets), §16 F.
  */
 import type { Plugin } from "@opencode/plugin"
 import type { Deps, PortEnv } from "../deps.js"
@@ -14,7 +14,6 @@ import type { ToolHandlers } from "../tools/types.js"
 import { ledgerBase, createAutomationLoop, type AutomationLoop } from "./automation.js"
 import { createBudget as budgetFrom } from "./budget.js"
 import { registerCleanup } from "./cleanup.js"
-import { registerHooks } from "./hooks.js"
 import { createRelease } from "./release.js"
 import { runStatus } from "./status.js"
 
@@ -37,15 +36,14 @@ export function createBudget(env: PortEnv, prices: Prices): Budget {
 
 export interface CostContext {
   readonly command: Pick<Plugin.Context["command"], "transform">
-  readonly session: Pick<Plugin.Context["session"], "hook" | "synthetic" | "context">
+  readonly session: Pick<Plugin.Context["session"], "synthetic">
   readonly permission: Pick<Plugin.Context["permission"], "assert">
 }
 
-/** The host registrations F owns: `/colab-cleanup`, the three hooks and the automation loop. */
-export async function registerCost(ctx: CostContext, deps: Deps): Promise<{ dispose(): Promise<void>; readonly problems: readonly string[] }> {
+/** The host registrations F owns: `/colab-cleanup` and the automation loop. */
+export async function registerCost(ctx: CostContext, deps: Deps): Promise<{ dispose(): Promise<void> }> {
   const stops: { dispose(): Promise<void> }[] = []
   let loop: AutomationLoop | undefined
-  let problems: readonly string[] = []
   try {
     stops.push(
       await registerCleanup(ctx, {
@@ -55,9 +53,6 @@ export async function registerCost(ctx: CostContext, deps: Deps): Promise<{ disp
         clock: deps.clock,
       }),
     )
-    const hooks = await registerHooks(ctx, { options: deps.options, ledger: deps.ledger, clock: deps.clock })
-    stops.push(...hooks.stop)
-    problems = hooks.problems
     // The ledger's own housekeeping (design §5: pruned after ledgerDays) belongs to the one automation owner, once per
     // process. A failed prune never fails setup.
     deps.ledger.prune(deps.clock.now()).catch(() => undefined)
@@ -76,8 +71,6 @@ export async function registerCost(ctx: CostContext, deps: Deps): Promise<{ disp
     throw error
   }
   return {
-    // A host that refused a hook is named in status (design §8.4, boxd C.6); `plugin.ts` words each one.
-    problems,
     async dispose() {
       await loop?.dispose()
       for (const stop of stops.splice(0).reverse()) await stop.dispose()

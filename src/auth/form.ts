@@ -7,8 +7,7 @@
  * consent screen; anything but an explicit `write` answer signs in read-only.
  *
  * Three hidden fields are for a host to fill, never shown:
- * - `clientJson`, Google's downloaded client JSON, which Jelly supplies as this plugin's host client
- *   (`package.json` `jelly.signIns[0].hostClient`);
+ * - `clientJson`, Google's downloaded client JSON, which a host may supply as this plugin's client;
  * - `redirectUri` and `callbackPort`, the relay of a host that serves OpenCode to a browser on another machine.
  * The plugin options are their defaults. A configured client puts nothing secret in the form: the two client fields
  * are hidden and left blank, and the configured client is used.
@@ -56,7 +55,7 @@ export interface RedirectConfig {
   readonly callbackPort?: number
 }
 
-/** The integration id for one account: `colab-<alias>` (design §4, `package.json` `jelly.signIns[0].integration`). */
+/** The integration id for one account: `colab-<alias>` (design §4). */
 export function integrationIdFor(alias: string): string {
   return `${INTEGRATION_PREFIX}${alias}`
 }

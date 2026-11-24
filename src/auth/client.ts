@@ -2,8 +2,8 @@
  * The OAuth client a sign-in uses, and where it came from (design §4, gws's client mechanism).
  *
  * No client ships in the package. A person uses their own Desktop app client, or one the organisation sets through
- * `oauthClient`; Jelly fills its hosted client into the form's hidden `clientJson` field (`package.json`
- * `jelly.signIns[0].hostClient`). Google treats an installed app's secret as non-confidential
+ * `oauthClient`; a host may fill its own client into the form's hidden `clientJson` field. Google treats an installed
+ * app's secret as non-confidential
  * (https://developers.google.com/identity/protocols/oauth2/native-app): security rests on PKCE (S256), the loopback
  * redirect, and consent on Google's own screen, not on the secret. The secret still never appears in a message, a log
  * line or a form description.
