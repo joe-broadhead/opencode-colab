@@ -14,6 +14,7 @@ import * as notebooks from "../provider/notebooks/index.js"
 import { CONTRACTS, type ToolName } from "../domain/contract.js"
 import type { Deps } from "../provider/index.js"
 import type { ToolHandler } from "../provider/types.js"
+import { emitChanged } from "./changed.js"
 import { assertWritable, providerAccount, providerContext } from "./context.js"
 import { mapped } from "./errors.js"
 
@@ -71,9 +72,8 @@ export function providerHandlers(deps: Deps): Record<string, MethodHandler> {
           if (WRITES.has(name)) assertWritable(account)
           const ctx = providerContext(deps, account, call)
           const result = await handler.run(parsed as never, ctx as never)
-          if (name === "run" || name === "cancel") {
-            await call.bus.emit("changed", { capability: "colab.runs", account: account.alias, reason: name })
-          }
+          // Contract §4.7: every successful non-read method nudges the area it changed.
+          if (WRITES.has(name)) await emitChanged(call, account.alias, name)
           return result
         })
       },

@@ -61,7 +61,7 @@ describe("plan and commit", () => {
     const answer = (await writeHandler(deps).run({ planId: "minted-by-the-register" }, committed.call)) as Record<string, unknown>
     expect(answer).toMatchObject({ state: "ok", action: "runtime.create" })
     expect(fakes.ledger.runtimes.size).toBe(1)
-    expect(committed.events).toEqual([{ name: "changed", data: { capability: "colab.runtimes", account: "work", reason: "write" } }])
+    expect(committed.events).toEqual([{ name: "changed", data: { capability: "colab.runtimes", account: "work", reason: "runtime.create" } }])
   })
 
   test("plan_delete commits through the one release function", async () => {

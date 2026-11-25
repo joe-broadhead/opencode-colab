@@ -130,7 +130,8 @@ None.
 ## Troubleshooting
 
 - **`status` says `needs_sign_in`.** Run `/connect` and choose the Colab integration for that alias, or
-  `opencode auth login colab-<alias>`. `/colab-doctor` prints one small check per account.
+  `opencode auth login colab` for `default` and `opencode auth login colab-<alias>` for another alias.
+  `/colab-doctor` prints one small check per account.
 - **`HOST_UNTESTED`.** The running OpenCode is outside `>=2.4.1 <2.5.0`. Install a tested release, or set
   `allowUntestedHost: true` for an untested one.
 - **A write is refused with `PERMISSION_DENIED`.** The `access` level is `read-only`, the account profile is `read`, or an

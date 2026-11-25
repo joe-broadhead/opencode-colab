@@ -53,7 +53,7 @@ export function cleanupHandler(deps: Deps): MethodHandler {
             failed.push({ runtime: action.record.id, code: typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : "UNAVAILABLE" })
           }
         }
-        if (released.length > 0) await call.bus.emit("changed", { capability: "colab.runtimes", account: account.alias, reason: "write" })
+        await call.bus.emit("changed", { capability: "colab.runtimes", account: account.alias, reason: "cleanup" })
         return { report: cleanupReport(cleanupDeps(deps), actions, now), released, blocked, failed }
       })
     },

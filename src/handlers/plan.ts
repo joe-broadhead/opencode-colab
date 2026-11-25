@@ -12,6 +12,7 @@ import * as enterprise from "../provider/enterprise/index.js"
 import * as execution from "../provider/execution/index.js"
 import * as notebooks from "../provider/notebooks/index.js"
 import type { PlanHandler, PlanHandlers } from "../provider/types.js"
+import { emitChanged } from "./changed.js"
 import { assertWritable, providerAccount, providerContext } from "./context.js"
 import { mapped } from "./errors.js"
 
@@ -133,6 +134,7 @@ function planMethod(category: PlanCategory, deps: Deps): MethodHandler {
           output: previewed.preview,
           changes: changesOf(action, previewed.preview),
           trust: "untrusted" as const,
+          ...(previewed.warnings !== undefined && previewed.warnings.length > 0 ? { warnings: [...previewed.warnings] } : {}),
           plan: { action, category, preview: previewed.preview, payload: previewed.payload, fingerprint: previewed.fingerprint, operation: entry.operation } satisfies Planned,
         }
       })
@@ -155,9 +157,8 @@ function commitMethod(category: PlanCategory, deps: Deps): MethodHandler {
         assertWritable(account)
         const handler = providerPlan(planned.action, account.backend)
         const result = await handler.commit({ payload: planned.payload, fingerprint: planned.fingerprint }, providerContext(deps, account, call))
-        if (planned.action.startsWith("runtime.")) {
-          await call.bus.emit("changed", { capability: "colab.runtimes", account: account.alias, reason: "write" })
-        }
+        // Contract §4.7: every commit nudges the area its action changed.
+        await emitChanged(call, account.alias, planned.action)
         return { state: "ok", action: planned.action, result }
       })
     },

@@ -71,7 +71,15 @@ None.
 
 ## The bus
 
-`changed` is emitted after a runtime is created, released, stopped or cleaned up (`colab.runtimes`) and after a run
-starts or is cancelled (`colab.runs`). It carries the capability, the account and a short reason; an app re-reads the
-source. Jobs and schedules have no source to re-read, so no event is emitted for them; neither do notebook and file
-writes.
+`changed` is emitted after every successful non-read method and every commit, with the capability area, the account and
+the action as the short reason; an app re-reads the area. The kit's `events.emitted` stays `["changed"]`.
+
+- **`colab.runs`** — `run`, `cancel`, and the `job.*` commits.
+- **`colab.runtimes`** — `upload`, `cleanup`, and the `runtime.*` commits.
+- **`colab.notebooks`** — `edit` and the `drive.*` commits.
+- **`colab.schedules`** — `pause` and the `schedule.*` commits.
+- **`colab.files`** — `download`: an export that changes only files in the project, so it nudges the file area rather
+  than a provider source.
+
+`colab.runs` and `colab.runtimes` are sources; the other three are app areas with no source of their own. `plan_write` and
+`plan_delete` write nothing, so they emit nothing.

@@ -3,7 +3,7 @@
  * `fixtures/conformance.json`. `plugin-kit record` replays and redacts the file; this test invents nothing about the
  * kit.
  */
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, test } from "vitest"
@@ -117,7 +117,7 @@ describe("conformance recording", () => {
     const unknown = resolveAccount(profiles.map((profile) => ({ alias: profile.alias })), { account: "nobodyhere" })
     const crossed = await codeOf(async () => handlers.events_list!.run({ source: "runs", cursor: workPage.cursor }, call("personal", emitted)))
 
-    const probeRuns = await handlers.probe!.run({ source: "runs" }, call("work", emitted))
+    const probeRuns = { ...((await handlers.probe!.run({ source: "runs" }, call("work", emitted))) as Record<string, unknown>), owner: FIXTURE_OWNER }
     const probeRuntimes = await handlers.probe!.run({ source: "runtimes" }, call("work", emitted))
     const snapshot = await handlers.runtimes_read!.run({ source: "runtimes" }, call("work", emitted))
     const status = await handlers.status!.run({}, call("default", emitted))
@@ -137,11 +137,11 @@ describe("conformance recording", () => {
     expect(signals.work?.state).toBe("ready")
 
     const fixture = {
-      $comment: "Recorded from the plugin's own handlers over the in-memory provider: two synthetic accounts, both sources, a write that emits changed, and the strict status. No Google account is involved.",
+      $comment: "Recorded from the plugin's own handlers over the in-memory provider: two synthetic accounts, both sources, a write that emits changed, and the strict status. No Google account, no real owner and no live provider are involved, so the live T1 account cases are not run; the aliases, required, unknown and cursor cases are the recorded ones.",
       plugin: pkg.name,
       namespace: manifest.plugin.summary,
       accounts: {
-        real: true,
+        real: false,
         aliases: profiles.map((profile) => profile.alias),
         required: { method: "events_list", code: required.ok ? "ok" : required.code },
         unknown: { method: "events_list", account: "nobodyhere", code: unknown.ok ? "ok" : unknown.code },
@@ -178,7 +178,15 @@ describe("conformance recording", () => {
         },
       },
     }
-    mkdirSync(join(ROOT, "fixtures"), { recursive: true })
-    writeFileSync(join(ROOT, "fixtures/conformance.json"), `${JSON.stringify(fixture, null, 2)}\n`)
+    // A plain `npm test` must not rewrite the committed fixture: it asserts the recorder still produces those bytes.
+    // `npm run fixtures` regenerates it, then `plugin-kit record` replays and redacts the committed file.
+    const target = join(ROOT, "fixtures", "conformance.json")
+    const generated = `${JSON.stringify(fixture, null, 2)}\n`
+    if (process.env["UPDATE_FIXTURES"] === "1") {
+      mkdirSync(join(ROOT, "fixtures"), { recursive: true })
+      writeFileSync(target, generated)
+    } else {
+      expect(JSON.parse(readFileSync(target, "utf8")), "fixtures/conformance.json is stale; run npm run fixtures").toEqual(fixture)
+    }
   })
 })
