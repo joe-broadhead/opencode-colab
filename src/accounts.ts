@@ -64,7 +64,7 @@ export async function registerColabAccounts(
   const byAlias = new Map(input.options.accounts.map((account) => [account.alias, account]))
   const auth = (account: { readonly alias: string }, integrationID: string) => {
     const resolved = byAlias.get(account.alias)
-    if (resolved === undefined) return []
+    if (resolved === undefined || resolved.mode !== "interactive") return []
     return [authMethodsFor(input.options, resolved, integrationID, names.get(account.alias) ?? "Colab", input.host, { now: () => Date.now() })]
   }
   const registration = await registerAccounts(ctx, { manifest: input.manifest, options: input.rawOptions, auth })

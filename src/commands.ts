@@ -108,6 +108,10 @@ export async function registerCommands(ctx: CommandContext, input: CommandsInput
             const lines: string[] = []
             for (const alias of aliases) {
               try {
+                // The method door has the register's ask; a command has no door, so it asks here once per alias.
+                if (input.options.access === "ask-changes" && input.profiles.length > 0) {
+                  await ctx.permission.assert({ sessionID, action: "colab.cleanup", resources: [alias], metadata: { account: alias } } as never)
+                }
                 const answer = (await cleanupHandler(input.deps).run({}, call(sessionID, alias))) as Record<string, unknown>
                 lines.push(`${alias}: ${String(answer.report)}\nReleased: ${(answer.released as string[]).join(", ") || "none"}.`)
               } catch (error) {
