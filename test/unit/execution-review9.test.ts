@@ -20,6 +20,16 @@ import { invented } from "../support/invented.js"
 const NB = "nb.ipynb"
 const workspace = async () => mkdtemp(join(tmpdir(), "colab9-"))
 
+/** Read until `done` says so; a run's after-probe is asynchronous, so a fixed sleep races it. */
+async function waitFor<T>(read: () => T, done: (value: T) => boolean, timeoutMs = 10_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const value = read()
+    if (done(value) || Date.now() > deadline) return value
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 describe("review 9, M1: the run's time bound", () => {
   it("R1: after the bound no further cell is sent, even with continueOnError", async () => {
     const { deps, fakes, record, runtime } = await prepared({ directory: await workspace() })
@@ -206,17 +216,32 @@ describe("review 9, M4: the after-run probe", () => {
     const { deps, record, runtime } = await prepared({ directory: await workspace() })
     const withCheck = { ...deps, check }
     runtime.gate = gate()
-    runtime.script = () => [iopub("stream", { name: "stdout", text: "working\n" })]
+    // The fake resolves this when the kernel has the code cell; stopping earlier would end the call during setup,
+    // before the run exists, and the after-run probe would never be due. Watchdog requests are silent and ignored.
+    let started: () => void = () => undefined
+    const sent = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    runtime.script = (_code, options) => {
+      if (!options.silent) started()
+      return [iopub("stream", { name: "stdout", text: "working\n" })]
+    }
     const controller = new AbortController()
     const { runner } = runnerFor(withCheck)
     const pending = runTool("run", { runtime: record.id, code: "while True: pass", wait: 10 }, { sessionID: "s", agent: "build", messageID: "m", id: "c", signal: controller.signal }, runner)
-    setTimeout(() => controller.abort(), 20)
-    await pending.catch(() => undefined)
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    const probes = check.calls.filter((entry) => entry.method === "probe").map((entry) => entry.args[1] as { fresh: boolean })
-    expect(probes.map((entry) => entry.fresh)).toEqual([true, true])
-    resetLiveRuns()
-  })
+    try {
+      await sent
+      controller.abort()
+      await pending.catch(() => undefined)
+      const probes = await waitFor(
+        () => check.calls.filter((entry) => entry.method === "probe").map((entry) => (entry.args[1] as { fresh: boolean }).fresh),
+        (fresh) => fresh.length >= 2,
+      )
+      expect(probes).toEqual([true, true])
+    } finally {
+      resetLiveRuns()
+    }
+  }, 20_000)
 })
 
 describe("review 9, M5: folders and the contents API", () => {
