@@ -67,7 +67,7 @@ function installedPackage(cache: string): string {
 
 describe("the packed tarball", () => {
   test("installs with the real opencode CLI and the installed package answers status in the real host", () => {
-    run("node", ["scripts/build.mjs"])
+    run("npm", ["run", "bundle"])
     const [packed] = JSON.parse(run("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", WORK])) as [{ filename: string }]
     const tarball = join(WORK, packed.filename)
 

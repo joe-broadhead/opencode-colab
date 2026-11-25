@@ -33,12 +33,12 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "check": "npm run typecheck && npm run build && npm run test && npx plugin-kit check && npm run test:pack",
+    "check": "npm run typecheck && npm run bundle && npm run test && npx plugin-kit check && npm run test:pack",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "build": "node scripts/build.mjs",
     "test": "vitest run test/unit test/conformance test/host",
     "test:pack": "vitest run test/pack",
-    "docs": "plugin-kit docs"
+    "docs": "plugin-kit docs",
+    "bundle": "node scripts/build.mjs"
   },
   "devDependencies": {
     "@opencode/client": "2.4.1",

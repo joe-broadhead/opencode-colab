@@ -5,7 +5,7 @@ The plugin follows the [plugin standard](https://github.com/we-the-rebel-allianc
 ```sh
 npm ci
 npm run typecheck
-npm run build
+npm run bundle
 npm test
 npx plugin-kit check
 ```

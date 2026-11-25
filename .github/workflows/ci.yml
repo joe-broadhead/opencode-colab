@@ -28,4 +28,6 @@ jobs:
       - name: Fetch the contract over HTTPS
         run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
       - run: npm ci --ignore-scripts
+      - name: dist is current
+        run: npm run bundle && git diff --exit-code -- dist/
       - run: npm run check

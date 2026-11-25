@@ -26,7 +26,7 @@ its own credentials as one OpenCode integration per account alias.
 |---|---|
 | `npm ci` | installs dev tooling only; there are no runtime dependencies |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm run build` | bundles `dist/index.js` with esbuild |
+| `npm run bundle` | bundles `dist/index.js` with esbuild |
 | `npm test` | vitest: unit, conformance recorder and the host test |
 | `npm run test:pack` | packs the tarball, installs it and loads the server entry |
 | `npx plugin-kit check` | the kit gates: T0/T1, declaration, accounts, sources, bus, plans, docs, forbidden |

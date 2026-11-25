@@ -42,7 +42,7 @@ All options are optional. A key that is not in the schema is refused with `OPTIO
 Ask before every change:
 
 ```json
-{ "plugins": [{ "package": "github:we-the-rebel-alliance/colab-plugin#v<version>", "options": { "access": "ask-changes" } }] }
+{ "plugins": [{ "package": "github:we-the-rebel-alliance/colab-plugin#v0.0.0", "options": { "access": "ask-changes" } }] }
 ```
 
 Two accounts, one read-only, and a runtime cap:
@@ -50,7 +50,7 @@ Two accounts, one read-only, and a runtime cap:
 ```json
 {
   "plugins": [{
-    "package": "github:we-the-rebel-alliance/colab-plugin#v<version>",
+    "package": "github:we-the-rebel-alliance/colab-plugin#v0.0.0",
     "options": {
       "accounts": { "work": { "access": "write" }, "personal": { "access": "read" } },
       "maxRuntimes": 1,
@@ -65,7 +65,7 @@ An Enterprise account with a project, region and output bucket:
 ```json
 {
   "plugins": [{
-    "package": "github:we-the-rebel-alliance/colab-plugin#v<version>",
+    "package": "github:we-the-rebel-alliance/colab-plugin#v0.0.0",
     "options": {
       "accounts": { "work": { "backend": "enterprise", "project": "my-project", "region": "us-central1", "outputBucket": "gs://my-notebooks/output" } }
     }
