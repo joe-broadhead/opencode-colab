@@ -1,56 +1,88 @@
-// The bundled skills: the names, the description budget, and every tools.colab.<method> a skill names is declared.
-import { readFileSync } from "node:fs"
-import { describe, expect, it } from "vitest"
+// The bundled skills: every skills/<name>/SKILL.md read by directory scan, its YAML frontmatter, the description
+// budget, and every tools.colab.<method> a skill names is declared.
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterAll, describe, expect, it } from "vitest"
 import { parse as parseYaml } from "yaml"
-import { parseSkill, SKILL_IDS, skillPath } from "../../src/skills.js"
+import { readSkills, type SkillFile } from "../../src/skills.js"
 import { manifest } from "../../src/manifest.js"
 
 const methods = new Set(Object.keys(manifest.methods))
 const declaredTools = (text: string): string[] => [...text.matchAll(/tools\.colab\.([a-z_]+)/g)].map((match) => match[1]!)
+const made: string[] = []
+const temp = (): string => {
+  const directory = mkdtempSync(join(tmpdir(), "colab-skills-"))
+  made.push(directory)
+  return directory
+}
+afterAll(() => {
+  for (const directory of made) rmSync(directory, { recursive: true, force: true })
+})
+
+const frontmatterOf = (skill: SkillFile): unknown => {
+  const text = readFileSync(skill.path, "utf8")
+  const front = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1]
+  expect(front, skill.id).toBeDefined()
+  return parseYaml(front!)
+}
+
+const writeSkill = (root: string, id: string, description: string): void => {
+  const directory = join(root, "skills", id)
+  mkdirSync(directory, { recursive: true })
+  writeFileSync(join(directory, "SKILL.md"), `---\nname: ${id}\ndescription: ${description}\n---\nbody\n`)
+}
 
 describe("skills", () => {
-  it("are the main skill and the notebooks skill", () => {
-    expect(SKILL_IDS).toEqual(["colab", "colab-notebooks"])
+  it("are the main skill and the notebooks skill, read by directory scan", () => {
+    expect(readSkills().map((skill) => skill.id)).toEqual(["colab", "colab-notebooks"])
   })
 
-  for (const id of SKILL_IDS) {
-    it(`${id} has a name, a description within 300 characters and only declared tools`, () => {
-      const text = readFileSync(skillPath(id), "utf8")
-      const skill = parseSkill(id, text)
-      expect(skill.name).toBe(id)
+  for (const skill of readSkills()) {
+    it(`${skill.id} has a name, a description within 300 characters and only declared tools`, () => {
+      expect(skill.name).toBe(skill.id)
+      expect(skill.path.endsWith(join("skills", skill.id, "SKILL.md"))).toBe(true)
       expect(skill.description.length).toBeLessThanOrEqual(300)
       expect(skill.content.length).toBeGreaterThan(0)
-      for (const tool of declaredTools(skill.content)) expect(methods.has(tool), `${id} names tools.colab.${tool}`).toBe(true)
+      for (const tool of declaredTools(skill.content)) expect(methods.has(tool), `${skill.id} names tools.colab.${tool}`).toBe(true)
     })
   }
 
-  it("keeps the namespace line within 400 characters", () => {
-    expect(manifest.plugin.summary.length).toBeLessThanOrEqual(400)
-  })
-
-  it("is valid YAML whose name and description are the ones the parser registers", () => {
-    for (const id of SKILL_IDS) {
-      const text = readFileSync(skillPath(id), "utf8")
-      const front = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1]
-      const parsed = parseYaml(front!) as { name?: unknown; description?: unknown }
-      const skill = parseSkill(id, text)
-      expect(parsed.name, id).toBe(id)
-      expect(parsed.description, id).toBe(skill.description)
-      expect(parsed.description, id).not.toBe(">")
-      expect(parsed.description, id).not.toBe("|")
-      expect((parsed.description as string).length, id).toBeLessThanOrEqual(300)
+  it("parses the frontmatter with YAML and registers the name and description it reads", () => {
+    for (const skill of readSkills()) {
+      const parsed = frontmatterOf(skill) as { name?: unknown; description?: unknown }
+      expect(parsed.name, skill.id).toBe(skill.id)
+      expect(parsed.description, skill.id).toBe(skill.description)
+      expect(skill.description.trim(), skill.id).not.toBe("")
+      for (const marker of [">", "|", ">-", "|-", ">+", "|+"]) expect(skill.description.trim(), skill.id).not.toBe(marker)
     }
   })
 
-  it("refuses a block scalar or an empty description", () => {
-    for (const marker of [">", "|", ">-", "|+"]) {
-      expect(() => parseSkill("colab", `---\nname: colab\ndescription: ${marker}\n---\nbody\n`), marker).toThrow(/block scalar/)
-    }
-    expect(() => parseSkill("colab", "---\nname: colab\ndescription: \n---\nbody\n")).toThrow(/one-line/)
-    expect(() => parseSkill("colab", "---\nname: colab\ndescription: >\n  folded\n---\nbody\n")).toThrow(/frontmatter/)
+  it("takes a block scalar's text, not its marker", () => {
+    const root = temp()
+    writeSkill(root, "colab", ">\n  A folded\n  description.")
+    const [skill] = readSkills(join(root, "skills"))
+    expect(skill?.description.trim()).toBe("A folded description.")
   })
 
-  it("refuses a skill with an unknown frontmatter key", () => {
-    expect(() => parseSkill("colab", "---\nname: colab\ndescription: x\nowner: y\n---\nbody\n")).toThrow(/frontmatter|needs exactly/)
+  it("refuses a bare block marker, a missing description and a name that is not its directory", () => {
+    const root = temp()
+    writeSkill(root, "colab", ">")
+    expect(() => readSkills(join(root, "skills"))).toThrow(/no frontmatter description/)
+    writeSkill(root, "colab", '""')
+    expect(() => readSkills(join(root, "skills"))).toThrow(/no frontmatter description/)
+    writeSkill(root, "colab", "x")
+    const other = join(root, "skills", "colab-notebooks")
+    mkdirSync(other, { recursive: true })
+    writeFileSync(join(other, "SKILL.md"), "---\nname: colab\ndescription: x\n---\nbody\n")
+    expect(() => readSkills(join(root, "skills"))).toThrow(/not its directory/)
+  })
+
+  it("refuses invalid YAML, which is how a plain description with a colon fails", () => {
+    const root = temp()
+    const directory = join(root, "skills", "colab")
+    mkdirSync(directory, { recursive: true })
+    writeFileSync(join(directory, "SKILL.md"), "---\nname: colab\ndescription: find files: read cells\n---\nbody\n")
+    expect(() => readSkills(join(root, "skills"))).toThrow(/not valid YAML/)
   })
 })

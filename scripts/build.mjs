@@ -22,4 +22,6 @@ await build({
   external,
   legalComments: "inline",
   logLevel: "warning",
+  // The YAML parser is CommonJS and reads `process` with require(); the bundle is ESM, so give it a real require.
+  banner: { js: `import { createRequire } from "node:module";\nconst require = createRequire(import.meta.url);` },
 })
