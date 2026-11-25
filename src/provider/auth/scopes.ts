@@ -32,10 +32,9 @@ export type Scope = (typeof SCOPES)[keyof typeof SCOPES]
 export const IDENTITY_SCOPES: readonly string[] = [SCOPES.openid, SCOPES.email]
 
 /**
- * The narrow Enterprise set design §4 allows *instead of* cloud-platform, only if live check L3 shows the Vertex
- * notebook methods accept `aiplatform` + `devstorage.read_only`. TODO(L3): switch `enterpriseScopes` to this set when
- * L3 passes; until then cloud-platform is the only documented scope and a read Enterprise account warns
- * SCOPE_WIDER_THAN_ACCESS.
+ * The narrow Enterprise set design §4 allows *instead of* cloud-platform, when the Vertex notebook methods accept
+ * `aiplatform` + `devstorage.read_only`. Until that is confirmed against a live project, cloud-platform is the only
+ * documented scope and a read Enterprise account warns SCOPE_WIDER_THAN_ACCESS.
  */
 export const ENTERPRISE_NARROW_SCOPES: readonly string[] = [SCOPES.aiplatform, SCOPES.devstorageReadOnly]
 

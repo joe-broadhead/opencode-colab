@@ -14,6 +14,9 @@
     "url": "https://github.com/we-the-rebel-alliance/colab-plugin/issues"
   },
   "repository": "github:we-the-rebel-alliance/colab-plugin",
+  "engines": {
+    "node": ">=24"
+  },
   "license": "MIT",
   "type": "module",
   "exports": {

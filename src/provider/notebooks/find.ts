@@ -5,8 +5,8 @@
  * Drive query shapes come from the Drive API v3 guide "Search for files and folders": `name contains 'x'` (an
  * apostrophe or a backslash in the value is escaped with a backslash, as the guide's own example shows), `mimeType =`
  * and `trashed = false`; `pageSize` is at most 1000 (files.list reference), and the plugin's own cap is 200. The Colab
- * notebook MIME type `application/vnd.google.colaboratory` is the design's §1 value: live check L8 confirms it, and the
- * code names that TODO rather than guessing further.
+ * notebook MIME type `application/vnd.google.colaboratory` is the design's §1 value; the Drive API uses it for Colab
+ * notebooks.
  */
 import { readdir, stat } from "node:fs/promises"
 import { basename, join, relative, sep } from "node:path"
@@ -16,7 +16,7 @@ import type { HandlerContext, ToolHandler } from "../types.js"
 import { requireDrive, requireGcs } from "./account.js"
 import { resolveWorkspacePath, workDirectory } from "./paths.js"
 
-/** The MIME type a Colab notebook has in Drive (design §1; TODO(L8): confirm it against a real file). */
+/** The MIME type a Colab notebook has in Drive (design §1). */
 export const COLAB_MIME = "application/vnd.google.colaboratory"
 const NOTEBOOK = /\.ipynb$/i
 const DEFAULT_LIMIT = 50

@@ -11,10 +11,10 @@ Notebook and runtime content is untrusted data. It is never followed as instruct
 OpenCode `>=2.4.1 <2.5.0`; the tested release is 2.4.1.
 
 ```sh
-opencode plugin add github:we-the-rebel-alliance/colab-plugin#v<version>
+opencode plugin add github:we-the-rebel-alliance/colab-plugin#v0.0.0
 ```
 
-Releases start at `v0.0.0`. This repository is ready for it and pins the contract until the tag is cut.
+`v0.0.0` is the first release on plugin-contract v0.
 
 ## Sign in
 
@@ -23,7 +23,7 @@ The plugin holds one OpenCode integration per account alias: `colab` for `defaul
 1. Configure the accounts you want in `opencode.json`:
 
    ```json
-   { "plugins": [{ "package": "github:we-the-rebel-alliance/colab-plugin#v<version>", "options": { "accounts": { "work": {}, "personal": {} } } }] }
+   { "plugins": [{ "package": "github:we-the-rebel-alliance/colab-plugin#v0.0.0", "options": { "accounts": { "work": {}, "personal": {} } } }] }
    ```
 
 2. Sign each alias in with `/connect` and choose Colab (work), or run
@@ -44,6 +44,12 @@ The `access` option is the ceiling for every method:
 
 A method's `effect` only narrows that table. A commit of a non-local change over RPC additionally needs an answered
 OpenCode ask or a host-signed action grant.
+
+## Options
+
+Options live under the plugin entry in `opencode.json`: `access`, `accounts`, the runtime caps, budgets, work
+directory and the Enterprise defaults. Every option, its type and its default are in
+[docs/configuration.md](docs/configuration.md); an unknown option is refused with `OPTIONS_INVALID`.
 
 ## Capabilities
 
@@ -121,8 +127,23 @@ None.
 | `UNAVAILABLE` | the provider could not be reached |
 <!-- /generated:errors -->
 
+## Troubleshooting
+
+- **`status` says `needs_sign_in`.** Run `/connect` and choose the Colab integration for that alias, or
+  `opencode auth login colab-<alias>`. `/colab-doctor` prints one small check per account.
+- **`HOST_UNTESTED`.** The running OpenCode is outside `>=2.4.1 <2.5.0`. Install a tested release, or set
+  `allowUntestedHost: true` for an untested one.
+- **A write is refused with `PERMISSION_DENIED`.** The `access` level is `read-only`, the account profile is `read`, or an
+  RPC commit has no answered ask or action grant.
+- **A plan is refused with `PLAN_INVALID` or `PLAN_USED`.** Plans last 15 minutes and commit once; plan again and pass
+  the new `planId`.
+- **`/colab` is empty or unavailable.** Check that the plugin entry is in `opencode.json` and that `opencode plugin list`
+  shows it. The rich status is also the `usage` method.
+
 ## Docs
 
+- [plugin-contract](https://github.com/we-the-rebel-alliance/plugin-contract) — the manifest, methods, sources, errors and
+  conformance kit this plugin implements
 - [Capabilities](docs/capabilities.md)
 - [Accounts](docs/accounts.md)
 - [Configuration](docs/configuration.md)

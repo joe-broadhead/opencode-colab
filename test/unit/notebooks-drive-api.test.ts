@@ -169,7 +169,7 @@ describe("the Drive API client", () => {
     let answer = 0
     const { env, calls } = scripted(() => {
       answer += 1
-      // TODO(L8): the cap's exact reason is unrecorded; this fixture stands in for it.
+      // The cap's exact reason is not recorded; this fixture stands in for it.
       if (answer === 1) return json({ id: "rev-1", keepForever: true })
       return json({ error: { code: 403, errors: [{ reason: "revisionLimitExceeded", message: "The maximum number of 200 revisions has been reached." }] } }, 403)
     })

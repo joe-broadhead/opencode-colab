@@ -112,7 +112,7 @@ describe("Application Default Credentials (design §4)", () => {
     expect(String((failure as Error).message)).toContain("roles/iam.serviceAccountTokenCreator")
   })
 
-  it("§15.1 auth — a Workload Identity Federation credential file is refused by name (TODO L3)", async () => {
+  it("§15.1 auth — a Workload Identity Federation credential file is refused by name", async () => {
     const file = JSON.stringify({ type: "external_account", audience: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/x", subject_token_type: "urn:ietf:params:oauth:token-type:jwt", token_url: "https://sts.googleapis.com/v1/token" })
     const failure = await adcToken({ scopes: [SCOPES.cloudPlatform], environment: { env: { GOOGLE_APPLICATION_CREDENTIALS: "/wif.json" }, readFile: () => file, fetch: new FakeHttp().fetch, now: () => NOW } }).catch((error: unknown) => error)
     expect(failure).toMatchObject({ code: "ADC_UNAVAILABLE" })

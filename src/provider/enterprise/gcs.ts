@@ -9,8 +9,8 @@
  *   https://cloud.google.com/storage/docs/json_api/v1/objects/get
  *
  * The job's `gcsOutputUri` names a bucket only ("Format: gs://bucket-name", Vertex v1 discovery 20261107); where a run
- * writes its output notebook inside that bucket is not documented. L10 records the layout; until then capture lists the
- * bucket for `.ipynb` objects written at or after the job's create time (src/enterprise/capture.ts, TODO(L10)).
+ * writes its output notebook inside that bucket is not documented. Capture therefore lists the bucket for `.ipynb`
+ * objects written at or after the job's create time (src/enterprise/capture.ts).
  */
 import type { PortEnv } from "../index.js"
 import { ColabError } from "../../domain/errors.js"

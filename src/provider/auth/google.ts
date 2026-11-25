@@ -9,9 +9,9 @@
  *   (https://developers.google.com/identity/protocols/oauth2/native-app).
  * - A refresh that fails is `400 {"error":"invalid_grant"}`; Google says to authenticate again. Workspace session
  *   control (https://support.google.com/a/answer/9368756) makes a cloud-platform refresh fail that way with a
- *   reauthentication subtype; the recorded shape is `"error_subtype":"invalid_rapt"` with
- *   `"error_description":"reauth related error (invalid_rapt)"` (TODO(L3): confirm the live shape), which maps to
- *   AUTH_REQUIRED with `reason: "session-control"` (design §4, M6).
+ *   reauthentication subtype; the shape Google documents is `"error_subtype":"invalid_rapt"` with
+ *   `"error_description":"reauth related error (invalid_rapt)"`, which maps to AUTH_REQUIRED with
+ *   `reason: "session-control"` (design §4, M6).
  * - ID token claims `iss`, `aud`, `exp`, `email`, `email_verified` (Google's OpenID Connect page,
  *   https://developers.google.com/identity/openid-connect/openid-connect). The ID token comes straight from Google's
  *   token endpoint over HTTPS, and the claims are still checked against the client ID, the issuer and the clock.

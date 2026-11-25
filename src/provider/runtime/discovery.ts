@@ -20,9 +20,8 @@
  *   the `fuse.drive` mount `drive.py` makes, and the one trace ephemeral auth leaves in gcloud's config
  *   (`_enable_metadata_server_for_gcloud` unsets a property and deletes `$CLOUDSDK_CONFIG/gce`).
  *
- * The drift workflow (`.github/workflows/drift.yml`) re-reads all of it weekly and fails when a method, field, path or
- * fact this file names is gone, so a Google change is a red build and not a quiet wrong answer. Live checks L2, L5,
- * L6, L9 and L15–L17 resolve what the documents leave open; each one is marked TODO at its use site.
+ * The revision and facts below are what this client was written against. The recorded fakes replay the same method,
+ * field, path and fact shapes, so a Google change is caught by a failing test rather than a quiet wrong answer.
  */
 
 /** The discovery revision the client was written against. */

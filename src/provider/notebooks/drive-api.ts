@@ -411,7 +411,7 @@ export class HttpDriveApi implements DriveApi {
       await response.body?.cancel().catch(() => undefined)
       return true
     } catch (error) {
-      // TODO(L8): record Drive's exact answer at the 200-revision cap. The cap is also counted at preview through
+      // Drive's exact answer at the 200-revision cap is not recorded. The cap is also counted at preview through
       // revisions.list, so this fallback is not the only signal; a refusal that names the limit is "not pinned".
       if (ColabError.is(error) && /revision/i.test(error.message) && /(200|limit|maximum)/i.test(error.message)) return false
       throw error
