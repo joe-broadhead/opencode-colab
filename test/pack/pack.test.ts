@@ -153,6 +153,15 @@ describe("the packed tarball", () => {
     run("npm", ["run", "bundle"])
     const [packed] = JSON.parse(run("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", WORK])) as [{ filename: string }]
     const tarball = join(WORK, packed.filename)
+    const entries = run("tar", ["-tzf", tarball])
+      .split("\n")
+      .filter(Boolean)
+      .map((entry) => entry.replace(/^package\//, ""))
+    expect(entries).toContain("dist/index.js")
+    expect(entries).toContain("NOTICE")
+    expect(entries.some((entry) => entry.startsWith("skills/"))).toBe(true)
+    expect(entries.some((entry) => entry.startsWith("docs/"))).toBe(false)
+    expect(entries).not.toContain("CHANGELOG.md")
 
     const source = join(WORK, "source")
     mkdirSync(source, { recursive: true })
@@ -165,7 +174,7 @@ describe("the packed tarball", () => {
       capabilities: { plugin: { name: string }; methods: Record<string, unknown> }
     }
     expect(pkg.exports["./server"]).toBe("./dist/index.js")
-    expect(pkg.files).toContain("dist")
+    expect([...pkg.files].sort()).toEqual(["LICENSE", "NOTICE", "README.md", "assets", "dist", "skills"].sort())
     expect(pkg.dependencies).toBeUndefined()
     expect(pkg.peerDependencies).toBeUndefined()
     expect(Object.keys(pkg.capabilities.methods)).toHaveLength(24)

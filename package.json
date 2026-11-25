@@ -26,11 +26,9 @@
     "dist",
     "skills",
     "assets",
-    "docs",
     "README.md",
     "LICENSE",
-    "NOTICE",
-    "CHANGELOG.md"
+    "NOTICE"
   ],
   "scripts": {
     "check": "npm run lint && npm run typecheck && npm run bundle && npm run test && npx plugin-kit check && npm run test:pack",
