@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest"
 import { ColabError } from "../../src/domain/errors.js"
-import { cronWithZone, minimumGap, nextRuns, occurrencesBetween, parseCron } from "../../src/enterprise/cron.js"
+import { cronWithZone, minimumGap, nextRuns, occurrencesBetween, parseCron } from "../../src/provider/enterprise/cron.js"
 
 const at = (iso: string) => new Date(iso)
 

@@ -164,8 +164,8 @@ describe("capture", () => {
       iopub("status", { execution_state: "idle" }),
     ])
     const failure = (await result) as { state: string; error: string; message: string; next: string }
-    expect(failure.state).toBe("failed")
-    expect(failure.error).toBe("COLAB_UI_API")
+    expect(failure.state).toBe("refused")
+    expect(failure.error).toBe("INPUT_INVALID")
     expect(failure.next).toContain("colab_upload")
     expect(failure.next).toContain(".colab/runs/")
     const runs = await fakes.ledger.listRuns({ account: "default" })

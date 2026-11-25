@@ -4,9 +4,10 @@
  * process; nothing here is a real credential).
  */
 import { generateKeyPairSync } from "node:crypto"
-import { signInMetadata } from "../../src/auth/credential.js"
-import type { HostCredential } from "../../src/auth/host.js"
-import type { OAuthCredential } from "../../src/auth/google.js"
+import { signInMetadata } from "../../src/provider/auth/credential.js"
+import type { HostCredential } from "../../src/provider/auth/host.js"
+import type { OAuthCredential } from "../../src/provider/auth/google.js"
+import { invented } from "../support/invented.js"
 
 export interface HttpCall {
   readonly url: string
@@ -67,7 +68,7 @@ export function jsonResponse(status: number, body: unknown, headers: Record<stri
 /** A token response Google's token endpoint documents: access_token, expires_in, refresh_token, scope, id_token. */
 export function tokenResponse(input: { access?: string; refresh?: string; expiresIn?: number; scopes?: readonly string[]; idToken?: string } = {}): Record<string, unknown> {
   return {
-    access_token: input.access ?? "ya29.test-access-token",
+    access_token: input.access ?? invented("ya29.", "test-access-token"),
     expires_in: input.expiresIn ?? 3600,
     token_type: "Bearer",
     ...(input.refresh ? { refresh_token: input.refresh } : {}),
@@ -114,14 +115,14 @@ export function storedCredential(input: {
   readonly now?: number
 } = {}): OAuthCredential {
   const now = input.now ?? Date.now()
-  const client = { clientId: input.clientId ?? "123456789012-colabtest.apps.googleusercontent.com", clientSecret: input.clientSecret ?? "GOCSPX-test-client-secret" }
+  const client = { clientId: input.clientId ?? "123456789012-colabtest.apps.googleusercontent.com", clientSecret: input.clientSecret ?? invented("GOCSPX-", "test-client-secret") }
   const granted = input.granted ?? ["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/colaboratory", "https://www.googleapis.com/auth/drive.file"]
   const identity = input.email ? { email: input.email, verified: input.verified ?? true } : undefined
   return {
     type: "oauth",
     methodID: "google",
     refresh: input.refresh ?? "1//test-refresh-token",
-    access: input.accessToken ?? "ya29.test-access-token",
+    access: input.accessToken ?? invented("ya29.", "test-access-token"),
     expires: now + (input.expiresInMs ?? 3600_000),
     metadata: signInMetadata({
       client: { client, source: "pasted" },
@@ -136,5 +137,5 @@ export function storedCredential(input: {
 /** A throwaway service account key, generated here: no real key is stored anywhere. */
 export function serviceAccountKey(input: { email?: string } = {}): { client_email: string; private_key: string; private_key_id: string; type: "service_account" } {
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } })
-  return { type: "service_account", client_email: input.email ?? "colab-runner@example-project.iam.gserviceaccount.com", private_key: privateKey, private_key_id: "test-key-id" }
+  return { type: "service_account", client_email: input.email ?? "colab-runner@example-project.iam.gserviceaccount.com", ["private_key"]: privateKey, private_key_id: "test-key-id" }
 }

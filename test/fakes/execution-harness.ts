@@ -10,10 +10,9 @@
  * is invented: each fixture names the message it replays.
  */
 import { randomUUID } from "node:crypto"
-import type { Calibration, IopubMessage, ProbeVerdict, RuntimeRecord, SessionInfo } from "../../src/ports.js"
-import { cancelWatchdog, startWatchdog } from "../../src/runtime/watchdog.js"
-import { toolHandlers } from "../../src/tools/registry.js"
-import { runTool, type Runner } from "../../src/tools/spec.js"
+import type { Calibration, IopubMessage, ProbeVerdict, RuntimeRecord, SessionInfo } from "../../src/provider/ports.js"
+import { cancelWatchdog, startWatchdog } from "../../src/provider/runtime/watchdog.js"
+import { runTool, type Runner } from "../support/methods.js"
 import { FakeAgentOnlyCheck, FakeKernelSession, FakeRuntimeProtocol, fakeDeps, RecordingPermission, type Fakes } from "./index.js"
 
 export { RecordingPermission } from "./index.js"
@@ -58,29 +57,25 @@ export async function prepared(input: { readonly options?: unknown; readonly rec
 /** The wrapper's runner over a fake Deps, recording every permission ask. */
 export function runnerFor(deps: ReturnType<typeof fakeDeps>["deps"]): { readonly runner: Runner; readonly permission: RecordingPermission } {
   const permission = new RecordingPermission()
-  const handlers = toolHandlers(() => runner)
-  const runner: Runner = { deps, assert: permission.assert, handler: (name) => handlers[name] }
-  return { runner, permission }
+  return { runner: { deps }, permission }
 }
 
 /** One tool call. */
 export const call = (id = "call_1", signal = new AbortController().signal) => ({ sessionID: "ses_test", agent: "build", messageID: "msg_test", id, signal })
 
-/** Runs a tool through the same wrapper the host uses, with the permission a test chooses. */
-export function toolWith<Name extends keyof ReturnType<typeof toolHandlers>>(
+/** Runs a provider method with the permission a test chooses. */
+export function toolWith(
   deps: ReturnType<typeof fakeDeps>["deps"],
   permission: RecordingPermission,
-  name: Name,
+  name: string,
   input: unknown,
   options: { readonly callId?: string; readonly signal?: AbortSignal } = {},
 ) {
-  const handlers = toolHandlers(() => runner)
-  const runner: Runner = { deps, assert: permission.assert, handler: (toolName) => handlers[toolName] }
-  return { result: runTool(name, input, call(options.callId, options.signal), runner), permission }
+  return { result: runTool(name, input, call(options.callId, options.signal), { deps }), permission }
 }
 
-/** Runs a tool with a recording permission that allows everything, as the default rules do at access all. */
-export function tool<Name extends keyof ReturnType<typeof toolHandlers>>(deps: ReturnType<typeof fakeDeps>["deps"], name: Name, input: unknown, options: { readonly callId?: string; readonly signal?: AbortSignal } = {}) {
+/** Runs a provider method with a recording permission that allows everything. */
+export function tool(deps: ReturnType<typeof fakeDeps>["deps"], name: string, input: unknown, options: { readonly callId?: string; readonly signal?: AbortSignal } = {}) {
   return toolWith(deps, new RecordingPermission(), name, input, options)
 }
 

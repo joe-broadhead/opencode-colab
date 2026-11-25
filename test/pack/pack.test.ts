@@ -1,383 +1,274 @@
-// Pack, install and load the published shape, after opencode-metaview's pack test. The tarball holds exactly the files
-// whitelist and installs with lifecycle scripts disabled. Installed alone, it loads in the one stock OpenCode release it
-// is tested on (TESTED_HOSTS: 2.4.1), which provides @opencode/plugin, OpenTUI and Solid itself; next to those packages,
-// both entry points also import under Bun. OPENCODE_BIN_2_4_1 names the stock binary; otherwise that release is
-// installed with npm, once per run. Every temp folder is a git repository under the system's /tmp, never under TMPDIR
-// or HOME, so OpenCode's upward search for `.opencode` folders never reaches the agents of whoever runs the test. Each
-// stock host runs offline: anything it tries off the machine goes to a closed port. PACK_TARBALL names a tarball that
-// was already packed, such as the one a release publishes, to test it instead.
-import { afterAll, describe, expect, test } from "bun:test"
-import { spawn, spawnSync } from "node:child_process"
-import { randomUUID } from "node:crypto"
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+/**
+ * The packed tarball and the real install path:
+ *
+ * 1. `npm pack` holds the package whitelist, no runtime dependencies and the server export.
+ * 2. A temp git checkout of the tarball's contents is installed with the real `opencode` 2.4.1 CLI
+ *    (`opencode plugin add git+file://…#v0.0.0`) in an isolated HOME, and `opencode plugin list` shows it.
+ * 3. The installed package in the CLI's cache is loaded by the contract's real embedded host, which answers `status`
+ *    and lists the registered tools.
+ * 4. The real 2.4.1 CLI service starts on a free port in the same isolated HOME and, after one session activates the
+ *    plugin for an empty git project, `/api/skill` and `/api/command` answer with what the plugin registered. The
+ *    project has no `skills/` folder of its own, so the ids can only come from the plugin.
+ */
+import { execFileSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
-import { arch, platform } from "node:os"
-import { basename, join, relative, resolve, sep } from "node:path"
-import { fileURLToPath } from "node:url"
-import { PLUGIN_ID, SUPPORTED_HOST, TESTED_HOSTS } from "../../src/constants.js"
-import { type Rule } from "../../src/permissions.js"
-import { METHOD_NAMES, surfaceRules } from "../../src/editing/tools.js"
-import { SKILL_IDS } from "../../src/skills.js"
-const TOOLS_RPC_ID = `${PLUGIN_ID}.tools`
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { pathToFileURL, fileURLToPath } from "node:url"
+import { afterAll, describe, expect, test } from "vitest"
+import { parse as parseYaml } from "yaml"
 
-const root = fileURLToPath(new URL("../..", import.meta.url))
-const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
-  name: string
-  version: string
-  files: string[]
-  exports: Record<string, string | { default: string }>
-  devDependencies: Record<string, string>
-  dependencies?: unknown
-  peerDependencies?: unknown
-  sources?: unknown
-  jelly?: { signIns?: unknown }
-}
-// Outside the repository, so nothing resolves from the repository's own node_modules.
-const work = realpathSync(mkdtempSync(join(realpathSync("/tmp"), "colab-pack-")))
-// A repository root, where OpenCode's search for `.opencode` folders and project config stops.
-run("git", ["init", "--quiet", work], root)
-// Removing the installed packages and binaries can take longer than the default hook timeout.
-afterAll(() => rmSync(work, { recursive: true, force: true }), { timeout: 120_000 })
+const ROOT = fileURLToPath(new URL("../../", import.meta.url))
+const WORK = mkdtempSync(join(tmpdir(), "colab-pack-"))
+afterAll(() => rmSync(WORK, { recursive: true, force: true }))
 
-const MAX_FILES = 30
-// 192 KiB: raised from the scaffold's 150 KiB when packages E and D landed together (the tarball was 159 KiB). The
-// family's multi-package plugins use 320 KiB (BigQuery) and 400 KiB (Databricks); this keeps a margin without drifting.
-const MAX_PACKED_BYTES = 192 * 1024
-// The two self-contained entry bundles, and nothing else, in dist/.
-const DIST = ["dist/index.js", "dist/tui.js"]
-// Modules the host serves to plugins at runtime. Everything else must be inlined in the bundle.
-const SERVER_HOST_MODULES = [/^node:/, /^@opencode\/plugin(?:\/|$)/]
-const TUI_HOST_MODULES = [/^node:/, /^@opencode\/plugin(?:\/|$)/, /^@opentui\//, /^solid-js(?:\/|$)/]
-// The host packages OpenCode 2.4.1 ships; the versions come from devDependencies.
-const HOST_PACKAGES = ["@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"]
-// OpenCode's own agents.
-const BUILT_IN_AGENTS = ["build", "general", "explore", "compaction", "title", "summary", "plan"]
-// Anything a stock host tries on the network goes to a closed port, except loopback.
-const OFFLINE = {
-  HTTP_PROXY: "http://127.0.0.1:9",
-  HTTPS_PROXY: "http://127.0.0.1:9",
-  http_proxy: "http://127.0.0.1:9",
-  https_proxy: "http://127.0.0.1:9",
-  NO_PROXY: "127.0.0.1,localhost",
-  no_proxy: "127.0.0.1,localhost",
-  OPENCODE_DISABLE_MODELS_FETCH: "true",
-  OPENCODE_DISABLE_AUTOUPDATE: "true",
-  OPENCODE_DISABLE_FREE_MODELS: "true",
-}
+const run = (command: string, args: readonly string[], cwd = ROOT, env: NodeJS.ProcessEnv = process.env) =>
+  execFileSync(command, args, { cwd, encoding: "utf8", env: { ...env, npm_config_update_notifier: "false" } })
 
-type Packed = { filename: string; size: number; entryCount: number; files: { path: string }[] }
-
-let packed: Packed | undefined
-function pack(): Packed {
-  if (packed) return packed
-  const given = process.env.PACK_TARBALL
-  if (given) {
-    const tarball = resolve(given)
-    copyFileSync(tarball, join(work, basename(tarball)))
-    const files = run("tar", ["-tzf", tarball], root).trim().split("\n").filter((path) => !path.endsWith("/")).map((path) => ({ path: path.replace(/^package\//, "") }))
-    packed = { filename: basename(tarball), size: statSync(tarball).size, entryCount: files.length, files }
-    return packed
+function opencodeBinary(): string {
+  const given = process.env.OPENCODE_BIN_2_4_1 ?? process.env.OPENCODE_BIN
+  if (given) return given
+  try {
+    if (run("opencode", ["--version"]).trim() === "opencode v2.4.1") return "opencode"
+  } catch {
+    // fall through to the npm-installed stock binary
   }
-  // Build first, explicitly: the package has no prepare or prepack hook, and a stale dist/ must never be packed.
-  run("node", [join(root, "scripts", "check.mjs"), "build"], root)
-  packed = (JSON.parse(run("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", work], root)) as Packed[])[0]!
-  return packed
+  const stock = join(WORK, "stock")
+  run("npm", ["install", "--prefix", stock, "--ignore-scripts", "--no-audit", "--no-fund", "@opencode/cli@2.4.1"])
+  return join(stock, "node_modules", `@opencode/cli-${process.platform}-${process.arch}`, "bin", "opencode")
 }
 
-/** An empty project with its own package.json, so npm never walks up to another one. */
-function project(name: string): string {
-  const dir = join(work, name)
-  mkdirSync(dir)
-  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: `colab-pack-${name}`, private: true, type: "module" }))
-  return dir
-}
-
-const installs = new Map<string, string>()
-/** The tarball installed with scripts disabled, alone or next to the host packages. */
-function install(withHostPackages: boolean): string {
-  const name = withHostPackages ? "with-host-packages" : "alone"
-  const existing = installs.get(name)
-  if (existing) return existing
-  const dir = project(name)
-  const hosts = withHostPackages ? HOST_PACKAGES.map((item) => `${item}@${pkg.devDependencies[item]}`) : []
-  run("npm", ["install", join(work, pack().filename), ...hosts, "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline"], dir)
-  installs.set(name, dir)
-  return dir
-}
-
-const installedPackage = (withHostPackages: boolean) => join(install(withHostPackages), "node_modules", ...pkg.name.split("/"))
-
-/** Calls a read tool through the tools RPC as a session of the build agent. */
-async function callRead(host: Awaited<ReturnType<typeof serve>>, method = "find", input = {}): Promise<{ status: number; text: string }> {
-  const { data } = await host.api<{ data: { id: string } }>("POST", "/api/session", { title: "pack test", agent: "build", location: { directory: host.directory } })
-  return host.raw("POST", `/api/rpc/${TOOLS_RPC_ID}/${method}`, { input: { sessionID: data.id, input } })
-}
-
-
-/** A home, OpenCode's test home, XDG folders and a temp folder, all inside `base`. */
-function isolated(base: string) {
+function isolated(base: string): NodeJS.ProcessEnv {
   const home = join(base, "home")
+  // The test process runs inside an OpenCode session; its OPENCODE* variables would point the stock CLI at that
+  // session's service instead of the isolated HOME. Keep only the base environment a runner needs.
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ["PATH", "LANG", "TZ", "TERM", "SystemRoot", "ComSpec", "PATHEXT", "WINDIR"].includes(key)))
   const env = {
+    ...baseEnv,
     HOME: home,
-    OPENCODE_TEST_HOME: home,
     XDG_CONFIG_HOME: join(home, ".config"),
     XDG_DATA_HOME: join(home, ".local", "share"),
     XDG_CACHE_HOME: join(home, ".cache"),
     XDG_STATE_HOME: join(home, ".local", "state"),
     TMPDIR: join(base, "tmp"),
   }
-  for (const dir of Object.values(env)) mkdirSync(dir, { recursive: true })
+  for (const dir of [home, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.XDG_STATE_HOME, env.TMPDIR]) mkdirSync(dir, { recursive: true })
   return env
 }
 
-const target = (entry: string | { default: string }) => (typeof entry === "string" ? entry : entry.default).replace(/^\.\//, "")
+const PACKAGE = "@we-the-rebel-alliance/colab-plugin"
 
-describe("package tarball", () => {
-  test("lists exactly the files whitelist, under the size and file limits", () => {
-    const { files, entryCount, size } = pack()
-    const paths = files.map((file) => file.path).sort()
-    expect(paths).toEqual(["package.json", ...pkg.files.flatMap((entry) => whitelisted(entry))].sort())
-    expect(entryCount).toBeLessThan(MAX_FILES)
-    expect(size).toBeLessThanOrEqual(MAX_PACKED_BYTES)
-    expect(paths.filter((path) => path.includes("node_modules/") || /\.(?:tsx|jsx)$/.test(path))).toEqual([])
-    for (const entry of Object.values(pkg.exports)) expect(paths).toContain(target(entry))
-    expect(paths.filter((path) => path.endsWith(".d.ts"))).toEqual([])
-  }, 120_000)
+/** The 24 effective tool ids of the v0.0.0 surface. */
+const TOOL_IDS = [
+  "colab_status",
+  "colab_probe",
+  "colab_usage",
+  "colab_specs",
+  "colab_runtimes",
+  "colab_find",
+  "colab_notebook",
+  "colab_files",
+  "colab_execution",
+  "colab_jobs",
+  "colab_schedules",
+  "colab_events_list",
+  "colab_runtimes_read",
+  "colab_plan_write",
+  "colab_plan_delete",
+  "colab_edit",
+  "colab_run",
+  "colab_cancel",
+  "colab_upload",
+  "colab_download",
+  "colab_pause",
+  "colab_write",
+  "colab_delete",
+  "colab_cleanup",
+]
 
-  test("declares no runtime or peer dependency", () => {
-    expect(pkg.dependencies).toBeUndefined()
-    expect(pkg.peerDependencies).toBeUndefined()
-  }, 300_000)
+/** The pre-4a surface's 20 tools; `colab_plan` is the one the contract split in two. */
+const OLD_TOOL_IDS = [
+  "colab_status",
+  "colab_specs",
+  "colab_runtimes",
+  "colab_find",
+  "colab_notebook",
+  "colab_files",
+  "colab_execution",
+  "colab_jobs",
+  "colab_schedules",
+  "colab_plan",
+  "colab_events_list",
+  "colab_runtimes_read",
+  "colab_edit",
+  "colab_run",
+  "colab_cancel",
+  "colab_upload",
+  "colab_download",
+  "colab_pause",
+  "colab_write",
+  "colab_delete",
+]
 
-  test("installed manifest has no source declaration or sign-in", () => {
-    const installed = JSON.parse(readFileSync(join(installedPackage(false), "package.json"), "utf8")) as typeof pkg
-    expect(installed).not.toHaveProperty("sources")
-    expect(installed.jelly).not.toHaveProperty("signIns")
-  })
-
-  test("installs with scripts disabled and loads both entry points under Bun, next to the host packages", () => {
-    const consumer = install(true)
-    const probe = join(consumer, "probe.mjs")
-    writeFileSync(probe, [
-      "const out = {}",
-      `for (const [part, specifier] of [["server", ${JSON.stringify(pkg.name)}], ["tui", ${JSON.stringify(`${pkg.name}/tui`)}]]) {`,
-      "  const plugin = (await import(specifier)).default",
-      "  out[part] = { id: plugin?.id, setup: typeof plugin?.setup }",
-      "}",
-      "console.log(JSON.stringify(out))",
-    ].join("\n"))
-    const output = run(process.execPath, [probe], consumer, { PATH: process.env.PATH, ...isolated(join(work, "bun-probe")) })
-    expect(JSON.parse(output.trim().split("\n").at(-1)!)).toEqual({
-      server: { id: PLUGIN_ID, setup: "function" },
-      tui: { id: `${PLUGIN_ID}.tui`, setup: "function" },
-    })
-  }, 300_000)
-
-  // OpenCode reloads a plugin in place and reuses the module records it holds for unchanged paths, so an entry that
-  // imported a sibling module could get an older cached copy of it. Each entry must stand alone.
-  test("dist holds only the two entry bundles, and they import no sibling module", () => {
-    const dist = join(installedPackage(true), "dist")
-    expect(tree(relative(root, dist), dist).sort()).toEqual(["index.js", "tui.js"])
-    for (const file of ["index.js", "tui.js"]) expect(relativeImports(readFileSync(join(dist, file), "utf8"))).toEqual([])
-  }, 300_000)
-
-  test("dist imports only modules the host provides", () => {
-    const dist = join(installedPackage(true), "dist")
-    expect(foreign(join(dist, "index.js"), SERVER_HOST_MODULES)).toEqual([])
-    expect(foreign(join(dist, "tui.js"), TUI_HOST_MODULES)).toEqual([])
-  }, 300_000)
-})
-
-describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) => {
-  test("is active, adds the default rules, answers status and describes its tools RPC", async () => {
-    const installed = installedPackage(false)
-    const host = await serve(version, installed)
-    try {
-      const plugin = await host.until("the plugin finishes loading", async () => {
-        const { data } = await host.api<{ data: { id: string; state: { status: string } }[] }>("GET", "/api/plugin")
-        const found = data.find((item) => item.id === PLUGIN_ID)
-        return found && found.state.status !== "loading" ? found : undefined
-      })
-      expect(plugin.state).toEqual({ status: "active" })
-
-      const build = await host.until("the build agent has the default rules", async () => {
-        const { data } = await host.api<{ data: { id: string; permissions: Rule[] }[] }>("GET", "/api/agent")
-        const permissions = data.find((agent) => agent.id === "build")?.permissions
-        return permissions?.some((rule) => rule.action === "colab.*") ? permissions : undefined
-      })
-      const rules = surfaceRules()
-      const base = build.findIndex((rule) => rule.action === "*" && rule.resource === "*" && rule.effect === "allow")
-      expect(base).toBeGreaterThanOrEqual(0)
-      expect(build.slice(base + 1, base + 1 + rules.length)).toEqual(rules)
-
-      const { output } = await host.api<{ output: Record<string, unknown> }>("POST", `/api/rpc/${PLUGIN_ID}/status`, { input: {} })
-      expect(output).toMatchObject({
-        version: pkg.version,
-        access: "all",
-        surface: "editing",
-        accounts: [],
-        tools: { registered: 3 },
-        cost: { runtimeHoursToday: 0, runtimesRunning: 0 },
-        automation: "off",
-        unguardedAgents: ["reviewer"],
-        host: { version, range: SUPPORTED_HOST, tested: true },
-      })
-      expect(output).not.toHaveProperty("problems")
-      expect(output).not.toHaveProperty("shadowedSkills")
-
-      // Only the two local reads answer with no model.
-      const { output: described } = await host.api<{ output: { id: string; methods: { name: string }[] } }>("POST", `/api/rpc/${TOOLS_RPC_ID}/describe`, { input: {} })
-      expect(described.id).toBe(TOOLS_RPC_ID)
-      expect(described.methods.map((method) => method.name)).toEqual([...METHOD_NAMES])
-
-      const read = await callRead(host)
-      expect(read.status).toBe(200)
-      expect(JSON.parse(read.text)).toMatchObject({ output: { state: "ok", notebooks: [] } })
-      const path = "example.ipynb"
-      const fixture = '{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[]}'
-      writeFileSync(join(host.directory, path), fixture)
-      const notebook = await callRead(host, "notebook", { notebook: { path } })
-      expect(notebook.status).toBe(200)
-      expect(JSON.parse(notebook.text)).toMatchObject({ output: { state: "ok", trust: "untrusted", nbformat: "4.5", cells: [] } })
-      expect(readFileSync(join(host.directory, path), "utf8")).toBe(fixture)
-      for (const absent of ["edit", "run", "probe", "events_list", "runtimes_read"]) {
-        const result = await callRead(host, absent)
-        expect(result.status).toBe(400)
-        expect(result.text).toMatch(/unknown|not found/i)
-      }
-
-      // The project's agents are exactly OpenCode's own and the one its config defines: nothing came from a folder
-      // above the temp root.
-      const { data: agents } = await host.api<{ data: { id: string }[] }>("GET", "/api/agent")
-      expect(agents.map((agent) => agent.id).filter((id) => !BUILT_IN_AGENTS.includes(id))).toEqual(["reviewer"])
-      const { data: skills } = await host.api<{ data: { id: string; path: string }[] }>("GET", "/api/skill")
-      const own = skills.filter((skill) => (SKILL_IDS as readonly string[]).includes(skill.id)).map(({ id, path }) => ({ id, path }))
-      expect(own.sort((a, b) => a.id.localeCompare(b.id))).toEqual([...SKILL_IDS].sort().map((id) => ({ id, path: join(installed, "skills", id, "SKILL.md") })))
-    } catch (error) {
-      throw new Error(`${(error as Error).message}\n--- opencode ${version} log ---\n${host.log().slice(-3000)}`)
-    } finally {
-      await host.close()
-    }
-  }, 600_000)
-})
-
-/** OPENCODE_BIN_<version>, or the unmodified npm release with its platform binary, installed with scripts disabled. */
-const binaries = new Map<string, string>()
-function stockBinary(version: string): string {
-  const given = process.env[`OPENCODE_BIN_${version.replaceAll(".", "_")}`]
-  if (given) return given
-  const cached = binaries.get(version)
-  if (cached) return cached
-  const binary = `@opencode/cli-${platform()}-${arch()}`
-  const dir = project(`opencode-${version}`)
-  // Only this platform's binary: each one is a few hundred megabytes.
-  run("npm", ["install", `@opencode/cli@${version}`, `${binary}@${version}`, "--omit=optional", "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline"], dir)
-  const path = join(dir, "node_modules", binary, "bin", "opencode")
-  binaries.set(version, path)
-  return path
-}
-
+/** A free loopback port: the service binds it, the test reads it from the CLI's own answer. */
 async function freePort(): Promise<number> {
   const server = createServer()
-  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done))
-  const { port } = server.address() as { port: number }
-  await new Promise((done) => server.close(done))
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", resolve)
+  })
+  const address = server.address()
+  const port = typeof address === "object" && address !== null ? address.port : 0
+  await new Promise<void>((resolve) => server.close(() => resolve()))
   return port
 }
 
-/**
- * `opencode serve` on its own port and password, in an environment that holds only its temp root and is offline, with
- * a project that loads the installed package and defines one agent only in user config, `reviewer`.
- */
-async function serve(version: string, plugins: string | readonly string[], label = "") {
-  const binary = stockBinary(version)
-  const base = join(work, `stock-${version}${label}`)
-  const directory = join(base, "project")
-  // Keep the built-in local providers from probing their default ports.
-  const providers = { lmstudio: { settings: { baseURL: "" } }, ollama: { settings: { baseURL: "" } }, vllm: { settings: { baseURL: "" } } }
-  mkdirSync(directory, { recursive: true })
-  const agents = { reviewer: { description: "Reviews changes", mode: "subagent" } }
-  writeFileSync(join(directory, "opencode.json"), JSON.stringify({ plugins: typeof plugins === "string" ? [plugins] : [...plugins], agents, providers }))
-  const password = randomUUID()
-  const env = { ...isolated(base), ...OFFLINE, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8", OPENCODE_PASSWORD: password }
-
-  expect(run(binary, ["--version"], directory, env).trim()).toBe(`opencode v${version}`)
-  // OpenCode resolves every global path from this environment; none may leave the temp root.
-  const paths = run(binary, ["debug", "paths"], directory, env).trim().split("\n").map((line) => line.trim().split(/\s+/))
-  expect(paths.length).toBeGreaterThan(5)
-  expect(paths.filter(([, path]) => !path?.startsWith(base + sep))).toEqual([])
-
-  const port = await freePort()
-  let log = ""
-  const server = spawn(binary, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] })
-  server.stdout.on("data", (chunk) => void (log += chunk))
-  server.stderr.on("data", (chunk) => void (log += chunk))
-  const exited = new Promise((done) => server.once("exit", done))
-
-  const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
-  const raw = async (method: string, path: string, body?: unknown): Promise<{ status: number; text: string }> => {
-    const url = new URL(path, `http://127.0.0.1:${port}`)
-    url.searchParams.set("location[directory]", directory)
-    const response = await fetch(url, { method, headers: { authorization, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) })
-    return { status: response.status, text: await response.text() }
-  }
-  const api = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
-    const { status, text } = await raw(method, path, body)
-    if (status < 200 || status >= 300) throw new Error(`${method} ${path}: ${status} ${text.slice(0, 500)}`)
-    return JSON.parse(text) as T
-  }
-  /** Polls until `read` returns a value. The server answers before plugins finish loading, more slowly when busy. */
-  const until = async <T>(what: string, read: () => Promise<T | false | undefined>, ms = 180_000): Promise<T> => {
-    for (const deadline = Date.now() + ms; ; await Bun.sleep(500)) {
-      const value = await read().catch((error: unknown) => (Date.now() > deadline ? Promise.reject(error) : undefined))
-      if (value) return value
-      if (server.exitCode !== null) throw new Error(`opencode ${version} exited before ${what}`)
-      if (Date.now() > deadline) throw new Error(`timed out waiting until ${what}`)
+/** Read until `done` says so: the service answers before it has loaded the location's plugins. */
+async function waitFor<T>(read: () => T, done: (value: T) => boolean, attempts = 240): Promise<T | undefined> {
+  let value: T | undefined
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      value = read()
+    } catch {
+      value = undefined
     }
+    if (value !== undefined && done(value)) return value
+    await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  const close = async () => {
-    if (server.exitCode !== null || server.signalCode !== null) return
-    server.kill("SIGTERM")
-    const timer = setTimeout(() => server.kill("SIGKILL"), 10_000)
-    await exited
-    clearTimeout(timer)
+  return value
+}
+
+function installedPackage(cache: string): string {
+  for (const entry of readdirSync(cache, { recursive: true, withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const path = join(entry.parentPath, entry.name)
+    if (path.endsWith(join("node_modules", ...PACKAGE.split("/")))) return path
   }
-  return { api, raw, until, close, directory, log: () => log }
+  throw new Error(`the installed package is not under ${cache}`)
 }
 
-// The files a `files` entry should put in the tarball. dist/ must hold exactly the two bundles, so stale or foreign
-// build output fails the comparison, and so does a missing whitelisted file.
-function whitelisted(entry: string): string[] {
-  if (entry === "dist") return DIST
-  const path = join(root, entry)
-  if (!existsSync(path)) return [`${entry} (missing)`]
-  return statSync(path).isDirectory() ? tree(entry) : [entry]
-}
+describe("the packed tarball", () => {
+  test("installs with the real opencode CLI, answers status and registers its tools, skills and commands", async () => {
+    run("npm", ["run", "bundle"])
+    const [packed] = JSON.parse(run("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", WORK])) as [{ filename: string }]
+    const tarball = join(WORK, packed.filename)
 
-/** Every file under `dir`, as paths relative to `base` (the repository root by default). */
-function tree(dir: string, base = root): string[] {
-  return readdirSync(join(root, dir), { recursive: true, withFileTypes: true })
-    .filter((item) => item.isFile() && item.name !== ".DS_Store")
-    .map((item) => relative(base, join(item.parentPath, item.name)).split(sep).join("/"))
-}
+    const source = join(WORK, "source")
+    mkdirSync(source, { recursive: true })
+    run("tar", ["-xzf", tarball, "-C", source, "--strip-components=1"])
+    const pkg = JSON.parse(readFileSync(join(source, "package.json"), "utf8")) as {
+      exports: Record<string, string>
+      files: string[]
+      dependencies?: unknown
+      peerDependencies?: unknown
+      capabilities: { plugin: { name: string }; methods: Record<string, unknown> }
+    }
+    expect(pkg.exports["./server"]).toBe("./dist/index.js")
+    expect(pkg.files).toContain("dist")
+    expect(pkg.dependencies).toBeUndefined()
+    expect(pkg.peerDependencies).toBeUndefined()
+    expect(Object.keys(pkg.capabilities.methods)).toHaveLength(24)
 
-/** Every module specifier in a file: static imports and re-exports, dynamic `import()` and `require()`. */
-const specifiers = (source: string) =>
-  [...source.matchAll(/(?:^|[\s;}])(?:import|export)\s*(?:[^'"`;]*?\sfrom\s*)?["']([^"']+)["']|\b(?:import|require)\s*\(\s*["'`]?([^"'`)]*)["'`]?\s*\)/g)].map((match) => (match[1] ?? match[2])!)
+    // The temp checkout is an install fixture: the host module must resolve from its cache, and a git dependency's
+    // preparation runs npm install, so the fixture declares it as a dependency rather than a devDependency.
+    const fixture = { ...pkg, dependencies: { "@opencode/plugin": "2.4.1" } } as Record<string, unknown>
+    delete fixture.scripts
+    delete fixture.devDependencies
+    writeFileSync(join(source, "package.json"), `${JSON.stringify(fixture, null, 2)}\n`)
+    run("git", ["init", "-q"], source)
+    run("git", ["add", "-A"], source)
+    run("git", ["-c", "user.name=pack-test", "-c", "user.email=pack-test@example.test", "commit", "-qm", "pack"], source)
+    run("git", ["tag", "v0.0.0"], source)
 
-/** Relative imports, and every dynamic `import()` or `require()` call: a self-contained bundle has none. */
-const relativeImports = (source: string) => [
-  ...specifiers(source).filter((specifier) => specifier.startsWith(".")),
-  ...[...source.matchAll(/(?<![\w$.])(?:import|require)\s*\(/g)].map((match) => match[0]),
-]
+    const base = join(WORK, "install")
+    const home = isolated(base)
+    // The stock CLI's `plugin add` writes `$HOME/.config` and `plugin list` reads it; its XDG overrides in 2.4.1 point
+    // the two at different stores. HOME is already isolated, so the CLI calls use HOME alone; the host probe keeps XDG.
+    const cliHome = { ...home }
+    delete cliHome.XDG_CONFIG_HOME
+    delete cliHome.XDG_DATA_HOME
+    delete cliHome.XDG_CACHE_HOME
+    delete cliHome.XDG_STATE_HOME
+    const project = join(base, "project")
+    mkdirSync(project, { recursive: true })
+    run("git", ["init", "-q"], project)
+    const binary = opencodeBinary()
+    expect(run(binary, ["--version"], project, cliHome).trim()).toBe("opencode v2.4.1")
+    const ref = `git+file://${source}#v0.0.0`
+    const added = run(binary, ["plugin", "add", ref], project, cliHome)
+    expect(added).toContain("installed")
 
-/** The bare specifiers of one bundle that the allowed list does not cover. */
-const foreign = (file: string, allowed: RegExp[]) =>
-  [...new Set(specifiers(readFileSync(file, "utf8")).filter((specifier) => !allowed.some((pattern) => pattern.test(specifier))))].sort()
+    const installed = installedPackage(join(home.XDG_CACHE_HOME!, "opencode", "npm"))
+    const probe = join(base, "probe.mjs")
+    const kit = pathToFileURL(join(ROOT, "node_modules", "@we-the-rebel-alliance", "plugin-contract", "dist", "kit.js")).href
+    writeFileSync(
+      probe,
+      `import { createHost } from ${JSON.stringify(kit)}\n` +
+        `const run = await createHost({ directory: ${JSON.stringify(installed)}, version: "2.4.1", pluginId: "colab", options: { access: "all" } })\n` +
+        `try { const answer = await run.call("status", {}); console.log(JSON.stringify({ ok: answer.ok, output: answer.ok ? answer.output : answer, tools: run.tools.map((tool) => tool.id), rpc: run.rpc })) } finally { await run.close() }\n`,
+    )
+    const output = JSON.parse(run(process.execPath, [probe], base, home).trim().split("\n").at(-1)!) as {
+      ok: boolean
+      output: Record<string, unknown>
+      tools: string[]
+      rpc: { id: string; methods: string[] }
+    }
+    expect(output.ok).toBe(true)
+    expect(output.output).toMatchObject({ name: "colab", version: "0.0.0", state: "needs_sign_in" })
+    expect([...output.tools].sort()).toEqual([...TOOL_IDS].sort())
+    // Parity: every tool the pre-4a surface exposed survives, except the one the contract split into two plans.
+    for (const id of OLD_TOOL_IDS.filter((tool) => tool !== "colab_plan")) expect(output.tools).toContain(id)
+    expect(output.tools).not.toContain("colab_plan")
+    expect(output.tools).toEqual(expect.arrayContaining(["colab_plan_write", "colab_plan_delete"]))
+    expect(output.rpc.id).toBe("colab")
 
-function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = { ...process.env, npm_config_update_notifier: "false" }): string {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", env })
-  if (result.error) throw result.error
-  if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed (${result.status}):\n${result.stderr}\n${result.stdout}`)
-  return result.stdout
-}
+    // The real service, on a free port, in the same isolated HOME. A fresh service answers `/api/skill` with only the
+    // built-ins; one session for the empty project makes OpenCode activate the location's plugins.
+    const port = await freePort()
+    run(binary, ["service", "set", "port", String(port)], project, cliHome)
+    run(binary, ["service", "start"], project, cliHome)
+    try {
+      const api = (args: readonly string[]) => run(binary, ["api", ...args], project, cliHome)
+      const directory = `x-opencode-directory:${project}`
+      const readSkills = () => JSON.parse(api(["GET", "/api/skill", "-H", directory])) as { data: { id: string; description: string }[] }
+      const readCommands = () => JSON.parse(api(["GET", "/api/command", "-H", directory])) as { data: { name: string }[] }
+      // Readiness: the first successful answer, even an empty one, is the service up.
+      await waitFor(readSkills, () => true)
+      api(["POST", "/api/session", "-d", JSON.stringify({ location: { directory: project }, title: "pack skill probe" }), "-H", directory])
+      const repoSkills = readdirSync(join(ROOT, "skills"), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && existsSync(join(ROOT, "skills", entry.name, "SKILL.md")))
+        .map((entry) => entry.name)
+        .sort()
+      expect(repoSkills).toEqual(["colab", "colab-notebooks"])
+      // OpenCode activates a location's plugins after its first session, asynchronously; wait for every repo skill.
+      const skills = await waitFor(readSkills, (answer) => repoSkills.every((id) => answer.data.some((skill) => skill.id === id)))
+      // The project is empty, so those ids can only come from the plugin's own registration. Each served
+      // description must equal what a real YAML parser reads from the committed frontmatter, not `>` or `|`.
+      for (const id of repoSkills) {
+        const text = readFileSync(join(ROOT, "skills", id, "SKILL.md"), "utf8")
+        const front = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1]
+        expect(front, id).toBeDefined()
+        const parsed = parseYaml(front!) as { name?: unknown; description?: unknown }
+        expect(parsed.name, id).toBe(id)
+        const description = typeof parsed.description === "string" ? parsed.description.trim() : ""
+        expect(description, id).not.toBe("")
+        expect(description, id).not.toBe(">")
+        expect(description, id).not.toBe("|")
+        const served = skills?.data.find((skill) => skill.id === id)
+        expect(served?.description, id).toBe(description)
+        expect(served?.description.length, id).toBeLessThanOrEqual(300)
+      }
+      const commands = await waitFor(readCommands, (answer) => answer.data.some((command) => command.name === "colab"))
+      const commandNames = commands?.data.map((command) => command.name) ?? []
+      for (const name of ["colab", "colab-doctor", "colab-cleanup"]) expect(commandNames).toContain(name)
+      expect(commandNames).not.toContain("colab-status")
+    } finally {
+      try {
+        run(binary, ["service", "stop"], project, cliHome)
+      } catch {
+        // the service may have failed to start; the skill assertion above reports that
+      }
+    }
+  }, 600_000)
+})

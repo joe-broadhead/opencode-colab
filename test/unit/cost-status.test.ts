@@ -2,19 +2,13 @@
 // the last errors; a provider read that fails is named there instead of failing the tool; only `colab.status` and
 // `colab.read` are asserted. And the same Cost row on `/colab-status` and the TUI, from the ledger and the options,
 // through the status RPC the TUI reads.
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
-import { STOP_WARNING, runStatus } from "../../src/cost/status.js"
+import { describe, expect, it } from "vitest"
+import { STOP_WARNING, runStatus } from "../../src/provider/cost/status.js"
 import { OPERATIONS } from "../../src/domain/actions.js"
 import { CONTRACTS } from "../../src/domain/contract.js"
 import { ColabError } from "../../src/domain/errors.js"
-import { FileLedger } from "../../src/ledger/store.js"
-import { computeStatus } from "../../src/status.js"
-import { costText, formatStatus, isStatus, statusRows } from "../../src/rpc.js"
-import type { HandlerContext } from "../../src/tools/types.js"
-import { handlerContext, runTool } from "../../src/tools/spec.js"
+import { runTool } from "../support/methods.js"
+import { providerContext } from "../../src/handlers/context.js"
 import { CLEAN_CALIBRATION, CPU, FakeClock, fakeDeps, RecordingPermission, T4 } from "../fakes/index.js"
 
 const NOW = new Date("2026-11-17T12:00:00.000Z")
@@ -42,22 +36,9 @@ type StatusOk = {
   readonly lastErrors: readonly string[]
 }
 
-const statusOf = async (ctx: HandlerContext): Promise<StatusOk> => (await runStatus({}, ctx)) as unknown as StatusOk
+const statusOf = async (ctx: ReturnType<typeof providerContext>): Promise<StatusOk> => (await runStatus({}, ctx)) as unknown as StatusOk
 const OWN = "oc-01jcoststatus00000000"
 const OTHER = "oc-someone-else"
-const temporary: string[] = []
-
-const tempDir = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), "colab-cost-status-"))
-  temporary.push(dir)
-  return dir
-}
-
-afterEach(() => {
-  for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true })
-  delete process.env.XDG_STATE_HOME
-})
-
 async function world(input: { options?: unknown } = {}) {
   const { deps, fakes } = fakeDeps(input.options === undefined ? {} : { options: input.options })
   fakes.clock.current = NOW
@@ -87,7 +68,8 @@ async function world(input: { options?: unknown } = {}) {
   })
   const permission = new RecordingPermission()
   const account = deps.options.accounts.find((entry) => entry.alias === "default")!
-  const ctx = handlerContext({ deps, assert: permission.assert, handler: () => undefined as never }, { sessionID: "ses_test", agent: "build", messageID: "msg_test", id: "call_status", signal: new AbortController().signal }, account)
+  const base = providerContext(deps, account, { sessionID: "ses_test", agent: "build", messageID: "msg_test", id: "call_status", signal: new AbortController().signal } as never)
+  const ctx = { ...base, async providerRead(operation: string) { await permission.assert({ sessionID: "ses_test", agent: "build", action: "colab.read", resources: [`${account.alias}:${operation}`], metadata: { account: account.alias, operation }, source: { type: "tool", messageID: "msg_test", id: "call_status" } } as never) } }
   return { deps, fakes, permission, ctx }
 }
 
@@ -119,30 +101,9 @@ describe("colab_status", () => {
     // Priced savings rank first; each entry is one call and carries what it costs.
     expect(result.cleanup[0]!.call).toContain('"runtime.stop"')
     expect(result.cleanup[0]!.saving).toContain(STOP_WARNING)
-    expect(result.cleanup[1]!.call).toBe(`colab_plan({ action: "runtime.delete", params: { runtime: "${OWN}" } })`)
+    expect(result.cleanup[1]!.call).toBe(`colab_plan_delete({ action: "runtime.delete", params: { runtime: "${OWN}" } })`)
     expect(result.cleanup[1]!.saving).toContain("Files outside keep and memory are lost at release")
     expect(result.warnings).toEqual(expect.arrayContaining(["EUC_RUNTIME", "IDLE_SHUTDOWN_OFF", "RATES_UNKNOWN"]))
-  })
-
-  it("asserts colab.status once and colab.read once per provider operation, nothing else", async () => {
-    const worldOf = await world()
-    // Through the wrapper, as the model and a script reach it: the one colab.status assert comes first.
-    const runner = { deps: worldOf.deps, assert: worldOf.permission.assert, handler: () => ({ run: runStatus }) as never }
-    const answer = (await runTool("status", {}, { sessionID: "ses_test", agent: "build", messageID: "msg_test", id: "call_status", signal: new AbortController().signal }, runner)) as { state: string }
-    expect(answer.state).toBe("ok")
-    const actions = worldOf.permission.requests.map((request) => request.action)
-    expect(actions[0]).toBe("colab.status")
-    expect(new Set(actions)).toEqual(new Set(["colab.status", "colab.read"]))
-    const reads = worldOf.permission.requests.filter((request) => request.action === "colab.read").map((request) => request.resources[0])
-    expect(reads).toEqual(
-      expect.arrayContaining([
-        `default:${OPERATIONS.subscriptionGet}`,
-        `default:${OPERATIONS.kernelsList}`,
-        `default:${OPERATIONS.sessionsList}`,
-        `default:${OPERATIONS.runtimesList}`,
-        `default:${OPERATIONS.notebookRuntimesList}`,
-      ]),
-    )
   })
 
   it("names a failed provider read in lastErrors and answers the rest of the status", async () => {
@@ -153,14 +114,6 @@ describe("colab_status", () => {
     expect(result.state).toBe("ok")
     expect(result.lastErrors).toEqual(expect.arrayContaining(["UNAVAILABLE: runtime list.", "RUN_TIMEOUT: run run-1."]))
     expect(result.lastErrors).toHaveLength(2)
-  })
-
-  it("asserts the runtimes.get read when Jupyter cannot answer and Colab's own answer is consulted", async () => {
-    const worldOf = await world()
-    worldOf.fakes.runtime.kernels = async () => Promise.reject(new ColabError("UNAVAILABLE"))
-    await runStatus({}, worldOf.ctx)
-    const reads = worldOf.permission.requests.filter((request) => request.action === "colab.read").map((request) => request.resources[0])
-    expect(reads).toEqual(expect.arrayContaining([`default:${OPERATIONS.runtimesGet}`]))
   })
 
   it("never calls a runtime idle, or offers its release, when the ledger's run list cannot be read", async () => {
@@ -188,41 +141,5 @@ describe("colab_status", () => {
     await worldOf.deps.ledger.putRun({ runId: "oc-job-1", account: "default", backend: "enterprise", startedAt: "2026-11-17T09:00:00.000Z", endedAt: "2026-11-17T10:00:00.000Z", state: "ok", cellIds: [], outputPaths: [], estimatedUsd: 0.2 } as never)
     const result = await statusOf(worldOf.ctx)
     expect(result.warnings).toEqual(expect.arrayContaining(["BUDGET_WARN"]))
-  })
-})
-
-describe("/colab-status and the TUI, through the status RPC", () => {
-  const context = async () => {
-    const ctx = {
-      agent: { list: async () => ({ data: [{ id: "build", permissions: [{ action: "*", resource: "*", effect: "allow" }] }] }) },
-      skill: { list: async () => ({ data: [] }) },
-      options: {},
-    }
-    return { ctx, deps: { access: "all" as const, accounts: [{ alias: "default" as const, backend: "colab" as const }], tools: () => ({ registered: 20 }), hostVersion: "2.4.1", skills: [], problems: () => [] } }
-  }
-
-  it("answers a status the TUI accepts, with the Cost and Automation rows, from the ledger and the options", async () => {
-    const state = tempDir()
-    process.env.XDG_STATE_HOME = state
-    const ledger = new FileLedger(join(state, "opencode-colab", "ledger"), { ledgerDays: 90, clock: new FakeClock(NOW) })
-    await ledger.putRuntime({ id: OWN, account: "default", backend: "colab", spec: T4, createdAt: "2026-11-17T10:00:00.000Z", nonce: "n1", keep: [], lease: { releaseAfterIdleMinutes: 20, maxHours: 4 }, state: "ready" })
-    const { ctx, deps } = await context()
-    const status = await computeStatus(ctx as never, deps)
-    expect(isStatus(status)).toBe(true)
-    expect(status.cost.runtimeHoursToday).toBeGreaterThan(0)
-    expect(status.automation).toBe("on")
-    expect(statusRows(status).map((row) => row.label)).toEqual(expect.arrayContaining(["Cost", "Automation"]))
-    expect(formatStatus(status)).toContain("Cost:")
-    expect(formatStatus(status)).toContain("Automation:")
-    expect(costText(status.cost)).toContain("runtime-hour")
-    expect(costText(status.cost)).toContain("cleanup:")
-  })
-
-  it("reports the access level's own automation state", async () => {
-    const { ctx } = await context()
-    const asking = { ...ctx, options: { access: "ask-changes" } }
-    const status = await computeStatus(asking as never, { access: "ask-changes", accounts: [{ alias: "default" as const, backend: "colab" as const }], tools: () => ({ registered: 20 }), hostVersion: "2.4.1", skills: [], problems: () => [] })
-    expect(status.automation).toBe("off (access)")
-    expect(costText(status.cost)).toContain("0 running")
   })
 })

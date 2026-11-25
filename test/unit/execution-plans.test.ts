@@ -7,8 +7,9 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { T4 } from "../fakes/index.js"
 import { ColabError } from "../../src/domain/errors.js"
-import { resetLiveRuns } from "../../src/execution/runs.js"
+import { resetLiveRuns } from "../../src/provider/execution/runs.js"
 import { alive, gate, iopub, prepared, runtimeRecord, tool } from "../fakes/execution-harness.js"
+import { planOf } from "../support/methods.js"
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -29,7 +30,7 @@ describe("runtime.create", () => {
     const directory = await workspace()
     const { deps, fakes } = await prepared({ directory, withRuntime: false })
     const planned = await tool(deps, "plan", { action: "runtime.create", params: { spec } }).result
-    const plan = planned as { planId: string; category: string; commit: string; preview: Record<string, unknown> }
+    const plan = planned as { plan: unknown; category: string; commit: string; preview: Record<string, unknown> }
     expect(plan).toMatchObject({ category: "write", commit: "colab_write" })
     expect(plan.preview).toMatchObject({
       spec: "T4/standard",
@@ -43,13 +44,13 @@ describe("runtime.create", () => {
       keep: ["/content/outputs/**"],
     })
     expect(String(plan.preview.release)).toContain("Files outside keep and all variables in memory are lost")
-    const stored = deps.plans.check(plan.planId, { sessionId: "ses_test", agentId: "build", category: "write" })
+    const stored = planOf(plan)
     const payload = stored.payload as { runtimeId: string; requestId: string; nonce: string }
     expect(payload.runtimeId).toMatch(/^oc-[0-9a-z]{26}$/)
     expect(payload.requestId).toMatch(/^[0-9a-f-]{36}$/)
     expect(payload.nonce).toMatch(/^[0-9a-f]{32}$/)
 
-    const written = await tool(deps, "write", { planId: plan.planId }).result
+    const written = await tool(deps, "write", { plan: plan.plan }).result
     const answer = written as { state: string; result: { runtime: string; state: string; calibration?: unknown } }
     expect(answer.state).toBe("ok")
     expect(answer.result).toMatchObject({ runtime: payload.runtimeId, state: "ready" })
@@ -64,13 +65,13 @@ describe("runtime.create", () => {
   it("refuses an accelerator outside the allow-list, an ineligible spec, and a spent budget", async () => {
     const a100 = { variant: "VARIANT_GPU", shape: "SHAPE_STANDARD", accelerator: "A100" } as const
     const first = await prepared({ directory: await workspace(), withRuntime: false })
-    expect(await tool(first.deps, "plan", { action: "runtime.create", params: { spec: a100 } }).result).toMatchObject({ state: "refused", error: "ACCELERATOR_NOT_ALLOWED" })
+    expect(await tool(first.deps, "plan", { action: "runtime.create", params: { spec: a100 } }).result).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     const second = await prepared({ directory: await workspace(), withRuntime: false })
     second.fakes.colab.specs = second.fakes.colab.specs.map((entry) => ({ ...entry, eligible: false }))
-    expect(await tool(second.deps, "plan", { action: "runtime.create", params: { spec } }).result).toMatchObject({ state: "refused", error: "SPEC_NOT_ELIGIBLE" })
+    expect(await tool(second.deps, "plan", { action: "runtime.create", params: { spec } }).result).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     const third = await prepared({ directory: await workspace(), withRuntime: false })
     third.fakes.budget.verdict = "refuse"
-    expect(await tool(third.deps, "plan", { action: "runtime.create", params: { spec } }).result).toMatchObject({ state: "refused", error: "BUDGET_REACHED" })
+    expect(await tool(third.deps, "plan", { action: "runtime.create", params: { spec } }).result).toMatchObject({ state: "refused", error: "BUDGET_EXCEEDED" })
     const fourth = await prepared({ directory: await workspace(), withRuntime: false })
     fourth.fakes.budget.verdict = "warn"
     expect(await tool(fourth.deps, "plan", { action: "runtime.create", params: { spec } }).result).toMatchObject({ state: "ok", warnings: ["BUDGET_WARN"] })
@@ -80,16 +81,16 @@ describe("runtime.create", () => {
     const directory = await workspace()
     const { deps, record } = await prepared({ directory })
     const answer = await tool(deps, "plan", { action: "runtime.create", params: { spec } }).result
-    expect(answer).toMatchObject({ state: "refused", error: "RUNTIME_CAP" })
+    expect(answer).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     expect((answer as { next: string }).next).toContain(record.id)
   })
 
   it("answers PLAN_CHANGED when the tier moved between the preview and the commit, and creates nothing", async () => {
     const directory = await workspace()
     const { deps, fakes } = await prepared({ directory, withRuntime: false })
-    const plan = (await tool(deps, "plan", { action: "runtime.create", params: { spec } }).result) as { planId: string }
+    const plan = (await tool(deps, "plan", { action: "runtime.create", params: { spec } }).result) as { plan: unknown }
     fakes.colab.tier = "SUBSCRIPTION_TIER_PRO_PLUS"
-    expect(await tool(deps, "write", { planId: plan.planId }).result).toMatchObject({ state: "refused", error: "PLAN_CHANGED" })
+    expect(await tool(deps, "write", { plan: plan.plan }).result).toMatchObject({ state: "refused", error: "PLAN_INVALID" })
     expect(fakes.colab.calls.some((call) => call.method === "createRuntime")).toBe(false)
   })
 
@@ -99,9 +100,9 @@ describe("runtime.create", () => {
     fakes.check.calibrate = async () => {
       throw new ColabError("RUNTIME_HAS_CREDENTIALS")
     }
-    const plan = (await tool(deps, "plan", { action: "runtime.create", params: { spec } }).result) as { planId: string }
-    const payload = deps.plans.check(plan.planId, { sessionId: "ses_test", agentId: "build", category: "write" }).payload as { runtimeId: string }
-    const answer = await tool(deps, "write", { planId: plan.planId }).result
+    const plan = (await tool(deps, "plan", { action: "runtime.create", params: { spec } }).result) as { plan: unknown }
+    const payload = planOf(plan).payload as { runtimeId: string }
+    const answer = await tool(deps, "write", { plan: plan.plan }).result
     expect(answer).toMatchObject({ state: "ok", result: { state: "tainted", error: "RUNTIME_HAS_CREDENTIALS" } })
     expect((await deps.ledger.getRuntime(payload.runtimeId))?.tainted?.code).toBe("RUNTIME_HAS_CREDENTIALS")
   })
@@ -110,9 +111,9 @@ describe("runtime.create", () => {
     const directory = await workspace()
     const { deps, fakes } = await prepared({ directory, withRuntime: false })
     Object.assign(fakes.colab, { createRuntime: async () => ({ done: false, operation: "operations/op-1" }) })
-    const plan = (await tool(deps, "plan", { action: "runtime.create", params: { spec } }).result) as { planId: string }
-    const payload = deps.plans.check(plan.planId, { sessionId: "ses_test", agentId: "build", category: "write" }).payload as { runtimeId: string; requestId: string }
-    const answer = await tool(deps, "write", { planId: plan.planId }).result
+    const plan = (await tool(deps, "plan", { action: "runtime.create", params: { spec } }).result) as { plan: unknown }
+    const payload = planOf(plan).payload as { runtimeId: string; requestId: string }
+    const answer = await tool(deps, "write", { plan: plan.plan }).result
     expect(answer).toMatchObject({ state: "ok", result: { state: "creating", operation: "operations/op-1" } })
     expect(await deps.ledger.getRuntime(payload.runtimeId)).toMatchObject({ state: "creating", nonce: expect.any(String) })
     expect(payload.requestId).toBeTruthy()
@@ -122,7 +123,7 @@ describe("runtime.create", () => {
     const directory = await workspace()
     const { deps } = await prepared({ directory, options: { accounts: { work: { backend: "enterprise", access: "write", project: "p", region: "us-central1", outputBucket: "gs://b" } } } })
     const answer = await tool(deps, "plan", { account: "work", action: "runtime.create", params: { spec } }).result
-    expect(answer).toMatchObject({ state: "refused", error: "ACTION_UNSUPPORTED" })
+    expect(answer).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     expect((answer as { next: string }).next).toContain("job.create")
   })
 })
@@ -136,11 +137,11 @@ describe("runtime.delete", () => {
       ["/content/scratch.bin", Buffer.from("y")],
     ]))
     runtime.kernels_.set(record.id, [{ id: "k1", name: "python3", executionState: "idle", lastActivity: "2026-11-17T08:50:00.000Z", connections: 0 }])
-    const plan = (await tool(deps, "plan", { action: "runtime.delete", params: { runtime: record.id } }).result) as { planId: string; category: string; preview: Record<string, unknown> }
+    const plan = (await tool(deps, "plan", { action: "runtime.delete", params: { runtime: record.id } }).result) as { plan: unknown; category: string; preview: Record<string, unknown> }
     expect(plan.category).toBe("delete")
     expect(plan.preview).toMatchObject({ runtime: record.id, spec: "T4/standard", idle: true, kernels: 1, activeRun: false, force: false, filesOutsideKeep: ["/content/scratch.bin"] })
     expect(String(plan.preview.memory)).toContain("Variables in memory are lost")
-    const answer = await tool(deps, "delete", { planId: plan.planId }).result
+    const answer = await tool(deps, "delete", { plan: plan.plan }).result
     expect(answer).toMatchObject({ state: "ok", result: { runtime: record.id, state: "released" } })
     expect(fakes.release.released).toEqual([{ id: record.id, reason: "plan", force: false }])
   })
@@ -151,22 +152,22 @@ describe("runtime.delete", () => {
     runtime.gate = gate()
     runtime.script = () => [alive(), iopub("stream", { name: "stdout", text: "working\n" })]
     const running = (await tool(deps, "run", { runtime: record.id, code: "print(1)", wait: 0 }).result) as { runId: string }
-    expect(await tool(deps, "plan", { action: "runtime.delete", params: { runtime: record.id } }).result).toMatchObject({ state: "refused", error: "RUNTIME_BUSY" })
+    expect(await tool(deps, "plan", { action: "runtime.delete", params: { runtime: record.id } }).result).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     const forced = await tool(deps, "plan", { action: "runtime.delete", params: { runtime: record.id, force: true } }).result
     expect(forced).toMatchObject({ state: "ok" })
     runtime.gate.open()
-    const { liveRun } = await import("../../src/execution/runs.js")
+    const { liveRun } = await import("../../src/provider/execution/runs.js")
     await liveRun(running.runId)?.done
   })
 
   it("answers PLAN_CHANGED when a file outside keep appeared after the preview", async () => {
     const directory = await workspace()
     const { deps, record, runtime } = await prepared({ directory })
-    const plan = (await tool(deps, "plan", { action: "runtime.delete", params: { runtime: record.id } }).result) as { planId: string }
+    const plan = (await tool(deps, "plan", { action: "runtime.delete", params: { runtime: record.id } }).result) as { plan: unknown }
     const files = runtime.contents.get(record.id) ?? new Map<string, Uint8Array>()
     files.set("/content/late.bin", Buffer.from("z"))
     runtime.contents.set(record.id, files)
-    expect(await tool(deps, "delete", { planId: plan.planId }).result).toMatchObject({ state: "refused", error: "PLAN_CHANGED" })
+    expect(await tool(deps, "delete", { plan: plan.plan }).result).toMatchObject({ state: "refused", error: "PLAN_INVALID" })
   })
 
   it("releases a tainted runtime by plan", async () => {
@@ -175,7 +176,7 @@ describe("runtime.delete", () => {
     const record = (await tool(deps, "runtimes", {}).result as { runtimes: { id: string }[] }).runtimes[0]!
     const plan = await tool(deps, "plan", { action: "runtime.delete", params: { runtime: record.id } }).result
     expect(plan).toMatchObject({ state: "ok" })
-    const answer = await tool(deps, "delete", { planId: (plan as { planId: string }).planId }).result
+    const answer = await tool(deps, "delete", { plan: (plan as { plan: unknown }).plan }).result
     expect(answer).toMatchObject({ state: "ok", result: { state: "released" } })
     expect(fakes.release.released[0]!.id).toBe(record.id)
   })
@@ -183,13 +184,13 @@ describe("runtime.delete", () => {
   it("refuses a runtime that is not the plugin's own", async () => {
     const directory = await workspace()
     const { deps } = await prepared({ directory })
-    expect(await tool(deps, "plan", { action: "runtime.delete", params: { runtime: "oc-nope" } }).result).toMatchObject({ state: "refused", error: "RUNTIME_NOT_OURS" })
+    expect(await tool(deps, "plan", { action: "runtime.delete", params: { runtime: "oc-nope" } }).result).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
   })
 })
 
 describe("the plan handlers D owns", () => {
   it("are exactly runtime.create and the consumer runtime.delete", async () => {
-    const handlers = (await import("../../src/execution/index.js")).PLAN_HANDLERS
+    const handlers = (await import("../../src/provider/execution/index.js")).PLAN_HANDLERS
     expect(Object.keys(handlers).sort()).toEqual(["runtime.create", "runtime.delete"])
     expect(Object.keys(handlers["runtime.delete"]!)).toEqual(["colab"])
   })

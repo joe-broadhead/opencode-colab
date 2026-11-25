@@ -4,9 +4,9 @@
 // confirms against a real account.
 import { describe, expect, it } from "vitest"
 import { ColabError } from "../../src/domain/errors.js"
-import type { PortEnv } from "../../src/deps.js"
-import { DRIVE_SCOPE } from "../../src/notebooks/account.js"
-import { createHttpDriveApi } from "../../src/notebooks/drive-api.js"
+import type { PortEnv } from "../../src/provider/index.js"
+import { DRIVE_SCOPE } from "../../src/provider/notebooks/account.js"
+import { createHttpDriveApi } from "../../src/provider/notebooks/drive-api.js"
 import { loadOptions } from "../../src/options.js"
 import { FakeAuth, FakeClock, MemoryLedger } from "../fakes/index.js"
 
@@ -169,7 +169,7 @@ describe("the Drive API client", () => {
     let answer = 0
     const { env, calls } = scripted(() => {
       answer += 1
-      // TODO(L8): the cap's exact reason is unrecorded; this fixture stands in for it.
+      // The cap's exact reason is not recorded; this fixture stands in for it.
       if (answer === 1) return json({ id: "rev-1", keepForever: true })
       return json({ error: { code: 403, errors: [{ reason: "revisionLimitExceeded", message: "The maximum number of 200 revisions has been reached." }] } }, 403)
     })

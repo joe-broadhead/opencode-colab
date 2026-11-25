@@ -12,10 +12,10 @@ import {
   createAutomationLock,
   createAutomationLoop,
   runAutomationOnce,
-} from "../../src/cost/automation.js"
+} from "../../src/provider/cost/automation.js"
 import { ColabError } from "../../src/domain/errors.js"
 import { loadOptions } from "../../src/options.js"
-import type { KernelInfo, Release, RunRecord, RuntimeRecord, SessionInfo } from "../../src/ports.js"
+import type { KernelInfo, Release, RunRecord, RuntimeRecord, SessionInfo } from "../../src/provider/ports.js"
 import { CLEAN_CALIBRATION, FakeClock, FakeColabApi, FakeRelease, FakeRuntimeProtocol, MemoryLedger, T4 } from "../fakes/index.js"
 
 const NOW = new Date("2026-11-17T12:00:00.000Z")

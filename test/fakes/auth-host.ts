@@ -2,7 +2,7 @@
  * Package A's doubles: the host's credential store and integration editor, and a recording `fetch` for Google's
  * endpoints. No network: every response is scripted here, and a URL with no route throws.
  */
-import type { AuthHost, HostConnection, HostCredential } from "../../src/auth/host.js"
+import type { AuthHost, HostConnection, HostCredential } from "../../src/provider/auth/host.js"
 
 export class FakeAuthHost implements AuthHost {
   /** integrationID → the credential OpenCode holds, or undefined for a connection that needs a sign-in. */

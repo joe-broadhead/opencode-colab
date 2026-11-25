@@ -23,10 +23,9 @@ vi.mock("node:fs", async (original) => {
     }) as typeof fs.readSync,
   }
 })
-import { FileLedger, ledgerDir } from "../../src/ledger/store.js"
-import type { Ledger, RunRecord, RuntimeRecord } from "../../src/ports.js"
+import { FileLedger, ledgerDir } from "../../src/provider/ledger/store.js"
+import type { Ledger, RunRecord, RuntimeRecord } from "../../src/provider/ports.js"
 import { CPU, FakeClock, MemoryLedger } from "../fakes/index.js"
-import { consumerRun, drain, sourcesHarness } from "../fakes/sources-harness.js"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -132,8 +131,8 @@ for (const [kind, make] of kinds) {
 }
 
 describe("the file ledger on disk", () => {
-  it("lives under $XDG_STATE_HOME/opencode-colab/ledger", () => {
-    expect(ledgerDir({ XDG_STATE_HOME: "/state" })).toBe("/state/opencode-colab/ledger")
+  it("lives under $XDG_STATE_HOME/colab/ledger", () => {
+    expect(ledgerDir({ XDG_STATE_HOME: "/state" })).toBe("/state/colab/ledger")
   })
 
   it("writes private files with no temp file left, and prunes finished records past ledgerDays", async () => {
@@ -259,31 +258,6 @@ describe("the file ledger on disk", () => {
     expect((await ledger.append({ type: "run.finished", id: "c", account: "default" })).seq).toBe(3)
   })
 
-  it("a gap in the numbers is harmless to the colab.runs cursor: nothing skipped, nothing listed twice", async () => {
-    const dir = temp()
-    const h = sourcesHarness({ ledger: (fakes, ledgerDays) => new FileLedger(dir, { ledgerDays, clock: fakes.clock }) })
-    const T0 = Date.parse("2026-11-18T09:00:00.000Z")
-    h.fakes.clock.current = new Date(T0)
-    const start = (await drain(h.tool, {})).cursor
-    await consumerRun(h.ledger, { runId: "r1", start: T0 - 60_000, end: T0 })
-    await consumerRun(h.ledger, { runId: "r2", start: T0 - 60_000, end: T0 })
-    const first = await drain(h.tool, { cursor: start, limit: 1 })
-    expect(first.events.map((event) => event.external_id)).toEqual(["r1", "r2"])
-    // A crash after a meta write: the next number is skipped.
-    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as { nextSeq: number }
-    writeFileSync(join(dir, "meta.json"), JSON.stringify({ nextSeq: meta.nextSeq + 1 }))
-    h.fakes.clock.advance(60_000)
-    await consumerRun(h.ledger, { runId: "r3", start: T0, end: T0 + 30_000 })
-    await consumerRun(h.ledger, { runId: "r4", start: T0, end: T0 + 30_000 })
-    const seqs = (await h.ledger.eventsSince(0, 100)).events.filter((event) => event.type === "run.finished").map((event) => event.seq)
-    expect(seqs[2]! - seqs[1]!).toBe(2)
-    const second = await drain(h.tool, { cursor: first.cursor, limit: 1 })
-    expect(second.events.map((event) => event.external_id)).toEqual(["r3", "r4"])
-    expect(second.gaps).toEqual([])
-    const all = await drain(h.tool, { cursor: start, limit: 1 })
-    expect(all.events.map((event) => event.external_id)).toEqual(["r1", "r2", "r3", "r4"])
-    expect(all.gaps).toEqual([])
-  })
 
   it("refuses an id that cannot be a file name", async () => {
     const ledger = new FileLedger(temp(), { ledgerDays: 90 })

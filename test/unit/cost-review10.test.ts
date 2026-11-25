@@ -5,14 +5,14 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { runAutomationOnce } from "../../src/cost/automation.js"
-import { createBudget } from "../../src/cost/index.js"
-import { cleanupActions } from "../../src/cost/cleanup.js"
-import { createRelease } from "../../src/cost/release.js"
-import { confirmJobCreate, openJobCreate } from "../../src/enterprise/runs.js"
-import type { PortEnv } from "../../src/deps.js"
+import { runAutomationOnce } from "../../src/provider/cost/automation.js"
+import { createBudget } from "../../src/provider/cost/index.js"
+import { cleanupActions } from "../../src/provider/cost/cleanup.js"
+import { createRelease } from "../../src/provider/cost/release.js"
+import { confirmJobCreate, openJobCreate } from "../../src/provider/enterprise/runs.js"
+import type { PortEnv } from "../../src/provider/index.js"
 import { loadOptions } from "../../src/options.js"
-import type { RunRecord, RuntimeRecord } from "../../src/ports.js"
+import type { RunRecord, RuntimeRecord } from "../../src/provider/ports.js"
 import { CLEAN_CALIBRATION, FakeClock, FakePrices, MemoryLedger, T4 } from "../fakes/index.js"
 import { createRuntimeFixture } from "../fakes/runtime-env.js"
 
@@ -122,7 +122,7 @@ describe("reviewer repro, colab #10", () => {
     expect(await budget.check("default", { action: "job.create", usd: 5 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 10, limit: 10, unit: "usd" })
   })
 
-  it("R4b: a legacy run without an estimate is uncounted, so a call within the rest of the limit answers ok", async () => {
+  it("R4b: a run without an estimate is uncounted, so a call within the rest of the limit answers ok", async () => {
     const clock = new FakeClock(NOW)
     const ledger = new MemoryLedger(clock)
     await ledger.putRun({ runId: "job-a", account: "default", backend: "enterprise", job: "projects/p/locations/us-central1/notebookExecutionJobs/job-a", startedAt: "2026-11-17T09:00:00.000Z", endedAt: "2026-11-17T10:00:00.000Z", state: "ok", cellIds: [], outputPaths: [], summary: "Colab Enterprise job" })
@@ -173,7 +173,13 @@ describe("M1's ledger-state matrix, through B's real transport", () => {
     const ledger = new MemoryLedger(clock)
     const runtime = { id: "oc-01jreadaccount000000000", account: "default", backend: "colab" as const, spec: T4, createdAt: "2026-11-17T09:00:00.000Z", nonce: "n1", keep: [], lease: { releaseAfterIdleMinutes: 20, maxHours: 4 }, state: "ready" as const }
     await ledger.putRuntime(runtime)
-    const release = { calls: 0, release: async () => ((release.calls += 1), { harvested: [], released: true, warnings: [] }) }
+    const release = {
+      calls: 0,
+      release: async () => {
+        release.calls += 1
+        return { harvested: [], released: true, warnings: [] }
+      },
+    }
     const outcome = await runAutomationOnce({
       options: await loadOptions({ accounts: { default: { access: "read" } } }),
       ledger,

@@ -30,7 +30,6 @@ export const ERRORS = {
   INPUT_INVALID: entry("refused", "The input does not fit the tool's schema. Nothing ran.", "Check the input against the tool's schema, then call it again."),
   ACCOUNT_UNKNOWN: entry("refused", "The account alias is not configured.", "Pass a configured alias; colab_status lists them."),
   ACCOUNT_REQUIRED: entry("refused", "More than one account is configured, none is named default, and the call named none.", "Pass account with one of the aliases colab_status lists."),
-  NOT_IMPLEMENTED: entry("refused", "This tool or plan action is declared but not built in this pre-release.", "Use another tool, or wait for a release that builds it."),
   NOT_RELEASED: entry("refused", "This install is not a tagged release, so the tool did not call Google.", "Install a tagged release when one exists. A source checkout does not call Google."),
   EXECUTION_UNAVAILABLE: entry("refused", "This build edits local notebooks only.", "Use colab_find, colab_notebook or colab_edit with local input."),
   EDIT_UNAVAILABLE: entry("refused", "This location cannot safely perform the requested notebook write.", "Use an existing folder on a supported local Linux filesystem, or edit the notebook in your notebook editor."),
@@ -42,7 +41,7 @@ export const ERRORS = {
   AUTH_REQUIRED: entry(
     "refused",
     "No usable credential; reason session-control when a Workspace reauthentication policy expired a cloud-platform grant.",
-    "Run /connect and choose Colab (or opencode auth login colab-<alias>); for session control, sign in again, and the admin may exempt the client as a trusted app.",
+    "Run /connect and choose Colab (or opencode auth login colab for default, opencode auth login colab-<alias> for another alias); for session control, sign in again, and the admin may exempt the client as a trusted app.",
   ),
   AUTH_SCOPE_MISSING: entry("refused", "The sign-in lacks the scope this call needs; Google was not called.", "Sign in again at Read and write, or approve the scope."),
   AUTH_CLIENT_REQUIRED: entry("refused", "No OAuth client is configured.", "Enter a Desktop client in /connect, or set oauthClient."),
@@ -50,7 +49,7 @@ export const ERRORS = {
   AUTH_CLIENT_INVALID: entry(
     "refused",
     "The sign-in form has only one of the client ID and secret, a value in the wrong format, a client JSON that is not Google's downloaded client JSON, or an answer that is not text.",
-    "Enter both the client ID and the secret of the same Desktop app OAuth client; /colab-status lists the steps.",
+    "Enter both the client ID and the secret of the same Desktop app OAuth client; /colab lists the steps.",
   ),
   AUTH_REDIRECT_INVALID: entry(
     "refused",
@@ -63,11 +62,6 @@ export const ERRORS = {
     "Use a Web application client that lists the redirect, as its downloaded client JSON, or leave redirectUri unset for a Desktop app client.",
   ),
   AUTH_WRITE_UNCONFIRMED: entry("refused", "Read and write access was chosen in the sign-in form without confirming the write scopes.", "Sign in again and confirm the write scopes, or choose Read-only."),
-  ACCOUNT_READ_ONLY: entry(
-    "refused",
-    "The account's access is read, so the plugin makes no change on it: no run, upload, edit, download, pause, plan or commit (design §4). Nothing ran.",
-    "Set accounts.<alias>.access to write and sign in again.",
-  ),
   ADC_UNAVAILABLE: entry("refused", "Application Default Credentials found nothing.", "Use interactive mode, or set GOOGLE_APPLICATION_CREDENTIALS for an enterprise account."),
   ADC_REFUSED: entry("refused", "ADC in a managed host that does not set allowAdcInHost.", "Sign in interactively, or ask the operator to set allowAdcInHost: true."),
   COLAB_API_UNAVAILABLE: entry(
@@ -82,7 +76,7 @@ export const ERRORS = {
   RUN_IDENTITY_REQUIRED: entry("refused", "An Enterprise job with no serviceAccount and no runAsUser.", "Set serviceAccount (recommended) or runAsUser: true."),
   // ── Resources ─────────────────────────────────────────────────────────
   NOT_FOUND: entry("refused", "The notebook, cell, runtime, job, schedule or file was not found.", "List what exists with colab_find, colab_runtimes or colab_files."),
-  RUNTIME_NOT_OURS: entry("refused", "The runtime was not created by this plugin.", "Plan a runtime of the plugin's own with colab_plan({ action: \"runtime.create\" })."),
+  RUNTIME_NOT_OURS: entry("refused", "The runtime was not created by this plugin.", "Plan a runtime of the plugin's own with colab_plan_write({ action: \"runtime.create\" })."),
   RUNTIME_HAS_CREDENTIALS: entry("refused", "A Drive mount or a Google credential is on the runtime; it is now tainted for good.", "Plan a fresh runtime.create, and release this one by plan."),
   RUNTIME_SHARED: entry("refused", "Another client's session or connection is on the runtime; it is now tainted for good.", "Plan a fresh runtime.create."),
   RUNTIME_UNVERIFIED: entry(
@@ -102,7 +96,7 @@ export const ERRORS = {
     "The runtime is busy: a run of the plugin's own is active on it, or another OpenCode process is using it.",
     "Stop the run with colab_cancel, or plan again with force.",
   ),
-  INTERACTIVE_UNSUPPORTED: entry("refused", "colab_run on an enterprise account: Enterprise runs whole notebooks as jobs.", "Plan colab_plan({ action: \"job.create\", notebook })."),
+  INTERACTIVE_UNSUPPORTED: entry("refused", "colab_run on an enterprise account: Enterprise runs whole notebooks as jobs.", "Plan colab_plan_write({ action: \"job.create\", notebook })."),
   // ── Runs ──────────────────────────────────────────────────────────────
   KERNEL_BUSY: entry("refused", "The kernel session runs another run.", "Wait with colab_execution, or use another session."),
   KERNEL_DIED: entry("failed", "The kernel died, often from memory.", "Rerun; pick a high-memory spec if eligible."),
@@ -132,16 +126,12 @@ export const ERRORS = {
   SHARE_UNSUPPORTED: entry("refused", "Sharing is not part of this plugin.", "Share with the gws plugin."),
   ACTION_UNSUPPORTED: entry("refused", "IAM, templates, setDefault and Enterprise runtime creation are not part of this build.", "Use the Google Cloud console."),
   // ── Plans ─────────────────────────────────────────────────────────────
-  PLAN_NOT_FOUND: entry("refused", "No plan has this id.", "Run colab_plan first."),
-  PLAN_ALREADY_USED: entry("refused", "This plan was already committed, or its commit is running.", "Create a new plan to repeat the change; check the earlier result first."),
-  PLAN_EXPIRED: entry("refused", "The plan is older than planTtlSeconds.", "Create a new plan."),
   PLAN_CALLER_MISMATCH: entry("refused", "A plan is bound to the session, agent and account that created it.", "Plan again from this session."),
   PLAN_CHANGED: entry(
     "refused",
     "What the plan previewed changed: eligibility, runtime state, the notebook hash, the Drive revision, or a cost estimate more than 10% higher.",
     "Plan again and show the new preview.",
   ),
-  CATEGORY_MISMATCH: entry("refused", "The plan's category is not this commit tool's.", "Commit a write plan with colab_write and a delete plan with colab_delete, passing only {planId}."),
   // ── Transport ─────────────────────────────────────────────────────────
   RATE_LIMITED: entry(
     "failed",
@@ -153,26 +143,6 @@ export const ERRORS = {
 
 export type ErrorCode = keyof typeof ERRORS
 export const ERROR_CODES = Object.keys(ERRORS) as ErrorCode[]
-
-/** The codes design §12 lists, in its order, and the ones Day 0 adds. A unit test keeps both lists true. */
-export const DAY0_CODES: readonly ErrorCode[] = [
-  "AUTH_CLIENT_INVALID",
-  "AUTH_REDIRECT_INVALID",
-  "AUTH_REDIRECT_MISMATCH",
-  "AUTH_WRITE_UNCONFIRMED",
-  "ACCOUNT_READ_ONLY",
-  "INPUT_INVALID",
-  "ACCOUNT_UNKNOWN",
-  "ACCOUNT_REQUIRED",
-  "NOT_IMPLEMENTED",
-  "NOT_RELEASED",
-  "EXECUTION_UNAVAILABLE",
-  "EDIT_UNAVAILABLE",
-  "RULES_NOT_ADDED",
-  "TOOLS_NOT_REGISTERED",
-  "STATUS_UNAVAILABLE",
-  "LEDGER_UNAVAILABLE",
-]
 
 /** Warnings ride on a result's `warnings`; none stops a call (design §12). */
 export const WARNINGS = {
@@ -192,19 +162,6 @@ export const WARNINGS = {
 
 export type WarningCode = keyof typeof WARNINGS
 export const WARNING_CODES = Object.keys(WARNINGS) as WarningCode[]
-
-/**
- * A plugin code as the source contract's code, for the `colab.runs` and `colab.runtimes` reads (design §12). Codes the
- * source reads raise themselves (`ACCOUNT_MISMATCH`, `CURSOR_*`, `TOO_LARGE`) come from the contract, not this table.
- */
-export const SOURCE_CODES: Partial<Record<ErrorCode, string>> = {
-  AUTH_REQUIRED: "NEEDS_SIGN_IN",
-  AUTH_CLIENT_REQUIRED: "NEEDS_SIGN_IN",
-  AUTH_SCOPE_MISSING: "SCOPE_MISSING",
-  RATE_LIMITED: "RATE_LIMITED",
-  UNAVAILABLE: "UNAVAILABLE",
-  PERMISSION_DENIED: "PERMISSION_DENIED",
-}
 
 /** The one message shape: `CODE: What happened. Next step: What to do.` Both parts are sentences. */
 export const errorText = (code: ErrorCode, message: string, next: string): string => `${code}: ${sentence(message)} Next step: ${sentence(next)}`
@@ -246,30 +203,3 @@ export class ColabError extends Error {
   }
 }
 
-/** The docs page, generated from the table: one row per code, then the warnings. */
-export function renderErrorDoc(): string {
-  const cell = (text: string) => text.replaceAll("|", "\\|")
-  const lines = [
-    "# Errors",
-    "",
-    "Generated from `src/domain/errors.ts` by `node scripts/errors-doc.mjs`; a unit test fails when they differ. Every",
-    "message reads `CODE: What happened. Next step: What to do.` A tool result that fails carries `state`, `error` (the",
-    "code), `message` and `next`.",
-    "",
-    "The editing-only build does not return provider, run or source errors. The table retains those codes for the latent full plugin.",
-    "",
-    "## Errors",
-    "",
-    "| Code | state | Meaning | Next step |",
-    "| --- | --- | --- | --- |",
-    ...ERROR_CODES.map((code) => `| \`${code}\` | ${ERRORS[code].state} | ${cell(ERRORS[code].meaning)} | ${cell(ERRORS[code].next)} |`),
-    "",
-    "## Warnings",
-    "",
-    "| Code | Meaning |",
-    "| --- | --- |",
-    ...WARNING_CODES.map((code) => `| \`${code}\` | ${cell(WARNINGS[code])} |`),
-    "",
-  ]
-  return lines.join("\n")
-}

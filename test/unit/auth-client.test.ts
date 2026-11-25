@@ -1,9 +1,10 @@
 // §15.1 auth: the OAuth client's precedence, the shapes Google's client JSON and option carry, and the redirect a
 // client would make Google refuse (checked before anything listens).
 import { describe, expect, it } from "vitest"
-import { clientFromJson, clientFromOption, desktopClient, isClientId, redirectMismatch, resolveClient, type OAuthClient } from "../../src/auth/client.js"
+import { clientFromJson, clientFromOption, desktopClient, isClientId, redirectMismatch, resolveClient, type OAuthClient } from "../../src/provider/auth/client.js"
+import { invented } from "../support/invented.js"
 
-const desktop: OAuthClient = { clientId: "123456789012-abc.apps.googleusercontent.com", clientSecret: "GOCSPX-secret" }
+const desktop: OAuthClient = { clientId: "123456789012-abc.apps.googleusercontent.com", clientSecret: invented("GOCSPX-", "secret") }
 const web: OAuthClient = { ...desktop, redirectUris: ["https://host.example/oauth/return"] }
 
 describe("the OAuth client (design §4)", () => {
@@ -18,8 +19,8 @@ describe("the OAuth client (design §4)", () => {
 
   it("§15.1 auth — a Desktop client's ID and secret are checked, and a malformed pair is refused", () => {
     expect(isClientId(desktop.clientId)).toBe(true)
-    expect(desktopClient("123456789012-abc.apps.googleusercontent.com", "GOCSPX-secret")).toEqual(desktop)
-    expect(desktopClient("not-a-client", "GOCSPX-secret")).toBeUndefined()
+    expect(desktopClient("123456789012-abc.apps.googleusercontent.com", invented("GOCSPX-", "secret"))).toEqual(desktop)
+    expect(desktopClient("not-a-client", invented("GOCSPX-", "secret"))).toBeUndefined()
     expect(desktopClient(desktop.clientId, "bad secret!")).toBeUndefined()
   })
 

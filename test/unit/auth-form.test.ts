@@ -2,8 +2,9 @@
 // hidden fields, and how an answer is read.
 import { describe, expect, it } from "vitest"
 import { loadOptions, resolveAccount } from "../../src/options.js"
-import { readAnswer, signInForm, signInRedirect, type FormField, type FormOption, type SignInForm } from "../../src/auth/form.js"
-import { SCOPES } from "../../src/auth/scopes.js"
+import { readAnswer, signInForm, signInRedirect, type FormField, type FormOption, type SignInForm } from "../../src/provider/auth/form.js"
+import { SCOPES } from "../../src/provider/auth/scopes.js"
+import { invented } from "../support/invented.js"
 
 const account = (raw: unknown, alias: string) => resolveAccount(loadOptions(raw), alias)
 const field = (form: SignInForm, key: string): FormField => form.find((entry) => entry.key === key)!
@@ -45,11 +46,11 @@ describe("the sign-in form (design §4)", () => {
   })
 
   it("§15.1 auth — a configured client hides both client fields and puts no secret in the form", () => {
-    const form = signInForm("default", account({}, "default"), { client: { clientId: "123456789012-abc.apps.googleusercontent.com", clientSecret: "GOCSPX-top-secret" }, source: "plugin" })
+    const form = signInForm("default", account({}, "default"), { client: { clientId: "123456789012-abc.apps.googleusercontent.com", clientSecret: invented("GOCSPX-", "top-secret") }, source: "plugin" })
     expect(field(form, "clientId").hidden).toBe(true)
     expect(field(form, "clientSecret").hidden).toBe(true)
     expect(field(form, "clientId").default).toBeUndefined()
-    expect(JSON.stringify(form)).not.toContain("GOCSPX-top-secret")
+    expect(JSON.stringify(form)).not.toContain(invented("GOCSPX-", "top-secret"))
   })
 
   it("§15.1 auth — a half-entered client, an unacknowledged write and a redirect without its port are refused before any call", () => {
@@ -70,14 +71,14 @@ describe("the sign-in form (design §4)", () => {
     const home = account({ accounts: { home: { access: "write" } } }, "home")
     const answer = readAnswer(
       {
-        clientJson: JSON.stringify({ installed: { client_id: "123456789012-abc.apps.googleusercontent.com", client_secret: "GOCSPX-secret" } }),
+        clientJson: JSON.stringify({ installed: { client_id: "123456789012-abc.apps.googleusercontent.com", client_secret: invented("GOCSPX-", "secret") } }),
         access: "read",
         redirectUri: "https://host.example/oauth/return",
         callbackPort: "8080",
       },
       home,
     )
-    expect(answer.pasted).toEqual({ clientId: "123456789012-abc.apps.googleusercontent.com", clientSecret: "GOCSPX-secret" })
+    expect(answer.pasted).toEqual({ clientId: "123456789012-abc.apps.googleusercontent.com", clientSecret: invented("GOCSPX-", "secret") })
     expect(answer.access).toBe("read")
     expect(signInRedirect(answer.redirect, { redirectUri: "https://other.example/return", callbackPort: 9000 })).toEqual({ uri: "https://host.example/oauth/return", port: 8080, paths: ["/oauth/return"] })
     expect(signInRedirect({}, {})).toEqual({ uri: "", port: 0, paths: ["/", "/callback"] })

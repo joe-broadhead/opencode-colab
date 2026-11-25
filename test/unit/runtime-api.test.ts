@@ -3,9 +3,10 @@
 // codes)"; §15.1 idempotency; L5).
 import { describe, expect, it } from "vitest"
 import { ColabError } from "../../src/domain/errors.js"
-import { COLAB_API_ORIGIN } from "../../src/runtime/discovery.js"
-import { checkConnection, isAllowedRuntimeHost } from "../../src/runtime/url.js"
+import { COLAB_API_ORIGIN } from "../../src/provider/runtime/discovery.js"
+import { checkConnection, isAllowedRuntimeHost } from "../../src/provider/runtime/url.js"
 import { createRuntimeFixture } from "../fakes/runtime-env.js"
+import { invented } from "../support/invented.js"
 
 const signal = () => new AbortController().signal
 const code = async (work: Promise<unknown>): Promise<string> => {
@@ -138,10 +139,12 @@ describe("the Colab API client", () => {
       await fixture.ports.colab.listRuntimeSpecs("work", signal())
       await fixture.ports.colab.listRuntimeSpecs("default", signal())
       const tokenCalls = fixture.auth.calls.filter((call) => call.method === "token").map((call) => call.args as [string, readonly string[]])
-      expect(tokenCalls[0]?.[0]).toBe("work")
-      expect(tokenCalls[0]?.[1][0]).toBe("https://www.googleapis.com/auth/colaboratory.readonly")
-      expect(fixture.auth.calls.at(-1)?.args[0]).toBe("default")
-      expect((fixture.auth.calls.at(-1)?.args[1] as string[])[0]).toBe("https://www.googleapis.com/auth/colaboratory")
+      const [workArgs] = tokenCalls
+      expect(workArgs?.[0]).toBe("work")
+      expect(workArgs?.[1]).toEqual(["https://www.googleapis.com/auth/colaboratory.readonly"])
+      const last = fixture.auth.calls.at(-1)
+      expect(last?.args[0]).toBe("default")
+      expect(last?.args[1]).toEqual(["https://www.googleapis.com/auth/colaboratory"])
     } finally {
       await fixture.close()
     }
@@ -180,7 +183,7 @@ describe("the Colab API client", () => {
 
 describe("the package's factory", () => {
   it("replaces the Day 0 stub: the three ports are built from one factory, and auth comes before any network call", async () => {
-    const { createRuntimePorts } = await import("../../src/runtime/index.js")
+    const { createRuntimePorts } = await import("../../src/provider/runtime/index.js")
     const { FakeAuth, FakeClock, MemoryLedger } = await import("../fakes/index.js")
     const { loadOptions } = await import("../../src/options.js")
     const auth = new FakeAuth()
@@ -200,14 +203,14 @@ describe("the package's factory", () => {
     expect(typeof ports.runtime.openSession).toBe("function")
     expect(typeof ports.check.probe).toBe("function")
     // No grant on the fake auth, so the client refuses with AUTH_REQUIRED before fetching anything: not the stub's
-    // NOT_IMPLEMENTED, and no network call.
+    // INPUT_INVALID, and no network call.
     await expect(ports.colab.listRuntimeSpecs("default", signal())).rejects.toMatchObject({ code: "AUTH_REQUIRED" })
     expect(called).toBe(false)
   })
 })
 
 describe("the runtime URL gate", () => {
-  const info = (url: string, token = "proxy-token") => ({ url, token, expireTime: "2026-11-17T10:00:00Z" })
+  const info = (url: string, token = invented("proxy", "-token")) => ({ url, token, expireTime: "2026-11-17T10:00:00Z" })
 
   it("accepts only https on a Google-owned host, and refuses anything else without echoing it", () => {
     expect(isAllowedRuntimeHost("abc.prod.colab.dev")).toBe(true)

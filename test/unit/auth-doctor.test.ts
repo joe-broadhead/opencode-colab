@@ -1,13 +1,14 @@
 // §14 and §4: `/colab-doctor` — one small read per account, design §14's codes, the read-only skip and the runtime
 // print asserted as colab.run, and never Google's text in the message.
 import { describe, expect, it } from "vitest"
-import { Doctor, formatDoctor, summarizeDoctor, type DoctorRuntimeProbe } from "../../src/auth/doctor.js"
-import { createAuth } from "../../src/auth/index.js"
-import { SCOPES } from "../../src/auth/scopes.js"
+import { Doctor, formatDoctor, summarizeDoctor, type DoctorRuntimeProbe } from "../../src/provider/auth/doctor.js"
+import { createAuth } from "../../src/provider/auth/index.js"
+import { SCOPES } from "../../src/provider/auth/scopes.js"
 import { loadOptions } from "../../src/options.js"
 import { FakeClock } from "../fakes/index.js"
 import { FakeAuthHost } from "../fakes/auth-host.js"
 import { FakeHttp, storedCredential } from "../fakes/auth-http.js"
+import { invented } from "../support/invented.js"
 
 const NOW = new Date("2026-11-17T09:00:00.000Z")
 
@@ -21,7 +22,7 @@ function setup(
   if (options.signedIn !== false) {
     for (const account of config.accounts) {
       const granted = account.backend === "enterprise" ? [SCOPES.openid, SCOPES.email, SCOPES.cloudPlatform] : [SCOPES.openid, SCOPES.email, SCOPES.colaboratory, SCOPES.driveFile]
-      host.credentials.set(`colab-${account.alias}`, storedCredential({ now: NOW.getTime(), granted }))
+      host.credentials.set(account.alias === "default" ? "colab" : `colab-${account.alias}`, storedCredential({ now: NOW.getTime(), granted }))
     }
   }
   const auth = createAuth({ options: config, clock: new FakeClock(NOW), host, fetch: http.fetch, env: {} })
@@ -43,7 +44,7 @@ const consumer = { accounts: { default: {} } }
 const enterprise = { accounts: { work: { backend: "enterprise", access: "write", project: "example-project", region: "us-central1", outputBucket: "gs://example-bucket/runs" } } }
 
 describe("/colab-doctor (design §14)", () => {
-  it("§14 — a consumer account's runtimespecs.list is one read, asserted as colab.read on its operation", async () => {
+  it("§14 — a consumer account's runtimespecs.list is one read, asserted as colab.probe on the account", async () => {
     const http = new FakeHttp()
     http.on("colaboratory.googleapis.com", "/v1beta/runtimespecs", 200, { runtimeSpecs: [] })
     const { doctor, asserts } = setup(consumer, { http })
@@ -52,8 +53,8 @@ describe("/colab-doctor (design §14)", () => {
       ["runtimespecs.list", "OK"],
       ["runtime print(1)", "SKIPPED"],
     ])
-    expect(asserts).toEqual([{ action: "colab.read", resources: ["default:colaboratory.runtimespecs.list"] }])
-    expect(http.calls[0]!.headers["authorization"]).toBe("Bearer ya29.test-access-token")
+    expect(asserts).toEqual([{ action: "colab.probe", resources: ["default"] }])
+    expect(http.calls[0]!.headers["authorization"]).toBe(["Bearer", invented("ya29.", "test-access-token")].join(" "))
   })
 
   it("§14 — an Enterprise account checks templates and one bucket listing, and the message names both", async () => {
@@ -150,7 +151,9 @@ describe("/colab-doctor (design §14)", () => {
     const http = new FakeHttp()
     http.on("colaboratory.googleapis.com", "/v1beta/runtimespecs", 200, {})
     let printed = 0
-    const probe: DoctorRuntimeProbe = { runtimes: async () => ["oc-runtime-1"], print: async () => void (printed += 1) }
+    const probe: DoctorRuntimeProbe = { runtimes: async () => ["oc-runtime-1"], print: async () => {
+      printed += 1
+    } }
     const denied = setup(consumer, { http, probe, decide: (request) => request.action !== "colab.run" })
     const checks = await denied.doctor.checks("ses_1")
     expect(checks.find((check) => check.check === "runtime print(1)")!.status).toBe("DENIED")

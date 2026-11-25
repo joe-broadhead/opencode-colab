@@ -5,12 +5,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { ColabError } from "../../src/domain/errors.js"
-import type { Calibration, ProbeVerdict } from "../../src/ports.js"
-import { COLABTOOLS_FACTS_VERSION, CREDENTIAL_FILES, GCLOUD_CONFIG_MARKER } from "../../src/runtime/discovery.js"
-import { GCLOUD_GCE_MARKER } from "../../src/runtime/probe.js"
-import { createOwnerLease } from "../../src/runtime/lease.js"
-import { parseBaselineOutput, parseComparisonOutput, PROBE_SENTINEL, PROBE_SNIPPET_VERSION, probeSnippet } from "../../src/runtime/probe.js"
-import type { RuntimeProtocolInternal } from "../../src/runtime/protocol.js"
+import type { Calibration, ProbeVerdict } from "../../src/provider/ports.js"
+import { COLABTOOLS_FACTS_VERSION, CREDENTIAL_FILES, GCLOUD_CONFIG_MARKER } from "../../src/provider/runtime/discovery.js"
+import { GCLOUD_GCE_MARKER } from "../../src/provider/runtime/probe.js"
+import { createOwnerLease } from "../../src/provider/runtime/lease.js"
+import { parseBaselineOutput, parseComparisonOutput, PROBE_SENTINEL, PROBE_SNIPPET_VERSION, probeSnippet } from "../../src/provider/runtime/probe.js"
+import type { RuntimeProtocolInternal } from "../../src/provider/runtime/protocol.js"
 import { createRuntimeFixture, PROXY_TOKEN, RUNTIME_ID, type RuntimeFixture } from "../fakes/runtime-env.js"
 
 const signal = () => new AbortController().signal
@@ -330,7 +330,7 @@ describe("the agent-only check", () => {
     try {
       const calibration = await calibrate(fixture)
       const other = createOwnerLease({ dir: leaseDir, pid: process.ppid })
-      const otherCheck = (await import("../../src/runtime/agentonly.js")).createAgentOnlyCheck(fixture.env, fixture.ports.runtime as RuntimeProtocolInternal, { lease: other })
+      const otherCheck = (await import("../../src/provider/runtime/agentonly.js")).createAgentOnlyCheck(fixture.env, fixture.ports.runtime as RuntimeProtocolInternal, { lease: other })
       expect(await verdictCode(otherCheck.probe(TARGET, { nonce: NONCE, calibration, fresh: true }, signal()))).toBe("RUNTIME_BUSY")
       expect(tainted(fixture)).toBeUndefined()
       expect(await probe(fixture, calibration)).toMatchObject({ ok: true })

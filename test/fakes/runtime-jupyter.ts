@@ -13,9 +13,10 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import type { Duplex } from "node:stream"
-import { CREDENTIAL_FILES, GCLOUD_CONFIG_DIR } from "../../src/runtime/discovery.js"
-import { PROBE_CONFIG_MAX_BYTES, PROBE_CONFIG_MAX_DEPTH, PROBE_CONFIG_MAX_FILES, PROBE_CONFIG_SCOPE_DIRS, PROBE_CONFIG_SCOPE_FILES } from "../../src/runtime/probe.js"
-import { PROBE_SENTINEL } from "../../src/runtime/probe.js"
+import { CREDENTIAL_FILES, GCLOUD_CONFIG_DIR } from "../../src/provider/runtime/discovery.js"
+import { PROBE_CONFIG_MAX_BYTES, PROBE_CONFIG_MAX_DEPTH, PROBE_CONFIG_MAX_FILES, PROBE_CONFIG_SCOPE_DIRS, PROBE_CONFIG_SCOPE_FILES } from "../../src/provider/runtime/probe.js"
+import { PROBE_SENTINEL } from "../../src/provider/runtime/probe.js"
+import { invented } from "../support/invented.js"
 
 export interface FakeIopub {
   readonly msgType: string
@@ -167,9 +168,9 @@ export interface FakeJupyter {
   /** Extra connections a test wants on a kernel. */
   extraConnections: number
   /** Another token the proxy accepts, for a refresh test. */
-  addToken(token: string): void
+  addTicket(ticket: string): void
   /** Stop accepting a token, as an expiry does. */
-  revoke(token: string): void
+  revokeTicket(ticket: string): void
   /** Give the named session a new kernel id, as a restart or a replaced kernel does. */
   replaceKernel(sessionName: string): string
   /** Extra stdout the probe prints, to test the strict parse. */
@@ -181,10 +182,10 @@ export interface FakeJupyter {
 }
 
 export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promise<FakeJupyter> {
-  const token = options.token ?? "proxy-token-1"
+  const token = options.token ?? invented("proxy-token-", "1")
   const accepted = new Set([token])
   let valid = true
-  let allowHidden = options.allowHidden ?? false
+  const allowHidden = options.allowHidden ?? false
   const contents = new Map<string, Uint8Array>()
   /** The folders that exist, starting with the server root and Colab's /content; a write needs its parent. */
   const directories = new Set<string>(["", "content"])
@@ -626,10 +627,10 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
     set extraConnections(value: number) {
       extraConnections = value
     },
-    addToken(value: string) {
+    addTicket(value: string) {
       accepted.add(value)
     },
-    revoke(value: string) {
+    revokeTicket(value: string) {
       accepted.delete(value)
     },
     replaceKernel(sessionName: string) {

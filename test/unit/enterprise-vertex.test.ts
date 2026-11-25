@@ -5,8 +5,8 @@
  * job request, idle shutdown, EUC). No network: every answer is a recorded shape.
  */
 import { describe, expect, it } from "vitest"
-import { createGcs } from "../../src/enterprise/gcs.js"
-import { createVertex } from "../../src/enterprise/vertex.js"
+import { createGcs } from "../../src/provider/enterprise/gcs.js"
+import { createVertex } from "../../src/provider/enterprise/vertex.js"
 import { fakeDeps } from "../fakes/index.js"
 
 const OPTIONS = { accounts: { work: { backend: "enterprise" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" } } }

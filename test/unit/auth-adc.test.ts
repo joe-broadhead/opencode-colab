@@ -3,10 +3,11 @@
 // scripted; the RSA key is generated in the test process.
 import { createHash } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { adcIdentity, adcToken, findAdcSource, gcloudAdcPath, isManagedHost, serviceAccountAssertion } from "../../src/auth/adc.js"
-import { SCOPES } from "../../src/auth/scopes.js"
+import { adcIdentity, adcToken, findAdcSource, gcloudAdcPath, isManagedHost, serviceAccountAssertion } from "../../src/provider/auth/adc.js"
+import { SCOPES } from "../../src/provider/auth/scopes.js"
 import type { ColabError } from "../../src/domain/errors.js"
 import { FakeHttp, formBody, jsonResponse, serviceAccountKey } from "../fakes/auth-http.js"
+import { invented } from "../support/invented.js"
 
 const NOW = new Date("2026-11-17T09:00:00.000Z").getTime()
 const key = serviceAccountKey()
@@ -19,7 +20,7 @@ describe("Application Default Credentials (design §4)", () => {
   it("§15.1 auth — ADC reads GOOGLE_APPLICATION_CREDENTIALS, then gcloud's file, then the metadata server", () => {
     const files: Record<string, string> = {
       "/custom/sa.json": JSON.stringify(key),
-      "/gcloud/application_default_credentials.json": JSON.stringify({ type: "authorized_user", client_id: "cid", client_secret: "csecret", refresh_token: "1//rt" }),
+      "/gcloud/application_default_credentials.json": JSON.stringify({ type: "authorized_user", client_id: "cid", client_secret: invented("csecret"), refresh_token: invented("1//", "rt") }),
     }
     const readFile = (path: string) => files[path]
     expect(findAdcSource({ env: { GOOGLE_APPLICATION_CREDENTIALS: "/custom/sa.json" }, readFile })).toMatchObject({ type: "service_account", client_email: key.client_email })
@@ -35,9 +36,9 @@ describe("Application Default Credentials (design §4)", () => {
 
   it("§15.1 auth — a service account key signs the JWT bearer grant with Google's claims, and no key reaches a message", async () => {
     const http = new FakeHttp()
-    http.on("oauth2.googleapis.com", "/token", 200, { access_token: "ya29.adc", expires_in: 3600, token_type: "Bearer" })
+    http.on("oauth2.googleapis.com", "/token", 200, { access_token: invented("ya29.", "adc"), expires_in: 3600, token_type: "Bearer" })
     const minted = await adcToken({ scopes: [SCOPES.cloudPlatform], environment: { env: { GOOGLE_APPLICATION_CREDENTIALS: "/key.json" }, readFile: () => JSON.stringify(key), fetch: http.fetch, now: () => NOW } })
-    expect(minted.token).toBe("ya29.adc")
+    expect(minted.token).toBe(invented("ya29.", "adc"))
     expect(minted.expiresAt).toBe(NOW + 3600_000)
     const body = formBody(http.calls[0]!)
     expect(body.get("grant_type")).toBe("urn:ietf:params:oauth:grant-type:jwt-bearer")
@@ -53,7 +54,7 @@ describe("Application Default Credentials (design §4)", () => {
       (url) => url.host === "oauth2.googleapis.com" && url.pathname === "/token",
       () => jsonResponse(400, { error: "invalid_grant", error_description: "Token has been expired or revoked." }),
     )
-    const files = { "/gcloud/application_default_credentials.json": JSON.stringify({ type: "authorized_user", client_id: "cid", client_secret: "csecret", refresh_token: "1//sensitive-refresh" }) }
+    const files = { "/gcloud/application_default_credentials.json": JSON.stringify({ type: "authorized_user", client_id: "cid", client_secret: invented("csecret"), refresh_token: invented("1//", "sensitive-refresh") }) }
     const failure = await adcToken({ scopes: [SCOPES.cloudPlatform], environment: { env: { CLOUDSDK_CONFIG: "/gcloud" }, readFile: (path) => files[path as keyof typeof files], fetch: http.fetch, now: () => NOW } }).catch((error: unknown) => error)
     expect(failure).toMatchObject({ code: "AUTH_REQUIRED" })
     expect(String((failure as Error).message)).not.toContain("1//sensitive-refresh")
@@ -65,10 +66,10 @@ describe("Application Default Credentials (design §4)", () => {
     const http = new FakeHttp()
     http.route(
       (url) => url.host === "metadata.google.internal",
-      () => jsonResponse(200, { access_token: "ya29.metadata", expires_in: 1800, token_type: "Bearer" }),
+      () => jsonResponse(200, { access_token: invented("ya29.", "metadata"), expires_in: 1800, token_type: "Bearer" }),
     )
     const minted = await adcToken({ scopes: [SCOPES.cloudPlatform], environment: { env: {}, readFile: () => undefined, fetch: http.fetch, now: () => NOW } })
-    expect(minted).toEqual({ token: "ya29.metadata", expiresAt: NOW + 1800_000 })
+    expect(minted).toEqual({ token: invented("ya29.", "metadata"), expiresAt: NOW + 1800_000 })
     expect(http.calls[0]!.headers["metadata-flavor"]).toBe("Google")
     http.calls.length = 0
     const offline = new FakeHttp()
@@ -78,17 +79,17 @@ describe("Application Default Credentials (design §4)", () => {
 
   it("§15.1 auth — impersonation asks generateAccessToken for the target with scope and lifetime, and reads accessToken/expireTime", async () => {
     const http = new FakeHttp()
-    http.on("oauth2.googleapis.com", "/token", 200, { access_token: "ya29.caller", expires_in: 3600, token_type: "Bearer" })
+    http.on("oauth2.googleapis.com", "/token", 200, { access_token: invented("ya29.", "caller"), expires_in: 3600, token_type: "Bearer" })
     http.route(
       (url) => url.host === "iamcredentials.googleapis.com" && url.pathname === "/v1/projects/-/serviceAccounts/runner%40example-project.iam.gserviceaccount.com:generateAccessToken",
-      () => jsonResponse(200, { accessToken: "ya29.impersonated", expireTime: "2026-11-17T10:00:00Z" }),
+      () => jsonResponse(200, { accessToken: invented("ya29.", "impersonated"), expireTime: "2026-11-17T10:00:00Z" }),
     )
     const minted = await adcToken({
       scopes: [SCOPES.cloudPlatform],
       impersonate: "runner@example-project.iam.gserviceaccount.com",
       environment: { env: { GOOGLE_APPLICATION_CREDENTIALS: "/key.json" }, readFile: () => JSON.stringify(key), fetch: http.fetch, now: () => NOW },
     })
-    expect(minted.token).toBe("ya29.impersonated")
+    expect(minted.token).toBe(invented("ya29.", "impersonated"))
     expect(minted.expiresAt).toBe(Date.parse("2026-11-17T10:00:00Z"))
     const call = http.calls[1]!
     expect(call.headers["authorization"]).toBe("Bearer ya29.caller")
@@ -98,7 +99,7 @@ describe("Application Default Credentials (design §4)", () => {
 
   it("§15.1 auth — an impersonation refusal is PERMISSION_DENIED naming the role, and no token is minted", async () => {
     const http = new FakeHttp()
-    http.on("oauth2.googleapis.com", "/token", 200, { access_token: "ya29.caller", expires_in: 3600, token_type: "Bearer" })
+    http.on("oauth2.googleapis.com", "/token", 200, { access_token: invented("ya29.", "caller"), expires_in: 3600, token_type: "Bearer" })
     http.route(
       (url) => url.host === "iamcredentials.googleapis.com",
       () => jsonResponse(403, { error: { code: 403, status: "PERMISSION_DENIED", message: "denied" } }),
@@ -112,7 +113,7 @@ describe("Application Default Credentials (design §4)", () => {
     expect(String((failure as Error).message)).toContain("roles/iam.serviceAccountTokenCreator")
   })
 
-  it("§15.1 auth — a Workload Identity Federation credential file is refused by name (TODO L3)", async () => {
+  it("§15.1 auth — a Workload Identity Federation credential file is refused by name", async () => {
     const file = JSON.stringify({ type: "external_account", audience: "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/x", subject_token_type: "urn:ietf:params:oauth:token-type:jwt", token_url: "https://sts.googleapis.com/v1/token" })
     const failure = await adcToken({ scopes: [SCOPES.cloudPlatform], environment: { env: { GOOGLE_APPLICATION_CREDENTIALS: "/wif.json" }, readFile: () => file, fetch: new FakeHttp().fetch, now: () => NOW } }).catch((error: unknown) => error)
     expect(failure).toMatchObject({ code: "ADC_UNAVAILABLE" })

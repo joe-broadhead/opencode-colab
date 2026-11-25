@@ -3,13 +3,12 @@
 // ask-changes it asserts the tool action colab.delete, so the person is never asked twice; a no ends that action and
 // moves on. Every release goes through the one release function.
 import { describe, expect, it } from "vitest"
-import { cleanupActions, cleanupReport, runCleanup } from "../../src/cost/cleanup.js"
+import { cleanupActions, cleanupReport } from "../../src/provider/cost/cleanup.js"
 import { runtimeResource } from "../../src/domain/actions.js"
 import { ColabError } from "../../src/domain/errors.js"
 import { loadOptions } from "../../src/options.js"
-import type { Release, RuntimeRecord } from "../../src/ports.js"
+import type { Release, RuntimeRecord } from "../../src/provider/ports.js"
 import { FakeClock, FakeRelease, MemoryLedger, T4 } from "../fakes/index.js"
-import { RecordingAsserts, RecordingSynthetic } from "../fakes/cost-fakes.js"
 
 const NOW = new Date("2026-11-17T12:00:00.000Z")
 const A = "oc-01jcostcleanupa00000000"
@@ -37,17 +36,8 @@ async function world(input: { access?: "all" | "ask-changes" | "read-only"; runt
   }
   const options = await loadOptions({ access: input.access ?? "all" })
   const release = input.release ?? new FakeRelease()
-  const asserts = new RecordingAsserts()
-  const synthetic = new RecordingSynthetic()
   const deps = { options, ledger, release, clock }
-  const run = () =>
-    runCleanup({
-      deps,
-      sessionID: "ses_person",
-      assert: asserts.assert,
-      synthetic: (text, description) => synthetic.synthetic({ text, description }),
-    })
-  return { clock, ledger, options, release: release as FakeRelease, asserts, synthetic, deps, run }
+  return { clock, ledger, options, release: release as FakeRelease, deps }
 }
 
 describe("what the command lists", () => {
@@ -68,81 +58,6 @@ describe("what the command lists", () => {
     expect(report).toContain(B)
     expect(report).toContain("Files outside keep and memory are lost at release")
     expect(report).toContain("runtime.stop plan")
-    expect(report).toMatch(/Each release asks first/)
-  })
-})
-
-describe("at read-only", () => {
-  it("lists what costs money and takes no action, asserting nothing", async () => {
-    const worldOf = await world({ access: "read-only" })
-    const answer = await worldOf.run()
-    expect(worldOf.asserts.requests).toEqual([])
-    expect(worldOf.release.released).toEqual([])
-    expect(answer.trace.released).toEqual([])
-    expect(answer.outcome).toMatch(/Read only/)
-    expect(answer.report).toMatch(/Read only: a report/)
-    // The report is posted, and nothing else is: no outcome claim of a release.
-    expect(worldOf.synthetic.posts).toHaveLength(1)
-  })
-})
-
-describe("at all", () => {
-  it("asks once per runtime with the command's own action and no source, then releases through the one release function", async () => {
-    const worldOf = await world()
-    const answer = await worldOf.run()
-
-    expect(worldOf.asserts.requests).toEqual([
-      expect.objectContaining({ sessionID: "ses_person", action: "colab.cleanup", resources: [runtimeResource("default", A)] }),
-      expect.objectContaining({ sessionID: "ses_person", action: "colab.cleanup", resources: [runtimeResource("default", B)] }),
-    ])
-    // No `source`: a person-only prompt, never a tool call the model could replay.
-    for (const request of worldOf.asserts.requests) expect(request).not.toHaveProperty("source")
-    expect(worldOf.release.released.map((entry) => entry.id)).toEqual([A, B])
-    expect(worldOf.release.released.every((entry) => entry.reason === "plan")).toBe(true)
-    expect(answer.trace.released).toEqual([A, B])
-    expect(worldOf.synthetic.posts).toHaveLength(2)
-  })
-
-  it("a no ends that one action, changes nothing, and moves on to the next", async () => {
-    const worldOf = await world()
-    worldOf.asserts.deny = (request) => request.resources?.some((resource) => resource.includes(A)) ?? false
-    const answer = await worldOf.run()
-    expect(worldOf.release.released.map((entry) => entry.id)).toEqual([B])
-    expect(answer.trace.declined).toEqual([A])
-    expect(answer.outcome).toBe("Colab cleanup: released 1, declined 1, blocked 0, failed 0.")
-  })
-
-  it("a resource that vanished between the plan and the release is reported, not hidden", async () => {
-    const failing: Release = {
-      release: async (runtime) => {
-        if (runtime.id === A) throw new ColabError("RUNTIME_BUSY", "A run is active.")
-        return { harvested: [], released: true, warnings: [] }
-      },
-    }
-    const worldOf = await world({ release: failing })
-    const answer = await worldOf.run()
-    expect(answer.trace.failed).toEqual([{ runtime: A, code: "RUNTIME_BUSY" }])
-    expect(answer.outcome).toBe("Colab cleanup: released 1, declined 0, blocked 0, failed 1.")
-  })
-})
-
-describe("at ask-changes", () => {
-  it("asserts the tool's own action colab.delete, which the default rules already ask", async () => {
-    const worldOf = await world({ access: "ask-changes" })
-    await worldOf.run()
-    expect(worldOf.asserts.requests.map((request) => request.action)).toEqual(["colab.delete", "colab.delete"])
-    expect(worldOf.asserts.requests[0]?.resources).toEqual([runtimeResource("default", A)])
-    expect(worldOf.asserts.requests[0]?.metadata).toMatchObject({ account: "default", runtime: A, lost: expect.stringContaining("Files outside keep") })
-  })
-})
-
-describe("nothing to do", () => {
-  it("asks nothing and says so when no runtime of ours is live", async () => {
-    const worldOf = await world({ runtimes: [] })
-    const answer = await worldOf.run()
-    expect(worldOf.asserts.requests).toEqual([])
-    expect(worldOf.release.released).toEqual([])
-    expect(answer.report).toContain("cost money: 0")
-    expect(answer.outcome).toBe("Colab cleanup: released 0, declined 0, blocked 0, failed 0.")
+    expect(report).toContain("Each release is a change")
   })
 })

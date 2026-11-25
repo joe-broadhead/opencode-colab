@@ -5,8 +5,7 @@ import * as z from "zod"
 import { PLAN_ACTION_NAMES } from "../../src/domain/actions.js"
 import { CONTRACTS, Failure, PLAN_PARAMS } from "../../src/domain/contract.js"
 import { OPERATIONS } from "../../src/domain/actions.js"
-import type { DriveApi, EnterpriseSchedule, KernelSession, Listed, NotebookStore, RunRecord, RuntimeProtocol, VertexApi } from "../../src/ports.js"
-import { NO_NOTEBOOKS, NO_PRICES, OK_BUDGET } from "../../src/stub.js"
+import type { DriveApi, EnterpriseSchedule, KernelSession, Listed, NotebookStore, RunRecord, RuntimeProtocol, VertexApi } from "../../src/provider/ports.js"
 import { FakeBudget, FakeDrive, FakeDriveSync, FakeEnterpriseRuns, FakeNotebookStore, FakePrices, FakeRuntimeProtocol, FakeVertex } from "../fakes/index.js"
 
 const ok = (schema: z.ZodType, value: unknown) => schema.safeParse(value).success
@@ -42,11 +41,6 @@ describe("inputs", () => {
     expect(ok(input, { runtime: "oc-01", path: "relative.csv" })).toBe(false)
   })
 
-  it("colab_write and colab_delete take only the plan id", () => {
-    expect(ok(CONTRACTS.write.input, { planId: "plan_abcdefghijklmnopqrstuvwx" })).toBe(true)
-    expect(ok(CONTRACTS.delete.input, { planId: "plan_abcdefghijklmnopqrstuvwx", force: true })).toBe(false)
-  })
-
   it("every plan action has params, and schedules and jobs take their bounds", () => {
     expect(Object.keys(PLAN_PARAMS).sort()).toEqual([...PLAN_ACTION_NAMES].sort())
     expect(ok(PLAN_PARAMS["schedule.create"], { notebook: { gcs: "gs://b/n.ipynb" }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 30 })).toBe(true)
@@ -62,7 +56,7 @@ describe("inputs", () => {
 
 describe("results", () => {
   it("every tool's result accepts the failure envelope", () => {
-    const failure = { state: "refused", error: "NOT_IMPLEMENTED", message: "x.", next: "y." }
+    const failure = { state: "refused", error: "INPUT_INVALID", message: "x.", next: "y." }
     for (const [name, contract] of Object.entries(CONTRACTS)) {
       if (name === "events_list" || name === "runtimes_read") continue
       expect(ok(contract.output, failure), name).toBe(true)
@@ -150,9 +144,7 @@ describe("the Enterprise and seam ports, as their fakes and Day 0's stubs implem
     expect(reads).toEqual([OPERATIONS.jobsGet, OPERATIONS.jobOperationsList, OPERATIONS.storageObjectsGet])
   })
 
-  it("until F and E land, the budget answers ok and nothing is priced", async () => {
-    expect(await OK_BUDGET.check("work", { action: "job.create", usd: 3 }, signal)).toEqual({ verdict: "ok" })
-    expect(NO_PRICES.usdPerHour({ machine: "e2-standard-4" })).toBeUndefined()
+  it("prices the machines the dated table knows", async () => {
     const prices = new FakePrices()
     expect(prices.usdPerHour({ machine: "e2-standard-4", accelerator: "T4" })).toBeCloseTo(0.59)
     expect(prices.usdPerHour({ machine: "e2-standard-4", region: "europe-west4" })).toBeUndefined()
@@ -193,7 +185,6 @@ describe("package C's ports, as their fakes implement them", () => {
     expect(first.hash).not.toBe(second.hash)
     expect(fake.merges.map((merge) => merge.cells)).toEqual([["c1"], ["c2"]])
     await expect(store.mergeRun("a.ipynb", { cells: [{ id: "c1", source: "x = 2", outputs: [], executionCount: 3 }], outputDir: ".colab/runs/r3" }, signal)).rejects.toThrow(/^NOTEBOOK_CHANGED: /)
-    expect(NO_NOTEBOOKS).toBeDefined()
   })
 })
 

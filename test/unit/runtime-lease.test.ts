@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { createOwnerLease } from "../../src/runtime/lease.js"
+import { createOwnerLease } from "../../src/provider/runtime/lease.js"
 
 const dirs: string[] = []
 const dir = () => {

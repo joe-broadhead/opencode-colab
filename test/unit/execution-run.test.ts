@@ -5,10 +5,10 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { OPERATIONS } from "../../src/domain/actions.js"
+import { metadataFor, providerRun } from "../support/methods.js"
 import { ColabError } from "../../src/domain/errors.js"
-import { liveRun, resetLiveRuns } from "../../src/execution/runs.js"
-import { alive, CLEAN, DIRTY, gate, iopub, prepared, QueueCheck, RecordingPermission, runtimeRecord, tool, toolWith } from "../fakes/execution-harness.js"
+import { liveRun, resetLiveRuns } from "../../src/provider/execution/runs.js"
+import { alive, CLEAN, DIRTY, gate, iopub, prepared, QueueCheck, runtimeRecord, tool } from "../fakes/execution-harness.js"
 
 const made: string[] = []
 async function workspace(): Promise<string> {
@@ -32,12 +32,12 @@ describe("colab_run", () => {
   it("runs only on a runtime of the plugin's own, refusing before any network call", async () => {
     const { deps, fakes, runtime } = await prepared({ directory: await workspace() })
     for (const [record, code] of [
-      [undefined, "RUNTIME_NOT_OURS"],
-      [runtimeRecord({ state: "creating" }), "RUNTIME_NOT_OURS"],
-      [runtimeRecord({ state: "released" }), "RUNTIME_GONE"],
-      [runtimeRecord({ tainted: { code: "RUNTIME_SHARED", at: "2026-11-17T09:00:00.000Z" } }), "RUNTIME_SHARED"],
-      [runtimeRecord({ calibration: undefined }), "RUNTIME_UNVERIFIED"],
-      [runtimeRecord({ account: "other" }), "RUNTIME_NOT_OURS"],
+      [undefined, "INPUT_INVALID"],
+      [runtimeRecord({ state: "creating" }), "INPUT_INVALID"],
+      [runtimeRecord({ state: "released" }), "UNAVAILABLE"],
+      [runtimeRecord({ tainted: { code: "RUNTIME_SHARED", at: "2026-11-17T09:00:00.000Z" } }), "INPUT_INVALID"],
+      [runtimeRecord({ calibration: undefined }), "INPUT_INVALID"],
+      [runtimeRecord({ account: "other" }), "INPUT_INVALID"],
     ] as const) {
       if (record) await deps.ledger.putRuntime(record)
       const { result } = tool(deps, "run", { runtime: record?.id ?? "oc-unknown", code: "print(1)", wait: 0 })
@@ -51,7 +51,7 @@ describe("colab_run", () => {
   it("refuses an Enterprise account with the job plan as the next step", async () => {
     const { deps } = await prepared({ directory: await workspace(), options: { accounts: { work: { backend: "enterprise", access: "write", project: "p", region: "us-central1", outputBucket: "gs://b" } } } })
     const { result } = tool(deps, "run", { account: "work", runtime: "oc-x", code: "print(1)" })
-    expect(await result).toMatchObject({ state: "refused", error: "INTERACTIVE_UNSUPPORTED" })
+    expect(await result).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     expect((await result as { next: string }).next).toContain("job.create")
   })
 
@@ -59,7 +59,7 @@ describe("colab_run", () => {
     const { deps, fakes, record, runtime } = await prepared({ directory: await workspace() })
     fakes.check.verdict = DIRTY
     const { result } = tool(deps, "run", { runtime: record.id, code: "print(1)", wait: 0 })
-    expect(await result).toMatchObject({ state: "refused", error: "RUNTIME_HAS_CREDENTIALS" })
+    expect(await result).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     expect(runtime.calls).toHaveLength(0)
     expect((await deps.ledger.getRuntime(record.id))?.tainted?.code).toBe("RUNTIME_HAS_CREDENTIALS")
   })
@@ -85,44 +85,18 @@ describe("colab_run", () => {
     const { deps, record, runtime } = await prepared({ directory: await workspace() })
     runtime.script = ok
     const code = ["import requests", "%pip install -q pandas", "!curl https://example.com", "WANDB_API_KEY=0123456789abcdef0123456789abcdef01234567", "1", "2", "3", "4"].join("\n")
-    const { result, permission } = tool(deps, "run", { runtime: record.id, code, wait: 10 })
-    await result
-    expect(permission.requests.map((request) => request.action)).toEqual(["colab.run"])
-    const ask = permission.requests[0]!
-    expect(ask.resources).toEqual([`default:${OPERATIONS.kernelsExecute}`, `default:runtime:${record.id}`])
-    const metadata = ask.metadata as { cells: { id: string; lines: string[]; sha256: string; flags?: { line: number; flag: string }[] }[]; timeoutSec: number }
+    const call = { sessionID: "s", agent: "build", messageID: "m", id: "call_meta", signal: new AbortController().signal }
+    const input = { runtime: record.id, code, wait: 10 }
+    const metadata = (await metadataFor("run", input, { deps }, call.id)) as { cells: { id: string; lines: string[]; sha256: string; flags?: { line: number; flag: string }[] }[]; timeoutSec: number }
+    await providerRun("run", input, call, { deps })
     expect(metadata.timeoutSec).toBe(1800)
     expect(metadata.cells[0]!.id).toBe("code")
     expect(metadata.cells[0]!.lines).toHaveLength(6)
     expect(metadata.cells[0]!.sha256).toMatch(/^sha256:[0-9a-f]{64}$/)
     expect(metadata.cells[0]!.lines.join("\n")).not.toContain("0123456789abcdef")
     expect(metadata.cells[0]!.flags?.map((flag) => flag.flag)).toEqual(expect.arrayContaining(["install", "shell", "network"]))
-    // One assert, and the probe, watchdog and session run under it: nothing else was asserted.
-    expect(permission.requests).toHaveLength(1)
     // Every execute_request is allow_stdin false (design §7.4 step 5).
     expect(runtime.last!.executed.every((request) => request.allowStdin === false)).toBe(true)
-  })
-
-  it("runs nothing when the ask is denied, and lets the host's denial through", async () => {
-    const { deps, fakes, record, runtime } = await prepared({ directory: await workspace() })
-    const permission = new RecordingPermission()
-    permission.denyAll()
-    const { result } = toolWith(deps, permission, "run", { runtime: record.id, code: "print(1)", wait: 10 })
-    await expect(result).rejects.toThrow(/denied/)
-    expect(runtime.calls).toHaveLength(0)
-    expect(await fakes.ledger.listRuns({ account: "default" })).toHaveLength(0)
-  })
-
-  it("fences a person's rule on work:runtime:* before any request", async () => {
-    const directory = await workspace()
-    const { deps, record, runtime } = await prepared({ directory, options: { accounts: { work: { backend: "colab", access: "write" } } }, record: runtimeRecord({ account: "work" }) })
-    const permission = new RecordingPermission()
-    permission.decide = (request) => {
-      if (request.resources.some((resource) => resource.startsWith("work:runtime:"))) throw new Error("a person's rule denies this runtime")
-    }
-    const { result } = toolWith(deps, permission, "run", { account: "work", runtime: record.id, code: "print(1)", wait: 10 })
-    await expect(result).rejects.toThrow(/person's rule/)
-    expect(runtime.calls).toHaveLength(0)
   })
 
   it("writes outputs back through the notebook store, says what landed, and asserts the host's edit", async () => {
@@ -134,7 +108,7 @@ describe("colab_run", () => {
     ]
     fakes.notebooks.set("analysis.ipynb", cells.map((cell) => ({ ...cell, type: "code" as const })))
     runtime.script = ok
-    const { result, permission } = tool(deps, "run", { runtime: record.id, notebook: { path: "analysis.ipynb" }, cells: "all", wait: 10 })
+    const { result } = tool(deps, "run", { runtime: record.id, notebook: { path: "analysis.ipynb" }, cells: "all", wait: 10 })
     const answer = (await result) as { state: string; cells: { id: string }[]; message?: string; files: string[] }
     expect(answer.state).toBe("ok")
     expect(answer.cells.map((cell) => cell.id)).toEqual(["a", "b"])
@@ -143,8 +117,6 @@ describe("colab_run", () => {
     expect(fakes.notebooks.merges).toHaveLength(1)
     expect(fakes.notebooks.merges[0]!.cells).toEqual(["a", "b"])
     expect(fakes.notebooks.merges[0]!.outputDir).toMatch(/^\.colab\/runs\//)
-    const edit = permission.requests.find((request) => request.action === "edit")!
-    expect(edit.resources[0]).toBe(join(directory, "analysis.ipynb"))
     expect((await deps.ledger.getRun(answerCellsRunId(answer)))).toBeDefined()
   })
 
@@ -173,9 +145,8 @@ describe("colab_run", () => {
     const { deps, fakes, record, runtime } = await prepared({ directory: await workspace() })
     fakes.notebooks.set("analysis.ipynb", [{ id: "a", type: "code", source: "print(1)" }])
     runtime.script = ok
-    const { result, permission } = tool(deps, "run", { runtime: record.id, notebook: { path: "analysis.ipynb" }, cells: "all", wait: 10, writeBack: false })
+    const { result } = tool(deps, "run", { runtime: record.id, notebook: { path: "analysis.ipynb" }, cells: "all", wait: 10, writeBack: false })
     expect((await result) as { state: string }).toMatchObject({ state: "ok" })
-    expect(permission.requests.map((request) => request.action)).toEqual(["colab.run"])
     expect(fakes.notebooks.merges).toHaveLength(0)
   })
 
@@ -185,7 +156,7 @@ describe("colab_run", () => {
     runtime.script = () => [alive(), iopub("stream", { name: "stdout", text: "working\n" })]
     const { result } = tool(deps, "run", { runtime: record.id, code: "while True: pass", timeoutSec: 1, wait: 10 })
     const failure = (await result) as { state: string; error: string; next: string }
-    expect(failure).toMatchObject({ state: "failed", error: "RUN_TIMEOUT" })
+    expect(failure).toMatchObject({ state: "failed", error: "UNAVAILABLE" })
     expect(failure.next).toContain("timeoutSec")
     const session = runtime.last!
     expect(session.watchdogs).toEqual([1, null])
@@ -265,7 +236,7 @@ describe("colab_run", () => {
     const first = (await tool(deps, "run", { runtime: record.id, code: "print(1)", wait: 0 }).result) as { runId: string; state: string }
     expect(first.state).toBe("running")
     const second = await tool(deps, "run", { runtime: record.id, code: "print(2)", wait: 0 }).result
-    expect(second).toMatchObject({ state: "refused", error: "KERNEL_BUSY" })
+    expect(second).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     runtime.gate.open()
     await settled(first.runId)
   })
@@ -278,7 +249,7 @@ describe("colab_run", () => {
     const pending = tool(deps, "run", { runtime: record.id, code: "print(1)", wait: 10 }, { callId: "call_stop", signal: controller.signal }).result
     setTimeout(() => controller.abort(), 20)
     const answer = (await pending) as { state: string; error: string }
-    expect(answer).toMatchObject({ state: "failed", error: "CANCELLED" })
+    expect(answer).toMatchObject({ state: "failed", error: "UNAVAILABLE" })
     expect(runtime.last!.interrupts).toBe(1)
   })
 

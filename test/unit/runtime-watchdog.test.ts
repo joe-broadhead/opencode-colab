@@ -1,8 +1,8 @@
 // Package B's watchdog (design §6, §8.2 layer 1; §16 row B). It starts before a run and is cancelled after it, in silent
 // requests, so a run is bounded even when OpenCode exits in the middle.
 import { describe, expect, it } from "vitest"
-import type { KernelSession } from "../../src/ports.js"
-import { cancelWatchdog, startWatchdog, watchdogCancelSnippet, watchdogStartSnippet } from "../../src/runtime/watchdog.js"
+import type { KernelSession } from "../../src/provider/ports.js"
+import { cancelWatchdog, startWatchdog, watchdogCancelSnippet, watchdogStartSnippet } from "../../src/provider/runtime/watchdog.js"
 import { createRuntimeFixture, RUNTIME_ID } from "../fakes/runtime-env.js"
 
 const signal = () => new AbortController().signal

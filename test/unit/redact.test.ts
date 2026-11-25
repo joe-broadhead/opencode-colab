@@ -1,6 +1,7 @@
 // The shared secret screen (design §7.5), Day 0 code that packages C and E both call: kinds, never the text.
 import { describe, expect, it } from "vitest"
 import { redact, screenSecrets, WITHHELD } from "../../src/redact.js"
+import { invented } from "../support/invented.js"
 
 const KEY = ["-----BEGIN", "PRIVATE KEY-----"].join(" ")
 
@@ -9,12 +10,12 @@ describe("screenSecrets", () => {
     const cases: [string, string][] = [
       [`key = """${KEY}\nabc"""`, "private-key"],
       ['{"type": "service_account", "project_id": "invented"}', "service-account-key"],
-      [`api = "AIza${"x".repeat(35)}"`, "google-api-key"],
+      [`api = ${invented("AIza", "SyA1234567890abcdefghijklmnopqrstuv")}`, "google-api-key"],
       ["AKIA" + "ABCDEFGHIJKLMNOP", "aws-key"],
-      ["ghp_" + "a".repeat(36), "github-token"],
+      [invented("ghp_", "") + "a".repeat(36), "github-token"],
       ["xoxb-" + "1234567890-abc", "slack-token"],
       ["sk-" + "a".repeat(24), "api-key"],
-      ['password = "hunter22hunter"', "secret-assignment"],
+      [`password = "${invented("hunter22","hunter")}"`, "secret-assignment"],
       ["Authorization: Bearer " + "a".repeat(24), "bearer-or-basic"],
     ]
     for (const [text, kind] of cases) {
@@ -28,7 +29,7 @@ describe("screenSecrets", () => {
   it("finds nothing in ordinary code, and gives the same answer twice (no carried regex state)", () => {
     const code = "import pandas as pd\ndf = pd.read_csv('/content/data.csv')\nprint(df.head())"
     expect(screenSecrets(code)).toEqual({ text: code, matches: 0, found: false, kinds: [] })
-    const secret = "ghp_" + "b".repeat(36)
+    const secret = invented("ghp_", "") + "b".repeat(36)
     expect(screenSecrets(secret)).toEqual(screenSecrets(secret))
   })
 
@@ -43,13 +44,13 @@ describe("screenSecrets withholds what it finds, with no hex exemption", () => {
   const hex40 = "0123456789abcdef0123456789abcdef01234567"
 
   it("withholds a Weights & Biases key in both everyday forms, and a Hugging Face token", () => {
-    for (const line of [`wandb.login(key="${hex40}")`, `os.environ["WANDB_API_KEY"] = "${hex40}"`, `login("hf_${"A1b2".repeat(9)}")`]) {
+    for (const line of [`wandb.login(key="${hex40}")`, `os.environ["WANDB_API_KEY"] = "${hex40}"`, `login(${invented("hf_", "A1b2".repeat(9))})`]) {
       const screened = screenSecrets(line)
       expect(screened.found, line).toBe(true)
       expect(screened.text, line).toContain(WITHHELD)
       expect(screened.text, line).not.toContain(hex40)
     }
-    expect(screenSecrets(`login("hf_${"A1b2".repeat(9)}")`).kinds).toContain("huggingface-token")
+    expect(screenSecrets(`login(${invented("hf_", "A1b2".repeat(9))})`).kinds).toContain("huggingface-token")
   })
 
   it("keeps the plugin's own sha256: hash, and only that 64-hex form", () => {

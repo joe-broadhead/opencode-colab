@@ -1,6 +1,6 @@
 // §15.1 latent auth: the scope sets per backend and level, the local check, and the complete scope union.
 import { describe, expect, it } from "vitest"
-import { accountScopes, ALL_SCOPES, missingScopes, SCOPES, shortScopes, widerThanAccess, writeScopes } from "../../src/auth/scopes.js"
+import { accountScopes, ALL_SCOPES, missingScopes, SCOPES, shortScopes, widerThanAccess, writeScopes } from "../../src/provider/auth/scopes.js"
 
 const colab = { backend: "colab" as const, access: "write" as const, drive: true }
 const enterprise = { backend: "enterprise" as const, access: "write" as const }

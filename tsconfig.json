@@ -6,9 +6,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "jsx": "preserve",
-    "jsxImportSource": "@opentui/solid",
-    "types": ["node", "bun"]
+    "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/tui/**/*.tsx", "test/unit/**/*.ts", "test/host/**/*.ts", "test/latent-host/**/*.ts", "test/latent-conformance/**/*.ts", "test/pack/**/*.ts", "test/support/**/*.ts", "test/fakes/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
 }

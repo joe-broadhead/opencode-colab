@@ -2,9 +2,9 @@
 // recent activity, a foreign session, an extra connection and an active run blocks the release; a runtime older than
 // `maxRuntimeHours` with the same conditions is idle by `lifetime`. Shapes: Jupyter Server's REST API, design §18 [19].
 import { describe, expect, it } from "vitest"
-import { idleRuleOf, idleVerdict, readIdle, type IdleRule } from "../../src/cost/idle.js"
+import { idleRuleOf, idleVerdict, readIdle, type IdleRule } from "../../src/provider/cost/idle.js"
 import { ColabError } from "../../src/domain/errors.js"
-import type { KernelInfo, RuntimeRecord, SessionInfo } from "../../src/ports.js"
+import type { KernelInfo, RuntimeRecord, SessionInfo } from "../../src/provider/ports.js"
 import { CLEAN_CALIBRATION } from "../fakes/index.js"
 
 const NOW = new Date("2026-11-17T12:00:00.000Z")

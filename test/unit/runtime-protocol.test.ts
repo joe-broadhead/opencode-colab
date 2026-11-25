@@ -7,9 +7,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { ColabError } from "../../src/domain/errors.js"
-import type { IopubMessage } from "../../src/ports.js"
-import { createOwnerLease } from "../../src/runtime/lease.js"
-import { createRuntimeProtocol } from "../../src/runtime/protocol.js"
+import type { IopubMessage } from "../../src/provider/ports.js"
+import { createOwnerLease } from "../../src/provider/runtime/lease.js"
+import { createRuntimeProtocol } from "../../src/provider/runtime/protocol.js"
 import { createRuntimeFixture, PROXY_TOKEN, RUNTIME_ID } from "../fakes/runtime-env.js"
 
 const fresh = () => new AbortController().signal
@@ -112,9 +112,9 @@ describe("the runtime protocol", () => {
       // The request is still yielded, so capture can report COLAB_UI_API.
       expect(messages.some((message) => message.msgType === "colab_request")).toBe(true)
       // And the kernel heard the decline, not the fake's "the plugin did not answer" fallback.
-      expect(fixture.jupyter.replies[0]).toEqual({ type: "colab_reply", colab_msg_id: 1, error: "not available in opencode-colab" })
+      expect(fixture.jupyter.replies[0]).toEqual({ type: "colab_reply", colab_msg_id: 1, error: "not available in colab" })
       const error = messages.find((message) => message.msgType === "error")
-      expect(String(error?.content.evalue)).toBe("not available in opencode-colab")
+      expect(String(error?.content.evalue)).toBe("not available in colab")
       await session.close()
     } finally {
       await fixture.close()
@@ -179,9 +179,9 @@ describe("the runtime protocol", () => {
       await fixture.own()
       const target = { account: "default", runtimeId: RUNTIME_ID }
       expect(await fixture.ports.runtime.kernels(target, fresh())).toHaveLength(0)
-      fixture.jupyter.revoke(PROXY_TOKEN)
+      fixture.jupyter.revokeTicket(PROXY_TOKEN)
       fixture.api.rotateProxyToken("proxy-token-2")
-      fixture.jupyter.addToken("proxy-token-2")
+      fixture.jupyter.addTicket("proxy-token-2")
       expect(await fixture.ports.runtime.kernels(target, fresh())).toHaveLength(0)
       // The runtime was asked for fresh connection information, as design §7.4 requires.
       expect(fixture.api.requests.filter((request) => request.path === `v1beta/runtimes/${RUNTIME_ID}`).length).toBeGreaterThanOrEqual(2)

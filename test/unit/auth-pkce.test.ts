@@ -1,8 +1,8 @@
 // §15.1 auth: PKCE (S256), the state, and the authorization URL Google documents for a desktop app.
 import { createHash } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { AUTHORIZE_ENDPOINT, buildAuthorizeUrl, createPkce, createState } from "../../src/auth/pkce.js"
-import { SCOPES } from "../../src/auth/scopes.js"
+import { AUTHORIZE_ENDPOINT, buildAuthorizeUrl, createPkce, createState } from "../../src/provider/auth/pkce.js"
+import { SCOPES } from "../../src/provider/auth/scopes.js"
 
 describe("PKCE and the authorization URL (design §4)", () => {
   it("§15.1 auth — the challenge is BASE64URL(SHA256(verifier)) with method S256, and the verifier is 43–128 unreserved characters", () => {

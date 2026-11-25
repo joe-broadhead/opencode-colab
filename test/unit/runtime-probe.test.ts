@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { probeSnippet } from "../../src/runtime/probe.js"
+import { probeSnippet } from "../../src/provider/runtime/probe.js"
 
 const python = spawnSync("python3", ["-c", "print(1)"], { encoding: "utf8" })
 const available = python.status === 0 && python.stdout.trim() === "1"
@@ -25,7 +25,7 @@ const rooted = (root: string, code: string) =>
     .replace("_oc_os.path.join('/' + _OC_CONFIG, 'gce')", `_oc_os.path.join('${root}/' + _OC_CONFIG, 'gce')`)
     .replace("open('/proc/mounts')", `open('${root}/proc/mounts')`)
     .replace("open('/proc/self/status')", `open('${root}/proc/self/status')`)
-    .replace(/    import IPython as _oc_ipython\n    shell = _oc_ipython\.get_ipython\(\)\n    return int\(shell\.execution_count\) if shell is not None and shell\.execution_count is not None else 0/, "    return 1")
+    .replace(/ {4}import IPython as _oc_ipython\n {4}shell = _oc_ipython\.get_ipython\(\)\n {4}return int\(shell\.execution_count\) if shell is not None and shell\.execution_count is not None else 0/, "    return 1")
 
 /**
  * The driver keeps the probe kernel's globals alive across steps — that is what a real kernel does, and what the

@@ -5,16 +5,17 @@ import { createHash } from "node:crypto"
 import { createServer } from "node:http"
 import { describe, expect, it } from "vitest"
 import { ColabError } from "../../src/domain/errors.js"
-import { authorizeGoogle, identityFromIdToken, isAllowedEndpoint, assertEndpoint, refreshGoogle, tokenFailure } from "../../src/auth/google.js"
-import { resolveRedirect } from "../../src/auth/redirect.js"
-import { SCOPES } from "../../src/auth/scopes.js"
-import { desktopClient } from "../../src/auth/client.js"
-import { readSignIn } from "../../src/auth/credential.js"
+import { authorizeGoogle, identityFromIdToken, isAllowedEndpoint, assertEndpoint, refreshGoogle, tokenFailure } from "../../src/provider/auth/google.js"
+import { resolveRedirect } from "../../src/provider/auth/redirect.js"
+import { SCOPES } from "../../src/provider/auth/scopes.js"
+import { desktopClient } from "../../src/provider/auth/client.js"
+import { readSignIn } from "../../src/provider/auth/credential.js"
 import { FakeHttp, formBody, idToken, storedCredential, tokenResponse } from "../fakes/auth-http.js"
+import { invented } from "../support/invented.js"
 
 const NOW = new Date("2026-11-17T09:00:00.000Z").getTime()
 const clientId = "123456789012-colabtest.apps.googleusercontent.com"
-const clientSecret = "GOCSPX-test-client-secret"
+const clientSecret = invented("GOCSPX-", "test-client-secret")
 const client = desktopClient(clientId, clientSecret)!
 
 function authorization(http: FakeHttp, overrides: Partial<Parameters<typeof authorizeGoogle>[0]> = {}) {
@@ -70,7 +71,7 @@ describe("the Google sign-in flow (design §4)", () => {
     expect(verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/)
     expect(createHash("sha256").update(verifier).digest("base64url")).toBe(challenge)
 
-    expect(credential).toMatchObject({ type: "oauth", methodID: "google", refresh: "1//new-refresh", access: "ya29.test-access-token", expires: NOW + 3600_000 })
+    expect(credential).toMatchObject({ type: "oauth", methodID: "google", refresh: "1//new-refresh", access: invented("ya29.", "test-access-token"), expires: NOW + 3600_000 })
     const signIn = readSignIn(credential.metadata)
     expect(signIn).toMatchObject({ access: "write", clientSource: "pasted", grantedScopes: [SCOPES.openid, SCOPES.email, SCOPES.colaboratory, SCOPES.driveFile], identity: { email: "person@example.com", verified: true } })
     expect(credential.refresh).toBe("1//new-refresh")
@@ -113,7 +114,7 @@ describe("the Google sign-in flow (design §4)", () => {
 
   it("§15.1 auth — a refresh uses the client stored with the sign-in, follows Google's new grant, and keeps the identity", async () => {
     const http = new FakeHttp()
-    http.on("oauth2.googleapis.com", "/token", 200, tokenResponse({ access: "ya29.refreshed", expiresIn: 1800, scopes: [SCOPES.openid, SCOPES.email, SCOPES.colaboratory, SCOPES.driveFile] }))
+    http.on("oauth2.googleapis.com", "/token", 200, tokenResponse({ access: invented("ya29.", "refreshed"), expiresIn: 1800, scopes: [SCOPES.openid, SCOPES.email, SCOPES.colaboratory, SCOPES.driveFile] }))
     const credential = storedCredential({ now: NOW, email: "person@example.com", granted: [SCOPES.openid, SCOPES.email, SCOPES.colaboratory] })
     const refreshed = await refreshGoogle({ alias: "default", name: "Colab", credential, options: { fetch: http.fetch, now: () => NOW } })
     const body = formBody(http.calls[0]!)
@@ -121,7 +122,7 @@ describe("the Google sign-in flow (design §4)", () => {
     expect(body.get("refresh_token")).toBe("1//test-refresh-token")
     expect(body.get("client_id")).toBe(clientId)
     expect(body.get("client_secret")).toBe(clientSecret)
-    expect(refreshed).toMatchObject({ access: "ya29.refreshed", refresh: "1//test-refresh-token", expires: NOW + 1800_000 })
+    expect(refreshed).toMatchObject({ access: invented("ya29.", "refreshed"), refresh: "1//test-refresh-token", expires: NOW + 1800_000 })
     expect(readSignIn(refreshed.metadata)).toMatchObject({ grantedScopes: [SCOPES.openid, SCOPES.email, SCOPES.colaboratory, SCOPES.driveFile], identity: { email: "person@example.com" } })
   })
 
@@ -139,7 +140,7 @@ describe("the Google sign-in flow (design §4)", () => {
   })
 
   it("L4 — colaboratory.readonly is accepted for a read and is not a code-execution fence", async () => {
-    const { missingScopes, SCOPES: scopes } = await import("../../src/auth/scopes.js")
+    const { missingScopes, SCOPES: scopes } = await import("../../src/provider/auth/scopes.js")
     expect(missingScopes([scopes.colaboratoryReadonly], [scopes.colaboratoryReadonly])).toEqual([])
     // The scope is not a fence: the plugin's own classification is. A read grant therefore still runs code on a runtime
     // the plugin created; only creating or deleting a runtime needs the full scope (design §4, L4).

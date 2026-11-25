@@ -6,12 +6,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { createRelease, foreignLeaseHolder, harvestRuntime, closeRecord } from "../../src/cost/release.js"
-import type { PortEnv } from "../../src/deps.js"
+import { createRelease, foreignLeaseHolder, harvestRuntime, closeRecord } from "../../src/provider/cost/release.js"
+import type { PortEnv } from "../../src/provider/index.js"
 import { ColabError } from "../../src/domain/errors.js"
 import { loadOptions } from "../../src/options.js"
-import type { ColabApi, RuntimeRecord, RuntimeProtocol } from "../../src/ports.js"
-import type { RuntimePorts } from "../../src/runtime/index.js"
+import type { ColabApi, RuntimeRecord, RuntimeProtocol } from "../../src/provider/ports.js"
+import type { RuntimePorts } from "../../src/provider/runtime/index.js"
 import { FakeAgentOnlyCheck, FakeClock, FakeColabApi, MemoryLedger, T4 } from "../fakes/index.js"
 import { CostContents, CostRuntime } from "../fakes/cost-fakes.js"
 import { createRuntimeFixture } from "../fakes/runtime-env.js"
@@ -166,7 +166,7 @@ describe("the guards", () => {
   it("refuses to release a runtime another live OpenCode process holds", async () => {
     const world = environment()
     const dir = tempDir()
-    const { FileLedger } = await import("../../src/ledger/store.js")
+    const { FileLedger } = await import("../../src/provider/ledger/store.js")
     const ledger = new FileLedger(dir, { ledgerDays: 90, clock: world.env.clock })
     await ledger.putRuntime(record())
     world.colab.runtimes.set(ID, { name: `runtimes/${ID}`, spec: T4 })

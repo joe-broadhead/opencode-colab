@@ -2,10 +2,10 @@
 // counted. Consumer runtime-hours come from the ledger and are complete; Enterprise USD comes from the ledger's runs
 // and is a floor when a record does not name its compute, in which case `refuse` degrades to `warn`.
 import { describe, expect, it } from "vitest"
-import { createBudget } from "../../src/cost/budget.js"
-import { consumerUsage, dayStart, enterpriseUsage, runUsd, runtimeHoursBetween } from "../../src/cost/usage.js"
+import { createBudget } from "../../src/provider/cost/budget.js"
+import { consumerUsage, dayStart, enterpriseUsage, runUsd, runtimeHoursBetween } from "../../src/provider/cost/usage.js"
 import { loadOptions } from "../../src/options.js"
-import type { RunRecord, RuntimeRecord } from "../../src/ports.js"
+import type { RunRecord, RuntimeRecord } from "../../src/provider/ports.js"
 import { FakeClock, FakePrices, MemoryLedger, T4 } from "../fakes/index.js"
 
 const NOW = new Date("2026-11-17T12:00:00.000Z")
@@ -97,7 +97,7 @@ describe("the budget", () => {
     expect(await measured.budget.check("default", { action: "job.create", usd: 3 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 3, limit: 5, unit: "usd" })
     expect(await measured.budget.check("default", { action: "job.create", usd: 1 }, new AbortController().signal)).toEqual({ verdict: "ok" })
 
-    // A legacy run without an estimate contributes nothing: the counted spend plus the call still refuses, and the
+    // A run without an estimate contributes nothing: the counted spend plus the call still refuses, and the
     // answer says the unit it counted in.
     const floor = await world({ budget: { enterpriseUsdDaily: 5, action: "refuse" }, runs: [run({ estimatedUsd: 3 }), run({ runId: "oc-job-2" })] })
     expect(await floor.budget.check("default", { action: "job.create", usd: 2 }, new AbortController().signal)).toEqual({ verdict: "ok" })

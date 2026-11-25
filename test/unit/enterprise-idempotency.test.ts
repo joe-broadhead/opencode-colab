@@ -7,12 +7,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import type { Deps } from "../../src/deps.js"
+import type { Deps } from "../../src/provider/index.js"
 import { ColabError } from "../../src/domain/errors.js"
-import { createVertex, type VertexOptions } from "../../src/enterprise/vertex.js"
-import { runTool, type Runner } from "../../src/tools/spec.js"
-import { toolHandlers } from "../../src/tools/registry.js"
-import { fakeDeps, RecordingPermission } from "../fakes/index.js"
+import { createVertex, type VertexOptions } from "../../src/provider/enterprise/vertex.js"
+import { runTool, type Runner } from "../support/methods.js"
+import { fakeDeps } from "../fakes/index.js"
 import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 
@@ -38,10 +37,8 @@ function setup(directory: string, shared?: Deps["ledger"]) {
   const gcs = new ScriptedGcs()
   // A shared ledger models a second process: the record written before a create survives the restart.
   const deps: Deps = { ...base, vertex, gcs, ...(shared !== undefined ? { ledger: shared } : {}) }
-  const permission = new RecordingPermission()
   let runner: Runner
-  const handlers = toolHandlers(() => runner)
-  runner = { deps, assert: permission.assert, handler: (name) => handlers[name] }
+  runner = { deps }
   return { deps, fakes, vertex, gcs, runner, ledger: deps.ledger }
 }
 
@@ -72,8 +69,8 @@ describe("a job's client-chosen id", () => {
   it("is the id the preview shows, the query the create sends, and the run id recorded", async () => {
     const { directory, path } = workspace()
     const { vertex, runner, fakes } = setup(directory)
-    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { planId: string; preview: Record<string, any> }
-    await runTool("write", { planId: planned.planId }, call(), runner)
+    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { plan: unknown; preview: Record<string, any> }
+    await runTool("write", { plan: planned.plan }, call(), runner)
     expect(vertex.jobBodies[0]!.jobId).toBe(planned.preview.jobId)
     expect((vertex.calls.find((entry) => entry.method === "createJob")!.args[1] as { jobId: string }).jobId).toBe(planned.preview.jobId)
     expect(await fakes.ledger.getRun(planned.preview.jobId)).toMatchObject({ operation: vertex.operationNames[0] })
@@ -82,14 +79,12 @@ describe("a job's client-chosen id", () => {
   it("joins a job that already exists instead of creating a second one", async () => {
     const { directory, path } = workspace()
     const { vertex, runner } = setup(directory)
-    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { planId: string; preview: Record<string, any> }
+    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { plan: unknown; preview: Record<string, any> }
     const name = `projects/proj/locations/us-central1/notebookExecutionJobs/${planned.preview.jobId}`
     vertex.putJob({ name, displayName: "the first create", state: "JOB_STATE_RUNNING", createTime: "2026-11-17T09:00:00Z", updateTime: "2026-11-17T09:00:00Z" })
-    const committed = (await runTool("write", { planId: planned.planId }, call(), runner)) as { state: string; result: Record<string, unknown> }
+    const committed = (await runTool("write", { plan: planned.plan }, call(), runner)) as { state: string; result: Record<string, unknown> }
     expect(committed).toMatchObject({ state: "ok", result: { id: planned.preview.jobId, displayName: "run.ipynb" } })
     expect(vertex.jobs.size).toBe(1)
-    // A plan is single use, so the plugin cannot send the same create twice through the route.
-    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ error: "PLAN_ALREADY_USED" })
   })
 
   it("joins at the client on ALREADY_EXISTS, and retries a lost create with the same id before looking it up", async () => {
@@ -125,8 +120,8 @@ describe("a schedule's display-name token", () => {
   it("is in the display name the create sends, and the create is sent once", async () => {
     const { directory, path } = workspace()
     const { vertex, runner } = setup(directory)
-    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 5 } }, call(), runner)) as { planId: string; preview: Record<string, any> }
-    await runTool("write", { planId: planned.planId }, call(), runner)
+    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 5 } }, call(), runner)) as { plan: unknown; preview: Record<string, any> }
+    await runTool("write", { plan: planned.plan }, call(), runner)
     expect(vertex.scheduleBodies).toHaveLength(1)
     expect(String(vertex.scheduleBodies[0]!.displayName)).toContain(`[oc-${planned.preview.scheduleToken}]`)
   })
@@ -134,9 +129,9 @@ describe("a schedule's display-name token", () => {
   it("reconciles a lost answer by listing on the token, without a second create", async () => {
     const { directory, path } = workspace()
     const { vertex, runner } = setup(directory)
-    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 5 } }, call(), runner)) as { planId: string }
+    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 5 } }, call(), runner)) as { plan: unknown }
     vertex.loseNextScheduleCreate = true
-    const committed = (await runTool("write", { planId: planned.planId }, call(), runner)) as { state: string; result: Record<string, unknown> }
+    const committed = (await runTool("write", { plan: planned.plan }, call(), runner)) as { state: string; result: Record<string, unknown> }
     expect(committed).toMatchObject({ state: "ok", result: { id: "1", message: expect.stringContaining("display-name token") } })
     expect(vertex.scheduleBodies).toHaveLength(1)
     expect(vertex.schedules.size).toBe(1)
@@ -145,9 +140,9 @@ describe("a schedule's display-name token", () => {
   it("answers UNCERTAIN when the lost answer left no schedule, and does not try again", async () => {
     const { directory, path } = workspace()
     const { vertex, runner } = setup(directory)
-    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 5 } }, call(), runner)) as { planId: string }
+    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 5 } }, call(), runner)) as { plan: unknown }
     vertex.failNextScheduleCreate = new ColabError("UNAVAILABLE", "The create's answer was lost.")
-    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ state: "failed", error: "UNCERTAIN", next: expect.stringContaining("colab_schedules") })
+    expect(await runTool("write", { plan: planned.plan }, call(), runner)).toMatchObject({ state: "failed", error: "UNAVAILABLE", next: expect.stringContaining("colab_schedules") })
     expect(vertex.scheduleBodies).toHaveLength(1)
     expect(vertex.schedules.size).toBe(0)
   })
@@ -225,11 +220,10 @@ describe("a lost create answer (review M1)", () => {
   it("answers UNCERTAIN when the client cannot confirm a committed job create", async () => {
     const { directory, path } = workspace()
     const { vertex, runner, fakes } = setup(directory)
-    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { planId: string; preview: { jobId: string } }
+    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { plan: unknown; preview: { jobId: string } }
     vertex.failNextCreate = new ColabError("UNCERTAIN", "The job create's answer was lost, and no job with its id exists.", { next: "colab_jobs lists the account's jobs before planning again." })
-    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ state: "failed", error: "UNCERTAIN", next: "colab_jobs lists the account's jobs before planning again." })
-    // The plan is spent (a failed commit expires it), and the create's intent is in the ledger, unresolved.
-    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ state: "refused", error: "PLAN_EXPIRED" })
+    expect(await runTool("write", { plan: planned.plan }, call(), runner)).toMatchObject({ state: "failed", error: "UNAVAILABLE", next: "colab_jobs lists the account's jobs before planning again." })
+    // The create's intent is in the ledger, unresolved.
     expect(fakes.ledger.runs.size).toBe(1)
   })
 })
@@ -237,22 +231,22 @@ describe("a lost create answer (review M1)", () => {
 
 describe("a create's intent is in the ledger before the call (review R1)", () => {
   const jobName = (id: string) => `projects/proj/locations/us-central1/notebookExecutionJobs/${id}`
-  const plan = async (runner: Runner, path: string) => (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { planId: string; preview: Record<string, any> }
+  const plan = async (runner: Runner, path: string) => (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { plan: unknown; preview: Record<string, any> }
 
   it("a create that times out leaves an UNCERTAIN record, and a second create is blocked while its job exists", async () => {
     const { directory, path } = workspace()
     const { runner, vertex, ledger } = setup(directory)
     const first = await plan(runner, path)
     vertex.failNextCreate = new ColabError("UNCERTAIN", "The job create's answer was lost, and no job with its id exists.", { next: "colab_jobs lists the account's jobs before planning again." })
-    expect(await runTool("write", { planId: first.planId }, call(), runner)).toMatchObject({ state: "failed", error: "UNCERTAIN" })
+    expect(await runTool("write", { plan: first.plan }, call(), runner)).toMatchObject({ state: "failed", error: "UNAVAILABLE" })
     expect(await ledger.getRun(first.preview.jobId)).toMatchObject({ state: "running", errorCode: "UNCERTAIN", notebook: path })
     expect((await ledger.getRun(first.preview.jobId))!.endedAt).toBeUndefined()
     // Now the job exists (the answer was lost, the create was not): a new plan must not create a second one.
     vertex.putJob({ name: jobName(first.preview.jobId), displayName: "first", state: "JOB_STATE_RUNNING", createTime: "2026-11-17T09:00:00Z", updateTime: "2026-11-17T09:00:00Z" })
     vertex.operations.set(jobName(first.preview.jobId), [{ name: "projects/proj/locations/us-central1/operations/op-lost", done: false }])
     const second = await plan(runner, path)
-    expect(await runTool("write", { planId: second.planId }, call(), runner)).toMatchObject({
-      error: "UNCERTAIN",
+    expect(await runTool("write", { plan: second.plan }, call(), runner)).toMatchObject({
+      error: "UNAVAILABLE",
       message: expect.stringContaining(first.preview.jobId),
       next: expect.stringContaining("job.delete"),
     })
@@ -264,7 +258,7 @@ describe("a create's intent is in the ledger before the call (review R1)", () =>
     // job and creating another is then an ordinary, deliberate pair of steps.
     vertex.jobs.delete(jobName(first.preview.jobId))
     const third = await plan(runner, path)
-    expect(await runTool("write", { planId: third.planId }, call(), runner)).toMatchObject({ state: "ok", result: { id: third.preview.jobId } })
+    expect(await runTool("write", { plan: third.plan }, call(), runner)).toMatchObject({ state: "ok", result: { id: third.preview.jobId } })
     expect(await ledger.getRun(first.preview.jobId)).toMatchObject({ state: "running" })
     expect((await ledger.getRun(first.preview.jobId))!.errorCode).toBeUndefined()
   })
@@ -274,12 +268,12 @@ describe("a create's intent is in the ledger before the call (review R1)", () =>
     const { runner, vertex, ledger } = setup(directory)
     const first = await plan(runner, path)
     vertex.failNextCreate = new ColabError("CANCELLED", "The call stopped before the job's create was confirmed.", { next: "colab_jobs lists the account's jobs before planning again." })
-    expect(await runTool("write", { planId: first.planId }, call(), runner)).toMatchObject({ state: "failed", error: "CANCELLED" })
+    expect(await runTool("write", { plan: first.plan }, call(), runner)).toMatchObject({ state: "failed", error: "UNAVAILABLE" })
     expect(await ledger.getRun(first.preview.jobId)).toMatchObject({ state: "running", errorCode: "UNCERTAIN" })
     // The job is absent and Google answers 404 for it and its operations: the next plan retries with the same id, so a
     // late-arriving create joins rather than doubling.
     const second = await plan(runner, path)
-    const committed = (await runTool("write", { planId: second.planId }, call(), runner)) as { state: string; result: Record<string, unknown> }
+    const committed = (await runTool("write", { plan: second.plan }, call(), runner)) as { state: string; result: Record<string, unknown> }
     expect(committed).toMatchObject({ state: "ok", result: { id: first.preview.jobId, message: expect.stringContaining("reused its id") } })
     expect(vertex.jobBodies.map((entry) => entry.jobId)).toEqual([first.preview.jobId, first.preview.jobId])
     expect(await ledger.getRun(first.preview.jobId)).toMatchObject({ state: "running", operation: expect.any(String) })
@@ -291,11 +285,11 @@ describe("a create's intent is in the ledger before the call (review R1)", () =>
     const { runner, vertex, ledger } = setup(directory)
     const first = await plan(runner, path)
     vertex.failNextCreate = new ColabError("UNCERTAIN", "The job create's answer was lost.", { next: "colab_jobs lists the account's jobs before planning again." })
-    await runTool("write", { planId: first.planId }, call(), runner)
+    await runTool("write", { plan: first.plan }, call(), runner)
     vertex.failNextGetJob = new ColabError("UNAVAILABLE", "Google answered 5xx after retries.")
     const second = await plan(runner, path)
-    expect(await runTool("write", { planId: second.planId }, call(), runner)).toMatchObject({
-      error: "UNCERTAIN",
+    expect(await runTool("write", { plan: second.plan }, call(), runner)).toMatchObject({
+      error: "UNAVAILABLE",
       message: expect.stringContaining(first.preview.jobId),
       next: expect.stringContaining("Check colab_jobs"),
     })
@@ -308,13 +302,13 @@ describe("a create's intent is in the ledger before the call (review R1)", () =>
     const first = setup(directory)
     const planned = await plan(first.runner, path)
     first.vertex.failNextCreate = new ColabError("UNCERTAIN", "The job create's answer was lost.", { next: "colab_jobs lists the account's jobs before planning again." })
-    await runTool("write", { planId: planned.planId }, call(), first.runner)
+    await runTool("write", { plan: planned.plan }, call(), first.runner)
     // A new Deps (a restarted OpenCode) with the same ledger, and the lost create's job now visible.
     const restarted = setup(directory, first.ledger)
     restarted.vertex.putJob({ name: jobName(planned.preview.jobId), displayName: "first", state: "JOB_STATE_RUNNING", createTime: "2026-11-17T09:00:00Z", updateTime: "2026-11-17T09:00:00Z" })
     restarted.vertex.operations.set(jobName(planned.preview.jobId), [{ name: "projects/proj/locations/us-central1/operations/op-restart", done: false }])
     const next = await plan(restarted.runner, path)
-    expect(await runTool("write", { planId: next.planId }, call(), restarted.runner)).toMatchObject({ error: "UNCERTAIN", message: expect.stringContaining(planned.preview.jobId) })
+    expect(await runTool("write", { plan: next.plan }, call(), restarted.runner)).toMatchObject({ error: "UNAVAILABLE", message: expect.stringContaining(planned.preview.jobId) })
     expect(restarted.vertex.jobBodies).toHaveLength(0)
     expect(await restarted.ledger.getRun(planned.preview.jobId)).toMatchObject({ operation: "projects/proj/locations/us-central1/operations/op-restart" })
   })
@@ -324,7 +318,7 @@ describe("a create's intent is in the ledger before the call (review R1)", () =>
     const { runner, vertex, ledger } = setup(directory)
     const planned = await plan(runner, path)
     vertex.failNextCreate = new ColabError("PERMISSION_DENIED", "The run identity cannot create jobs.")
-    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ error: "PERMISSION_DENIED" })
+    expect(await runTool("write", { plan: planned.plan }, call(), runner)).toMatchObject({ error: "PERMISSION_DENIED" })
     expect(await ledger.getRun(planned.preview.jobId)).toMatchObject({ state: "failed", errorCode: "PERMISSION_DENIED", endedAt: expect.any(String) })
     expect(vertex.jobBodies).toHaveLength(1)
   })

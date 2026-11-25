@@ -10,7 +10,7 @@
  */
 import { FakeRuntimeProtocol } from "./index.js"
 import { ColabError } from "../../src/domain/errors.js"
-import type { ContentEntry } from "../../src/ports.js"
+import type { ContentEntry } from "../../src/provider/ports.js"
 
 /** A contents tree: a file's bytes by absolute runtime path, and the directories that hold them. */
 export class CostContents {
@@ -66,7 +66,7 @@ export class CostRuntime extends FakeRuntimeProtocol {
       })()
     }
     files.write = async () => {
-      throw new ColabError("NOT_IMPLEMENTED", "The cost tests do not write to a runtime.")
+      throw new ColabError("UNAVAILABLE", "The cost tests do not write to a runtime.")
     }
   }
 }

@@ -8,7 +8,7 @@
  * notebookRuntimeTemplates); no network, no Google call.
  */
 import { ColabError } from "../../src/domain/errors.js"
-import type { EnterpriseJob, EnterpriseSchedule, EnterpriseRuntime } from "../../src/ports.js"
+import type { EnterpriseJob, EnterpriseSchedule, EnterpriseRuntime } from "../../src/provider/ports.js"
 import { FakeClock, FakeVertex } from "./index.js"
 
 export interface ScriptedJob extends EnterpriseJob {
