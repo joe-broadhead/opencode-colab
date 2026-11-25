@@ -1,46 +1,31 @@
 /**
- * The `colab.runtimes` source (design §11): a snapshot of the account's runtimes as a `list` (source-contract's
- * `output.list`: at most 50 items of `{ id, text ≤ 200, note? ≤ 200 }`), so a consumer can show what is running and
- * what costs money. Free: one listing call to Google per read, asserted as `colab.read` on its operation.
+ * The `colab.runtimes` snapshot: the account's runtimes as a `table` (at most 8 columns and 100 rows).
  *
- * - **Colab** (consumer): `runtimes.list` names every runtime assigned to the person, not only the plugin's own
- *   (Colab API v1beta, `runtimes.list`, discovery revision 20261115). The ledger tells which are the plugin's own and
- *   which are tainted; a runtime the person opened elsewhere is listed and marked "not the plugin's". Google publishes
- *   no per-accelerator compute-unit rate, so no item carries a price (design §8.1).
- * - **Colab Enterprise**: `notebookRuntimes.list` (Vertex AI v1); each item names its machine, accelerator, state, the
- *   dated price table's USD/h when it prices that machine in the account's region, and the idle-shutdown and end-user
- *   credential flags. A stopped runtime still bills its disk, and the note says so.
- *
- * More than 50 runtimes, or a listing the client cut at its page bound, is TOO_LARGE rather than a partial list.
+ * Consumer accounts list the Colab runtimes assigned to the person, with the ledger marking the plugin's own and tainted
+ * ones. Enterprise accounts list Vertex notebook runtimes with their machine, state, idle-shutdown and end-user
+ * credential flags, and the dated price table's USD/h when it prices them. More than 100 rows is TOO_LARGE rather than a
+ * partial snapshot.
  */
-import { SourceError } from "@we-the-rebel-alliance/source-contract/events"
-import type { Deps } from "../deps.js"
-import { OPERATIONS, type Operation } from "../domain/actions.js"
+import { refusal, RegisterError } from "@we-the-rebel-alliance/plugin-contract/register"
+import type { Deps } from "../provider/index.js"
+import { OPERATIONS } from "../domain/actions.js"
 import type { ResolvedAccount } from "../options.js"
-import type { ColabRuntime, EnterpriseRuntime, RuntimeRecord, RuntimeSpecKey } from "../ports.js"
-import { asSource } from "./errors.js"
-import { duration, PACKAGE } from "./runs.js"
+import type { ColabRuntime, EnterpriseRuntime, RuntimeRecord, RuntimeSpecKey } from "../provider/ports.js"
 
 export const RUNTIMES = "runtimes"
 export const RUNTIMES_ID = "colab.runtimes"
-/** The descriptor's `maxBytes` for the snapshot. */
-export const RUNTIMES_MAX_BYTES = 32_768
-/** `output.list`'s item bound. */
-export const MAX_ITEMS = 50
+export const MAX_ROWS = 100
+const MAX_COLUMNS = 8
 
-export interface ListItem {
-  readonly id: string
-  readonly text: string
-  readonly note?: string
+export interface RuntimeTable {
+  readonly columns: readonly { readonly key: string; readonly label: string }[]
+  readonly rows: readonly Readonly<Record<string, string | number | boolean | null>>[]
 }
 
 export interface RuntimesSnapshot {
-  readonly source: typeof RUNTIMES
-  readonly account: string
-  readonly data: { readonly items: readonly ListItem[]; readonly editable: false }
+  readonly data: RuntimeTable
   readonly asOf: string
   readonly trust: "untrusted"
-  readonly plugin: typeof PACKAGE
 }
 
 const cut = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`)
@@ -52,70 +37,68 @@ export function specWords(spec: RuntimeSpecKey): string {
   return `${kind}${spec.shape === "SHAPE_HIGHMEM" ? ", high memory" : ""}`
 }
 
-function colabItem(runtime: ColabRuntime, record: RuntimeRecord | undefined, now: number): ListItem {
-  const id = cut(lastSegment(runtime.name), 128)
-  if (!record) {
-    return { id, text: cut(`${specWords(runtime.spec)} - not the plugin's own (opened elsewhere)`, 200), note: "The plugin never runs code on it, lists its files or releases it." }
-  }
-  const taint = record.tainted ? `, tainted (${record.tainted.code}): no more runs, released only by plan` : ""
-  const age = duration(now - Date.parse(record.createdAt))
-  const lease = `lease ${record.lease.releaseAfterIdleMinutes} min idle or ${record.lease.maxHours} h, released then when the automation is on`
-  return {
-    id,
-    text: cut(`${specWords(runtime.spec)} - the plugin's own${taint}`, 200),
-    note: cut(`Created ${age} ago; ${record.tainted ? "not released automatically" : lease}. Colab publishes no compute-unit rate.`, 200),
-  }
-}
+const COLUMNS = [
+  { key: "id", label: "Runtime" },
+  { key: "backend", label: "Backend" },
+  { key: "spec", label: "Spec" },
+  { key: "state", label: "State" },
+  { key: "ours", label: "Ours" },
+  { key: "tainted", label: "Tainted" },
+  { key: "usdPerHour", label: "USD per hour" },
+  { key: "idleShutdownMinutes", label: "Idle shutdown (min)" },
+] as const
 
-function enterpriseItem(runtime: EnterpriseRuntime, usdPerHour: number | undefined): ListItem {
-  const machine = runtime.machineType ?? "machine not named"
-  const accelerator = runtime.accelerator && runtime.accelerator !== "NONE" && !/UNSPECIFIED$/.test(runtime.accelerator) ? ` + ${runtime.accelerator}` : ""
-  const price = usdPerHour === undefined ? "" : `, about $${usdPerHour.toFixed(2)}/h`
-  const state = runtime.state.replace(/^NOTEBOOK_RUNTIME_STATE_|^RUNTIME_STATE_/, "")
-  const flags = [
-    runtime.idleShutdownMinutes === null || runtime.idleShutdownMinutes === undefined ? "idle shutdown off" : `idle shutdown after ${runtime.idleShutdownMinutes} min`,
-    ...(runtime.euc ? ["end-user credentials on"] : []),
-    ...(/STOPPED/.test(runtime.state) ? ["stopped: its disk still bills"] : []),
-    ...(runtime.template ? [`template ${lastSegment(runtime.template)}`] : []),
-  ]
+function colabRow(runtime: ColabRuntime, record: RuntimeRecord | undefined): Record<string, string | number | boolean | null> {
   return {
     id: cut(lastSegment(runtime.name), 128),
-    text: cut(`Colab Enterprise runtime, ${machine}${accelerator}, ${state}${price}`, 200),
-    note: cut(`${flags.join("; ")}.`, 200),
+    backend: "colab",
+    spec: cut(specWords(runtime.spec), 60),
+    state: record ? (record.tainted ? "tainted" : record.state) : "assigned",
+    ours: record !== undefined,
+    tainted: record?.tainted !== undefined,
+    usdPerHour: null,
+    idleShutdownMinutes: null,
   }
 }
 
-function tooLarge(count: number | undefined): SourceError {
-  return new SourceError({
-    code: "TOO_LARGE",
-    what: count === undefined ? "Google's runtime listing was cut at its page bound, so the snapshot would be partial" : `The account has ${count} runtimes, over the ${MAX_ITEMS} the snapshot lists`,
-    next: "Run /colab-status or colab_runtimes to see them, and release or stop the ones you do not need.",
-  })
+function enterpriseRow(runtime: EnterpriseRuntime, usdPerHour: number | undefined): Record<string, string | number | boolean | null> {
+  return {
+    id: cut(lastSegment(runtime.name), 128),
+    backend: "enterprise",
+    spec: cut([runtime.machineType, runtime.accelerator].filter((part) => part !== undefined).join(" ") || "unknown", 60),
+    state: runtime.state.replace(/^NOTEBOOK_RUNTIME_STATE_|^RUNTIME_STATE_/, ""),
+    ours: false,
+    tainted: false,
+    usdPerHour: usdPerHour === undefined ? null : Math.round(usdPerHour * 100) / 100,
+    idleShutdownMinutes: runtime.idleShutdownMinutes ?? null,
+  }
 }
 
-/** The snapshot for one account. `read` asserts `colab.read` on the listing operation before Google is called. */
-export async function readRuntimes(deps: Pick<Deps, "colab" | "vertex" | "ledger" | "prices" | "clock">, account: ResolvedAccount, read: (operation: Operation) => Promise<void>, signal: AbortSignal): Promise<RuntimesSnapshot> {
+function tooLarge(count: number): RegisterError {
+  return new RegisterError(
+    refusal("TOO_LARGE", `The account has ${count} runtimes, over the ${MAX_ROWS} the snapshot lists`, "Release or stop the runtimes you do not need, then read the snapshot again."),
+  )
+}
+
+/** The snapshot for one account. The register asserts the declared operations; the reads only check the signal. */
+export async function readRuntimes(deps: Pick<Deps, "colab" | "vertex" | "ledger" | "prices" | "clock">, account: ResolvedAccount, signal: AbortSignal): Promise<RuntimesSnapshot> {
+  signal.throwIfAborted()
   const now = deps.clock.now().getTime()
-  let items: ListItem[]
+  let rows: Record<string, string | number | boolean | null>[]
   if (account.backend === "enterprise") {
-    await read(OPERATIONS.notebookRuntimesList)
-    const listed = await asSource(() => deps.vertex.listRuntimes(account.alias, signal))
-    if (listed.truncated) throw tooLarge(undefined)
-    if (listed.length > MAX_ITEMS) throw tooLarge(listed.length)
-    items = listed.map((runtime) =>
-      enterpriseItem(runtime, runtime.machineType ? deps.prices.usdPerHour({ machine: runtime.machineType, ...(runtime.accelerator ? { accelerator: runtime.accelerator } : {}), ...(account.region ? { region: account.region } : {}) }) : undefined),
+    const listed = await deps.vertex.listRuntimes(account.alias, signal)
+    if (listed.truncated) throw tooLarge(MAX_ROWS)
+    if (listed.length > MAX_ROWS) throw tooLarge(listed.length)
+    rows = listed.map((runtime) =>
+      enterpriseRow(runtime, runtime.machineType ? deps.prices.usdPerHour({ machine: runtime.machineType, ...(runtime.accelerator ? { accelerator: runtime.accelerator } : {}), ...(account.region ? { region: account.region } : {}) }) : undefined),
     )
   } else {
-    await read(OPERATIONS.runtimesList)
-    const listed = await asSource(() => deps.colab.listRuntimes(account.alias, signal))
-    if (listed.length > MAX_ITEMS) throw tooLarge(listed.length)
-    const ours = new Map((await asSource(() => deps.ledger.listRuntimes({ account: account.alias }))).map((record) => [record.id, record]))
-    items = listed
-      .map((runtime) => ({ runtime, record: ours.get(lastSegment(runtime.name)) }))
-      .sort((a, b) => Number(!a.record) - Number(!b.record) || lastSegment(a.runtime.name).localeCompare(lastSegment(b.runtime.name)))
-      .map(({ runtime, record }) => colabItem(runtime, record, now))
+    const listed = await deps.colab.listRuntimes(account.alias, signal)
+    if (listed.length > MAX_ROWS) throw tooLarge(listed.length)
+    const ours = new Map((await deps.ledger.listRuntimes({ account: account.alias })).map((record) => [record.id, record]))
+    rows = listed
+      .map((runtime) => colabRow(runtime, ours.get(lastSegment(runtime.name))))
+      .sort((a, b) => Number(a.ours === false) - Number(b.ours === false) || String(a.id).localeCompare(String(b.id)))
   }
-  const snapshot: RuntimesSnapshot = { source: RUNTIMES, account: account.alias, data: { items, editable: false }, asOf: new Date(now).toISOString(), trust: "untrusted", plugin: PACKAGE }
-  if (Buffer.byteLength(JSON.stringify(snapshot)) > RUNTIMES_MAX_BYTES) throw tooLarge(items.length)
-  return snapshot
+  return { data: { columns: COLUMNS.slice(0, MAX_COLUMNS).map((column) => ({ ...column })), rows }, asOf: new Date(now).toISOString(), trust: "untrusted" }
 }

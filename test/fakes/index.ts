@@ -7,11 +7,10 @@
  * Each fake keeps its state in plain fields a test can set and read, and records its calls.
  */
 import { createHash, randomUUID } from "node:crypto"
-import { PlanStore } from "../../src/domain/plans.js"
-import { isFinal } from "../../src/ledger/store.js"
+import { isFinal } from "../../src/provider/ledger/store.js"
 import { ColabError } from "../../src/domain/errors.js"
-import type { Deps } from "../../src/deps.js"
-import { createRunEvents } from "../../src/events.js"
+import type { Deps } from "../../src/provider/index.js"
+import { createRunEvents } from "../../src/provider/events.js"
 import { loadOptions, type Options } from "../../src/options.js"
 import { OPERATIONS } from "../../src/domain/actions.js"
 import type {
@@ -37,7 +36,6 @@ import type {
   Ledger,
   LedgerEvent,
   NotebookStore,
-  PermissionRequest,
   Prices,
   ProbeVerdict,
   ProviderRead,
@@ -50,7 +48,7 @@ import type {
   SubscriptionTier,
   Taint,
   VertexApi,
-} from "../../src/ports.js"
+} from "../../src/provider/ports.js"
 
 export type Call = { readonly method: string; readonly args: readonly unknown[] }
 
@@ -62,26 +60,6 @@ export class FakeClock implements Clock {
   }
   advance(ms: number) {
     this.current = new Date(this.current.getTime() + ms)
-  }
-}
-
-// ── Permission ──────────────────────────────────────────────────────────
-
-/** Records every assert; `decide` throws to deny (default: allow everything). */
-export class RecordingPermission {
-  readonly requests: PermissionRequest[] = []
-  decide: (request: PermissionRequest) => void = () => undefined
-  readonly assert = async (request: PermissionRequest) => {
-    this.requests.push(request)
-    this.decide(request)
-  }
-  actions() {
-    return this.requests.map((request) => request.action)
-  }
-  denyAll(message = "denied by the test's rules") {
-    this.decide = () => {
-      throw new Error(message)
-    }
   }
 }
 
@@ -141,7 +119,7 @@ export class FakeColabApi implements ColabApi {
   async getRuntime(account: string, runtimeId: string) {
     this.calls.push({ method: "getRuntime", args: [account, runtimeId] })
     const runtime = this.runtimes.get(runtimeId)
-    return runtime ? { runtime, connection: { url: `https://fake-runtime.invalid/${runtimeId}`, token: "fake-proxy-token", expireTime: "2026-11-17T10:00:00Z" } } : undefined
+    return runtime ? { runtime, connection: { url: `https://fake-runtime.invalid/${runtimeId}`, token: "example-token", expireTime: "2026-11-17T10:00:00Z" } } : undefined
   }
   async createRuntime(account: string, input: { runtimeId: string; spec: RuntimeSpecKey; requestId: string; waitMs: number }) {
     this.calls.push({ method: "createRuntime", args: [account, input] })
@@ -649,7 +627,7 @@ export interface Fakes {
   readonly driveSync: FakeDriveSync
 }
 
-/** A Deps made of fakes, with the plugin's real plan store and run events, and the options a test passes. */
+/** A Deps made of fakes, with the plugin's run events, and the options a test passes. */
 export function fakeDeps(input: { readonly options?: unknown; readonly directory?: string } = {}): { readonly deps: Deps; readonly fakes: Fakes; readonly options: Options } {
   const options = loadOptions(input.options ?? {})
   const clock = new FakeClock()
@@ -673,7 +651,6 @@ export function fakeDeps(input: { readonly options?: unknown; readonly directory
   const deps: Deps = {
     options,
     directory: input.directory ?? "/project",
-    plans: new PlanStore(options.planTtlSeconds, () => clock.now().getTime()),
     events: createRunEvents(),
     ...fakes,
   }

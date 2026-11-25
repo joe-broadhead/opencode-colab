@@ -21,7 +21,6 @@ export const Account = z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9_-]*$/, 
 /** A runtime id: consumer `oc-<ulid>` for the plugin's own, or any id/resource name `colab_runtimes` lists. */
 export const RuntimeId = z.string().min(1).max(512)
 export const RunId = z.string().min(1).max(128)
-export const PlanId = z.string().min(16).max(512)
 /** A workspace path, relative to the project or absolute inside an allowed root. */
 export const LocalPath = z.string().min(1).max(4096)
 /** A path on the runtime, absolute (`/content/...`). */
@@ -187,8 +186,6 @@ export const SchedulesOutput = result({
   ),
 })
 
-// ── colab_plan ──────────────────────────────────────────────────────────
-
 const Compute = {
   /** An existing template, read-only; or the enterpriseMachine option through customEnvironmentSpec. */
   template: z.string().min(1).max(512).optional(),
@@ -200,7 +197,7 @@ const Compute = {
 const JobNotebook = z.union([z.object({ path: LocalPath }).strict(), z.object({ gcs: GcsUri }).strict()])
 const Bounds = { maxRunCount: z.number().int().min(1).optional(), endTime: z.string().optional() }
 
-/** Per action, what colab_plan takes besides `action` and `account` (design §7.2). */
+/** Per action, the params `plan_write` and `plan_delete` take under `params` (design §7.2). */
 export const PLAN_PARAMS = {
   "runtime.create": z.object({ spec: RuntimeSpecKey, keep: z.array(z.string().min(1)).max(20).optional() }).strict(),
   "runtime.stop": z.object({ runtime: RuntimeId }).strict(),
@@ -217,32 +214,6 @@ export const PLAN_PARAMS = {
   "drive.update": z.object({ path: LocalPath, outputs: z.enum(["strip", "keep"]).optional() }).strict(),
   "drive.trash": z.object({ drive: DriveFileId }).strict(),
 } as const satisfies Record<(typeof PLAN_ACTION_NAMES)[number], z.ZodType>
-
-/**
- * `colab_plan({ action, account?, params })`: the action's own parameters sit under `params`, checked against
- * PLAN_PARAMS[action] by the plan route, so an unknown or refused action is answered with its own code
- * (ACTION_UNSUPPORTED, SHARE_UNSUPPORTED) rather than a schema error.
- */
-export const PlanInput = z.object({ action: z.string().min(1).max(64), account: Account, params: z.record(z.string(), z.unknown()).optional() }).strict()
-export const PlanOutput = result({
-  planId: PlanId,
-  action: z.enum(PLAN_ACTION_NAMES as [string, ...string[]]),
-  category: z.enum(["write", "delete"]),
-  /** The tool that commits it: colab_write or colab_delete, with only {planId}. */
-  commit: z.enum(["colab_write", "colab_delete"]),
-  expiresAt: z.string(),
-  preview: z.record(z.string(), z.unknown()),
-})
-
-// ── Source tools (source-contract v0.3.0; package G owns their full input) ─
-
-/** The source contract's events_list input; G checks it against docs/contract.md and may tighten it. */
-export const EventsListInput = z
-  .object({ source: z.string().min(1), account: z.string().optional(), cursor: z.string().optional(), since: z.string().optional(), limit: z.number().int().min(1).max(500).optional(), scope: z.record(z.string(), z.string()).optional() })
-  .strict()
-export const EventsListOutput = z.record(z.string(), z.unknown())
-export const RuntimesReadInput = z.object({ source: z.string().min(1).optional(), account: z.string().optional() }).strict()
-export const RuntimesReadOutput = z.record(z.string(), z.unknown())
 
 // ── Change tools ────────────────────────────────────────────────────────
 
@@ -312,10 +283,6 @@ export const PauseInput = z.object({ account: Account, schedule: z.string().min(
 /** `state` is the call's outcome, as in every result; the schedule's own state is `scheduleState`. */
 export const PauseOutput = result({ schedule: z.string(), scheduleState: z.literal("PAUSED") })
 
-/** colab_write and colab_delete take only the plan id. */
-export const CommitInput = z.object({ planId: PlanId }).strict()
-export const CommitOutput = result({ planId: PlanId, action: z.string(), result: z.record(z.string(), z.unknown()) })
-
 // ── The table ───────────────────────────────────────────────────────────
 
 export interface ToolContract {
@@ -335,17 +302,12 @@ export const CONTRACTS = {
   execution: { input: ExecutionInput, output: ExecutionOutput, description: "A run's or job's state and outputs; wait for more, page a cell in full, or fetch an Enterprise job's output notebook." },
   jobs: { input: JobsInput, output: JobsOutput, description: "Colab Enterprise execution jobs: state, timings, compute, schedule, error." },
   schedules: { input: SchedulesInput, output: SchedulesOutput, description: "Colab Enterprise schedules: cron, state, next runs, bounds and worst-case cost." },
-  plan: { input: PlanInput, output: PlanOutput, description: "Preview a costly or destructive change and get a single-use planId; commit it with colab_write or colab_delete. Writes nothing." },
-  events_list: { input: EventsListInput, output: EventsListOutput, description: "Source colab.runs: finished runs and jobs this plugin started, from its ledger." },
-  runtimes_read: { input: RuntimesReadInput, output: RuntimesReadOutput, description: "Source colab.runtimes: a snapshot of the account's runtimes." },
   edit: { input: EditInput, output: EditOutput, description: "Edit a local notebook, all or nothing: create, insert, replace, delete, move, clearOutputs, setMetadata. ifHash required except create." },
   run: { input: RunInput, output: RunOutput, description: "Run code or notebook cells on a consumer runtime the plugin created. Refuses any other runtime, and any where it sees credentials or another client." },
   cancel: { input: CancelInput, output: CancelOutput, description: "Interrupt a run, restart its kernel (state lost), or cancel an Enterprise job." },
   upload: { input: UploadInput, output: UploadOutput, description: "Upload a workspace file or folder to a runtime the plugin created. Refuses secret-shaped files." },
   download: { input: DownloadInput, output: DownloadOutput, description: "Download a runtime file, a Drive notebook or a GCS object into the workspace (.colab/files by default)." },
   pause: { input: PauseInput, output: PauseOutput, description: "Pause a Colab Enterprise schedule; no run is lost (resuming is a plan)." },
-  write: { input: CommitInput, output: CommitOutput, description: "Commit a write plan from colab_plan. Pass only {planId}." },
-  delete: { input: CommitInput, output: CommitOutput, description: "Commit a delete plan from colab_plan. Pass only {planId}." },
 } as const satisfies Record<string, ToolContract>
 
 export type ToolName = keyof typeof CONTRACTS

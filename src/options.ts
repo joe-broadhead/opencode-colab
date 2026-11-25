@@ -1,10 +1,10 @@
 // Plugin options (design §13). Strict: an option that is not listed here is refused with OPTIONS_INVALID rather than
 // ignored, so a typo cannot silently leave the plugin more open than the person meant. Every option is optional, and
-// no option holds a secret: `tokenEnv` names a variable.
+// no option holds a credential: `tokenEnv` names a variable.
 import * as z from "zod"
 import { ACCESS_VALUES } from "./constants.js"
 import { ColabError } from "./domain/errors.js"
-import type { AccountConfig } from "./ports.js"
+import type { AccountConfig } from "./provider/ports.js"
 
 /** "32KiB", "1MiB", "2GiB" or a number of bytes. */
 const Bytes = z.union([
@@ -18,7 +18,7 @@ const Bytes = z.union([
     }),
 ])
 
-const AccountSchema = z
+export const AccountSchema = z
   .strictObject({
     backend: z.enum(["colab", "enterprise"]).default("colab"),
     mode: z.enum(["interactive", "adc", "token"]).default("interactive"),
@@ -39,9 +39,9 @@ const AccountSchema = z
   })
   .refine((account) => account.mode !== "adc" || account.backend === "enterprise", { message: "mode adc is for enterprise accounts only" })
 
-const ALIAS = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const ALIAS = /^[a-z][a-z0-9]{0,31}$/
 
-const OptionsSchema = z.strictObject({
+export const OptionsSchema = z.strictObject({
   access: z.enum(ACCESS_VALUES).default("all"),
   accounts: z.record(z.string().regex(ALIAS, "use a short lowercase alias"), AccountSchema).optional(),
   oauthClient: z.string().min(1).optional(),
@@ -59,7 +59,6 @@ const OptionsSchema = z.strictObject({
   maxJobUsdCeiling: z.number().positive().default(50),
   rates: z.record(z.string(), z.number().nonnegative()).optional(),
   automation: z.enum(["auto", "on", "off"]).default("auto"),
-  maxInlineBytes: Bytes.default(32 * 1024),
   maxOutputBytesPerCell: Bytes.default(1024 * 1024),
   maxRunSeconds: z.number().int().min(60).max(86_400).default(21_600),
   maxUploadBytes: Bytes.default(512 * 1024 ** 2),
@@ -69,7 +68,6 @@ const OptionsSchema = z.strictObject({
   workDir: z.string().min(1).default(".colab"),
   allowedRoots: z.array(z.string().min(1)).default([]),
   ledgerDays: z.number().int().min(1).max(3650).default(90),
-  planTtlSeconds: z.number().int().min(30).max(3600).default(300),
   provisioningMarginMinutes: z.number().int().min(0).max(240).default(10),
   probeTimeoutSeconds: z.number().int().min(1).max(120).default(5),
   /** The probe kernel's start budget at calibration (review round 3, LOW 3); probeTimeoutSeconds bounds each probe after. */
