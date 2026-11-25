@@ -21,7 +21,7 @@ const runtime = (id: string, account: string): RuntimeRecord => ({
   state: "ready",
 })
 
-const run = (runId: string, account: string, runtimeId: string, name = "analysis.ipynb"): RunRecord => ({
+const run = (runId: string, account: string, runtimeId: string, name = "analysis.ipynb", endedAt = "2026-11-21T08:12:30.000Z"): RunRecord => ({
   runId,
   account,
   backend: "colab",
@@ -29,7 +29,7 @@ const run = (runId: string, account: string, runtimeId: string, name = "analysis
   runtime: runtimeId,
   spec: "T4 GPU",
   startedAt: "2026-11-21T08:10:00.000Z",
-  endedAt: "2026-11-21T08:12:30.000Z",
+  endedAt,
   cellIds: ["cell-1"],
   outputPaths: [],
   notebook: name,
@@ -70,6 +70,29 @@ describe("colab.runs", () => {
     expect(ids).toEqual(["run-1", "run-2"])
     expect(new Set(ids).size).toBe(ids.length)
     expect(first.events.some((event) => second.events.some((other) => other.external_id === event.external_id))).toBe(false)
+  })
+
+  test("since is kept on every page and a late-recorded run before it never appears", async () => {
+    const clock = new FakeClock(new Date("2026-11-21T09:00:00.000Z"))
+    const ledger = new MemoryLedger(clock)
+    await ledger.putRuntime(runtime("oc-work", "work"))
+    await ledger.putRun(run("run-1", "work", "oc-work", "a.ipynb", "2026-11-21T08:35:00.000Z"))
+    await ledger.putRun(run("run-2", "work", "oc-work", "b.ipynb", "2026-11-21T08:40:00.000Z"))
+    const since = Date.parse("2026-11-21T08:30:00.000Z")
+    const first = await listRuns({ ledger, clock, ledgerDays: 90 }, "work", OWNER, { limit: 1, since })
+    expect(first.events.map((event) => event.external_id)).toEqual(["run-1"])
+    expect(first.more).toBe(true)
+    // Recorded between the pages, but it ended before the since floor: it must not appear.
+    await ledger.putRun(run("late", "work", "oc-work", "old.ipynb", "2026-11-21T08:20:00.000Z"))
+    const second = await listRuns({ ledger, clock, ledgerDays: 90 }, "work", OWNER, { limit: 1, cursor: first.cursor })
+    expect(second.events.map((event) => event.external_id)).toEqual(["run-2"])
+    const third = await listRuns({ ledger, clock, ledgerDays: 90 }, "work", OWNER, { limit: 1, cursor: second.cursor })
+    expect(third.events).toEqual([])
+    const ids = [...first.events, ...second.events, ...third.events].map((event) => event.external_id)
+    expect(ids).toEqual(["run-1", "run-2"])
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(first.events.some((event) => Date.parse(event.occurred_at) < since)).toBe(false)
+    expect(second.events.some((event) => Date.parse(event.occurred_at) < since)).toBe(false)
   })
 
   test("a cursor from another account is CURSOR_INVALID, and a reset ledger answers one gap", async () => {

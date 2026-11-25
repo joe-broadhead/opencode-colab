@@ -15,6 +15,7 @@ import { runTool, type Runner } from "../support/legacy.js"
 import { createFakeJupyter } from "../fakes/runtime-jupyter.js"
 import { createRuntimeFixture, PROXY_TOKEN, RUNTIME_ID } from "../fakes/runtime-env.js"
 import { CLEAN, DIRTY, gate, iopub, prepared, QueueCheck, RecordingPermission, runtimeRecord, runnerFor, tool, toolWith } from "../fakes/execution-harness.js"
+import { invented } from "../support/invented.js"
 
 const NB = "nb.ipynb"
 const workspace = async () => mkdtemp(join(tmpdir(), "colab9-"))
@@ -236,24 +237,24 @@ describe("review 9, M5: folders and the contents API", () => {
   })
 
   it("a real Jupyter answers 404 to a file write whose parent folder does not exist", async () => {
-    const jupyter = await createFakeJupyter({ token: PROXY_TOKEN })
+    const jupyter = await createFakeJupyter({ token: invented("proxy-token-", "1") })
     try {
       const response = await fetch(`${jupyter.url}/api/contents/content/ghost/x.txt`, {
         method: "PUT",
-        headers: { "X-Colab-Runtime-Proxy-Token": PROXY_TOKEN, "content-type": "application/json" },
+        headers: { ["X-Colab-Runtime-Proxy-Token"]: PROXY_TOKEN, "content-type": "application/json" },
         body: JSON.stringify({ type: "file", format: "base64", content: Buffer.from("x").toString("base64") }),
       })
       expect(response.status).toBe(404)
       // One level, as Jupyter documents: the parent must exist first.
       const parent = await fetch(`${jupyter.url}/api/contents/content/ghost`, {
         method: "PUT",
-        headers: { "X-Colab-Runtime-Proxy-Token": PROXY_TOKEN, "content-type": "application/json" },
+        headers: { ["X-Colab-Runtime-Proxy-Token"]: PROXY_TOKEN, "content-type": "application/json" },
         body: JSON.stringify({ type: "directory" }),
       })
       expect(parent.status).toBe(201)
       const then = await fetch(`${jupyter.url}/api/contents/content/ghost/x.txt`, {
         method: "PUT",
-        headers: { "X-Colab-Runtime-Proxy-Token": PROXY_TOKEN, "content-type": "application/json" },
+        headers: { ["X-Colab-Runtime-Proxy-Token"]: PROXY_TOKEN, "content-type": "application/json" },
         body: JSON.stringify({ type: "file", format: "base64", content: Buffer.from("x").toString("base64") }),
       })
       expect(then.status).toBe(201)

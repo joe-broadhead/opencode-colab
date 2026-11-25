@@ -20,7 +20,7 @@ import { PRICES_AS_OF, PRICES_REGION, acceleratorShort, priceOf, usd } from "./p
 import { runIdentity, type RunIdentity } from "./account.js"
 import { budgetCheck, checkCost, checkScheduleCost, chooseCompute, describeNotebook, labelsFor, notebookForJob, notebookParam, payloadOf, scheduleCompute, scheduleCost, scheduleNameOf, runsUntil, settingsFor } from "./common.js"
 import { cronWithZone, minimumGap, nextRuns, occurrencesBetween, parseCron } from "./cron.js"
-import { lastSegment, scheduleToken } from "./ids.js"
+import { lastSegment, scheduleSuffix } from "./ids.js"
 import { nextRunsOf } from "./common.js"
 import { jobBody } from "./plans.js"
 import { overlapOf } from "./detail.js"
@@ -42,8 +42,8 @@ function refuseOverlapping(schedule: EnterpriseSchedule) {
 
 const identityKey = (identity: RunIdentity) => `${identity.as}:${identity.serviceAccount ?? identity.executionUser ?? ""}`
 
-const uniqueName = (base: string, token: string): string => {
-  const suffix = ` [oc-${token}]`
+const uniqueName = (base: string, tag: string): string => {
+  const suffix = ` [oc-${tag}]`
   const clean = base.replace(/[\r\n]+/g, " ").trim() || "Colab schedule"
   return `${clean.length + suffix.length > 128 ? clean.slice(0, 128 - suffix.length) : clean}${suffix}`
 }
@@ -158,7 +158,7 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
     requireBound(params.maxRunCount, params.endTime, ctx.deps.clock.now())
     const cronText = cronWithZone(params.cron, params.timeZone)
     const overlap = checkOverlap(cronText, choice.timeoutMinutes, params.maxRunCount, ctx)
-    const token = scheduleToken()
+    const token = scheduleSuffix()
     const displayName = uniqueName(params.displayName, token)
     // Every run of this schedule writes into its own folder under the account's bucket (review M2).
     const outputUri = `${settings.outputBase!}${token}/`

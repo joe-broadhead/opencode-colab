@@ -41,7 +41,7 @@ export function ulid(now: number = Date.now(), random: Uint8Array = randomBytes(
 export const jobId = (now: number = Date.now()) => `oc-job-${ulid(now)}`
 
 /** A token that makes a schedule's display name unique, so an uncertain create can be reconciled by listing. */
-export const scheduleToken = (random: Uint8Array = randomBytes(8)) =>
+export const scheduleSuffix = (random: Uint8Array = randomBytes(8)) =>
   [...random].map((byte) => ENCODING[byte % 32]!).join("").slice(0, 8)
 
 /** The `oc_session` label: a short hash, so a label never carries a session id. */

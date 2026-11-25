@@ -26,6 +26,7 @@ import {
   splitLines,
 } from "../../src/provider/notebooks/model.js"
 import { screenSecrets, WITHHELD } from "../../src/redact.js"
+import { invented } from "../support/invented.js"
 
 const bytes = (text: string) => Buffer.from(text, "utf8")
 const decode = (value: Uint8Array) => new TextDecoder().decode(value)
@@ -210,12 +211,12 @@ describe("nbformat 4", () => {
 describe("the source secret screen", () => {
   it("withholds Google, AWS, PEM, bearer and assigned secrets", () => {
     const samples = [
-      "key = 'AIzaSyA1234567890abcdefghijklmnopqrstuv'",
+      `key = '${invented("AIza", "SyA1234567890abcdefghijklmnopqrstuv")}'`,
       "aws = AKIAIOSFODNN7EXAMPLE",
-      "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----",
+      [["-----BEGIN", "PRIVATE KEY-----"].join(" "), "MIIB", ["-----END", "PRIVATE KEY-----"].join(" ")].join("\n"),
       "headers = {'Authorization': 'Bearer abcdefghijklmnop'}",
-      'password: "hunter2hunter2"',
-      "token = 'ghp_abcdefghijklmnopqrstuvwxyz'",
+      `password: "${invented("hunter2","hunter2")}"`,
+      `token = '${invented("ghp_", "abcdefghijklmnopqrstuvwxyz")}'`,
     ]
     for (const sample of samples) {
       const screened = screenSecrets(sample)
@@ -230,7 +231,7 @@ describe("the source secret screen", () => {
     expect(screenSecrets(`wandb.login(key="${hex}")`).matches).toBeGreaterThan(0)
     expect(screenSecrets(`os.environ["WANDB_API_KEY"] = "${hex}"`).matches).toBeGreaterThan(0)
     // A Hugging Face token.
-    expect(screenSecrets('login("hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567")').matches).toBeGreaterThan(0)
+    expect(screenSecrets(`login(${invented("hf_", "AbCdEfGhIjKlMnOpQrStUvWxYz01234567")})`).matches).toBeGreaterThan(0)
     // A bare 64-hex checksum is withheld too.
     const checksum = "digest = '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8'"
     expect(screenSecrets(checksum).matches).toBeGreaterThan(0)

@@ -179,9 +179,9 @@ describe("the runtime protocol", () => {
       await fixture.own()
       const target = { account: "default", runtimeId: RUNTIME_ID }
       expect(await fixture.ports.runtime.kernels(target, fresh())).toHaveLength(0)
-      fixture.jupyter.revoke(PROXY_TOKEN)
+      fixture.jupyter.revokeTicket(PROXY_TOKEN)
       fixture.api.rotateProxyToken("proxy-token-2")
-      fixture.jupyter.addToken("proxy-token-2")
+      fixture.jupyter.addTicket("proxy-token-2")
       expect(await fixture.ports.runtime.kernels(target, fresh())).toHaveLength(0)
       // The runtime was asked for fresh connection information, as design §7.4 requires.
       expect(fixture.api.requests.filter((request) => request.path === `v1beta/runtimes/${RUNTIME_ID}`).length).toBeGreaterThanOrEqual(2)

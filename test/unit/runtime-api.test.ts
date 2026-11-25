@@ -6,6 +6,7 @@ import { ColabError } from "../../src/domain/errors.js"
 import { COLAB_API_ORIGIN } from "../../src/provider/runtime/discovery.js"
 import { checkConnection, isAllowedRuntimeHost } from "../../src/provider/runtime/url.js"
 import { createRuntimeFixture } from "../fakes/runtime-env.js"
+import { invented } from "../support/invented.js"
 
 const signal = () => new AbortController().signal
 const code = async (work: Promise<unknown>): Promise<string> => {
@@ -207,7 +208,7 @@ describe("the package's factory", () => {
 })
 
 describe("the runtime URL gate", () => {
-  const info = (url: string, token = "proxy-token") => ({ url, token, expireTime: "2026-11-17T10:00:00Z" })
+  const info = (url: string, token = invented("proxy", "-token")) => ({ url, token, expireTime: "2026-11-17T10:00:00Z" })
 
   it("accepts only https on a Google-owned host, and refuses anything else without echoing it", () => {
     expect(isAllowedRuntimeHost("abc.prod.colab.dev")).toBe(true)

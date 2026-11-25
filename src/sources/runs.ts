@@ -28,6 +28,8 @@ const FIRST_RUN_HOURS = 24
 export interface RunsCursor {
   readonly q: number
   readonly h?: string
+  /** The `since` floor the read started with; every later page keeps it. (`s` is reserved by the cursor codec.) */
+  readonly w: string
   readonly t: string
 }
 
@@ -37,7 +39,7 @@ const isIso = (value: unknown): value is string => typeof value === "string" && 
 export const runsBinding = (account: string): CursorBinding => ({ plugin: "colab", source: RUNS, account })
 
 export function encodeRunsCursor(account: string, state: RunsCursor): string {
-  return encodeBoundCursor(runsBinding(account), { q: state.q, ...(state.h !== undefined ? { h: state.h } : {}), t: state.t })
+  return encodeBoundCursor(runsBinding(account), { q: state.q, ...(state.h !== undefined ? { h: state.h } : {}), w: state.w, t: state.t })
 }
 
 export function decodeRunsCursor(account: string, cursor: string): RunsCursor {
@@ -45,12 +47,13 @@ export function decodeRunsCursor(account: string, cursor: string): RunsCursor {
   const state = decoded.ok ? decoded.state : undefined
   const q = state?.["q"]
   const h = state?.["h"]
+  const w = state?.["w"]
   const t = state?.["t"]
-  const keys = state ? Object.keys(state).filter((key) => key !== "q" && key !== "h" && key !== "t") : []
-  if (!state || typeof q !== "number" || !Number.isSafeInteger(q) || q < 0 || !isIso(t) || (h !== undefined && !isIso(h)) || keys.length > 0) {
+  const keys = state ? Object.keys(state).filter((key) => key !== "q" && key !== "h" && key !== "w" && key !== "t") : []
+  if (!state || typeof q !== "number" || !Number.isSafeInteger(q) || q < 0 || !isIso(w) || !isIso(t) || (h !== undefined && !isIso(h)) || keys.length > 0) {
     throw new RegisterError(refusal("CURSOR_INVALID", `The cursor is ${decoded.ok ? "not one colab.runs issued" : decoded.reason} for the account ${account}`, "Call events_list again without a cursor, with since, to start over."))
   }
-  return { q, ...(h !== undefined ? { h } : {}), t }
+  return { q, ...(h !== undefined ? { h } : {}), w, t }
 }
 
 export interface RunsDeps {
@@ -161,6 +164,7 @@ export async function listRuns(deps: RunsDeps, account: string, owner: EventsOwn
 
   let q: number
   let t: string
+  let w: string
   let h: string | undefined
   let gap: EventsGap | undefined
   let windowStart: number | undefined
@@ -169,6 +173,8 @@ export async function listRuns(deps: RunsDeps, account: string, owner: EventsOwn
     const reset = from.q > newest || (atQ !== undefined && from.h !== undefined && atQ.at !== from.h)
     const expired = from.q < oldest - 1
     t = from.t
+    w = from.w
+    windowStart = Date.parse(from.w)
     if (reset || expired) {
       gap = { reason: "expired", since: from.t }
       q = oldest - 1
@@ -180,6 +186,7 @@ export async function listRuns(deps: RunsDeps, account: string, owner: EventsOwn
   } else {
     windowStart = request.since ?? now - FIRST_RUN_HOURS * 3_600_000
     t = new Date(windowStart).toISOString()
+    w = t
     q = oldest - 1
     if (oldest > 1 && windowStart < now - deps.ledgerDays * DAY) gap = { reason: "expired", since: t }
   }
@@ -225,7 +232,7 @@ export async function listRuns(deps: RunsDeps, account: string, owner: EventsOwn
     t = entry.at > t ? entry.at : t
   }
 
-  const cursor = encodeRunsCursor(account, { q, ...(h !== undefined ? { h } : {}), t })
+  const cursor = encodeRunsCursor(account, { q, ...(h !== undefined ? { h } : {}), w, t })
   return eventsListResult({ source: RUNS, account, owner }, oldestFirst(events), cursor, more, {
     ...(refused.length > 0 ? { refused } : {}),
     ...(gap ? { gap } : {}),

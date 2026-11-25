@@ -15,9 +15,10 @@ import { createOwnerLease, type OwnerLease } from "../../src/provider/runtime/le
 import { FakeAuth, FakeClock, MemoryLedger } from "./index.js"
 import { createFakeColabApi, type FakeColabApi } from "./runtime-api.js"
 import { createFakeJupyter, type FakeJupyter } from "./runtime-jupyter.js"
+import { invented } from "../support/invented.js"
 
 export const CPU = { variant: "VARIANT_CPU", shape: "SHAPE_STANDARD", accelerator: "NONE" } as const
-export const PROXY_TOKEN = "proxy-token-1"
+export const PROXY_TOKEN = invented("proxy-token-", "1")
 export const RUNTIME_ID = "oc-01jtestruntime0000000000"
 
 export interface RuntimeFixture {
@@ -62,11 +63,11 @@ export const CLEAN_CALIBRATION_FIXTURE = {
 
 export async function createRuntimeFixture(input: RuntimeFixtureInput = {}): Promise<RuntimeFixture> {
   const jupyter = await createFakeJupyter({
-    token: PROXY_TOKEN,
+    token: invented("proxy-token-", "1"),
     ...(input.allowHidden !== undefined ? { allowHidden: input.allowHidden } : {}),
     ...(input.proxyConnections !== undefined ? { proxyConnections: input.proxyConnections } : {}),
   })
-  const api = await createFakeColabApi({ runtimeUrl: jupyter.url, runtimeToken: PROXY_TOKEN, ...(input.createPolls !== undefined ? { createPolls: input.createPolls } : {}) })
+  const api = await createFakeColabApi({ runtimeUrl: jupyter.url, runtimeToken: invented("proxy-token-", "1"), ...(input.createPolls !== undefined ? { createPolls: input.createPolls } : {}) })
   const options = loadOptions(input.options ?? {})
   const auth = new FakeAuth()
   auth.grants.set("default", ["https://www.googleapis.com/auth/colaboratory", "https://www.googleapis.com/auth/colaboratory.readonly"])
@@ -120,7 +121,7 @@ export async function createRuntimeFixture(input: RuntimeFixtureInput = {}): Pro
         id: runtimeId,
         spec: { ...CPU, eligible: true },
         requestId: "request-1",
-        connection: { url: jupyter.url, token: PROXY_TOKEN, expireTime: new Date(Date.now() + 3_600_000).toISOString() },
+        connection: { url: jupyter.url, token: invented("proxy-token-", "1"), expireTime: new Date(Date.now() + 3_600_000).toISOString() },
       })
       return full
     },

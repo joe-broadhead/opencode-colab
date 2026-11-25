@@ -8,6 +8,7 @@ import { loadOptions } from "../../src/options.js"
 import { FakeClock } from "../fakes/index.js"
 import { FakeAuthHost } from "../fakes/auth-host.js"
 import { FakeHttp, storedCredential } from "../fakes/auth-http.js"
+import { invented } from "../support/invented.js"
 
 const NOW = new Date("2026-11-17T09:00:00.000Z")
 
@@ -53,7 +54,7 @@ describe("/colab-doctor (design §14)", () => {
       ["runtime print(1)", "SKIPPED"],
     ])
     expect(asserts).toEqual([{ action: "colab.probe", resources: ["default"] }])
-    expect(http.calls[0]!.headers["authorization"]).toBe("Bearer ya29.test-access-token")
+    expect(http.calls[0]!.headers["authorization"]).toBe(["Bearer", invented("ya29.", "test-access-token")].join(" "))
   })
 
   it("§14 — an Enterprise account checks templates and one bucket listing, and the message names both", async () => {

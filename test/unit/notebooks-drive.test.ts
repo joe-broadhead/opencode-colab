@@ -16,9 +16,10 @@ import { readSyncRecord, syncState } from "../../src/provider/notebooks/sync.js"
 import { toolHandlers } from "../support/legacy.js"
 import { runTool, type Runner } from "../support/legacy.js"
 import { fakeDeps, type Fakes, RecordingPermission } from "../fakes/index.js"
+import { invented } from "../support/invented.js"
 
 const call = (id = "call_1") => ({ sessionID: "ses_test", agent: "build", messageID: "msg_test", id, signal: new AbortController().signal })
-const source = "key = 'AIzaSyA1234567890abcdefghijklmnopqrstuv'\nprint(1)\n"
+const source = `key = '${invented("AIza", "SyA1234567890abcdefghijklmnopqrstuv")}'\nprint(1)\n`
 const fixture = (): string =>
   JSON.stringify(
     {

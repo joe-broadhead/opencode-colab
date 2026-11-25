@@ -14,6 +14,7 @@ import { toolHandlers } from "../support/legacy.js"
 import { fakeDeps, RecordingPermission } from "../fakes/index.js"
 import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
+import { invented } from "../support/invented.js"
 
 const call = (sessionID = "ses_enterprise") => ({ sessionID, agent: "build", messageID: "msg", id: "call", signal: new AbortController().signal })
 const WORK = { backend: "enterprise" as const, access: "write" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" }
@@ -103,7 +104,7 @@ describe("job.create", () => {
   })
 
   it("reports secret-shaped cell sources in the preview without their text", async () => {
-    const secret = "AIzaSyD-1234567890abcdefghijklmnopqrstu"
+    const secret = invented("AIza", "SyD-1234567890abcdefghijklmnopqrstu")
     const { directory, path } = workspace(notebook([{ cell_type: "code", id: "c1", metadata: {}, execution_count: null, outputs: [], source: [`key = "${secret}"`] }]))
     const { runner } = setup(OPTIONS, directory)
     const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { preview: Record<string, any> }

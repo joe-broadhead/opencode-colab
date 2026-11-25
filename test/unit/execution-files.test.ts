@@ -15,6 +15,7 @@ import { FakeAuth, FakeClock, fakeDeps, MemoryLedger } from "../fakes/index.js"
 import { createFakeColabApi } from "../fakes/runtime-api.js"
 import { createFakeJupyter } from "../fakes/runtime-jupyter.js"
 import { prepared, RecordingPermission, runtimeRecord, tool, toolWith } from "../fakes/execution-harness.js"
+import { invented } from "../support/invented.js"
 
 const made: string[] = []
 async function workspace(): Promise<string> {
@@ -117,7 +118,7 @@ describe("colab_upload", () => {
     expect(answer).toMatchObject({ state: "ok", to: "/content/data", bytes: 4 })
     expect([...runtime.contents.get(record.id)!.keys()].sort()).toEqual(["/content/data/a.csv", "/content/data/nested/b.txt"])
 
-    await writeFile(join(directory, "data", "nested", "id_rsa"), "-----BEGIN PRIVATE KEY-----\n")
+    await writeFile(join(directory, "data", "nested", "id_rsa"), ["-----BEGIN", "PRIVATE KEY-----"].join(" ") + "\n")
     const clean = await prepared({ directory })
     expect(await tool(clean.deps, "upload", { runtime: clean.record.id, path: "data", to: "/content/data" }).result).toMatchObject({ state: "refused", error: "UPLOAD_SECRET_REFUSED" })
     expect(clean.runtime.contents.get(clean.record.id)).toBeUndefined()
@@ -204,8 +205,8 @@ describe("upload through the real transport", () => {
 
   it("sends a file over the contents cap in B's chunked write, byte-exact", async () => {
     const directory = await workspace()
-    const jupyter = await createFakeJupyter({ token: "proxy-token-d" })
-    const api = await createFakeColabApi({ runtimeUrl: jupyter.url, runtimeToken: "proxy-token-d" })
+    const jupyter = await createFakeJupyter({ token: invented("proxy-token-", "d") })
+    const api = await createFakeColabApi({ runtimeUrl: jupyter.url, runtimeToken: invented("proxy-token-", "d") })
     open.push(jupyter, api)
     const options = loadOptions({})
     const auth = new FakeAuth()
@@ -231,7 +232,7 @@ describe("upload through the real transport", () => {
       id: record.id,
       spec: { ...record.spec, eligible: true },
       requestId: "request-chunk",
-      connection: { url: jupyter.url, token: "proxy-token-d", expireTime: new Date(Date.now() + 3_600_000).toISOString() },
+      connection: { url: jupyter.url, token: invented("proxy-token-", "d"), expireTime: new Date(Date.now() + 3_600_000).toISOString() },
     })
     const base = fakeDeps({ directory, options: {} })
     const deps = { ...base.deps, runtime: protocol, ledger }

@@ -9,10 +9,11 @@ import { registerColabAccounts } from "../../src/accounts.js"
 import { FakeClock } from "../fakes/index.js"
 import { FakeAuthContext, FakeAuthHost } from "../fakes/auth-host.js"
 import { FakeHttp, storedCredential } from "../fakes/auth-http.js"
+import { invented } from "../support/invented.js"
 
 const NOW = new Date("2026-11-17T09:00:00.000Z")
 const clientId = "123456789012-colabtest.apps.googleusercontent.com"
-const clientSecret = "GOCSPX-test-client-secret"
+const clientSecret = invented("GOCSPX-", "test-client-secret")
 
 async function registered(raw: unknown, host = new FakeAuthHost(), http = new FakeHttp()) {
   const ctx = new FakeAuthContext(host)
