@@ -1,6 +1,7 @@
 // The bundled skills: the names, the description budget, and every tools.colab.<method> a skill names is declared.
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
+import { parse as parseYaml } from "yaml"
 import { parseSkill, SKILL_IDS, skillPath } from "../../src/skills.js"
 import { manifest } from "../../src/manifest.js"
 
@@ -25,6 +26,28 @@ describe("skills", () => {
 
   it("keeps the namespace line within 400 characters", () => {
     expect(manifest.plugin.summary.length).toBeLessThanOrEqual(400)
+  })
+
+  it("is valid YAML whose name and description are the ones the parser registers", () => {
+    for (const id of SKILL_IDS) {
+      const text = readFileSync(skillPath(id), "utf8")
+      const front = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1]
+      const parsed = parseYaml(front!) as { name?: unknown; description?: unknown }
+      const skill = parseSkill(id, text)
+      expect(parsed.name, id).toBe(id)
+      expect(parsed.description, id).toBe(skill.description)
+      expect(parsed.description, id).not.toBe(">")
+      expect(parsed.description, id).not.toBe("|")
+      expect((parsed.description as string).length, id).toBeLessThanOrEqual(300)
+    }
+  })
+
+  it("refuses a block scalar or an empty description", () => {
+    for (const marker of [">", "|", ">-", "|+"]) {
+      expect(() => parseSkill("colab", `---\nname: colab\ndescription: ${marker}\n---\nbody\n`), marker).toThrow(/block scalar/)
+    }
+    expect(() => parseSkill("colab", "---\nname: colab\ndescription: \n---\nbody\n")).toThrow(/one-line/)
+    expect(() => parseSkill("colab", "---\nname: colab\ndescription: >\n  folded\n---\nbody\n")).toThrow(/frontmatter/)
   })
 
   it("refuses a skill with an unknown frontmatter key", () => {

@@ -17,6 +17,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL, fileURLToPath } from "node:url"
 import { afterAll, describe, expect, test } from "vitest"
+import { parse as parseYaml } from "yaml"
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url))
 const WORK = mkdtempSync(join(tmpdir(), "colab-pack-"))
@@ -230,7 +231,7 @@ describe("the packed tarball", () => {
     try {
       const api = (args: readonly string[]) => run(binary, ["api", ...args], project, cliHome)
       const directory = `x-opencode-directory:${project}`
-      const readSkills = () => JSON.parse(api(["GET", "/api/skill", "-H", directory])) as { data: { id: string }[] }
+      const readSkills = () => JSON.parse(api(["GET", "/api/skill", "-H", directory])) as { data: { id: string; description: string }[] }
       const readCommands = () => JSON.parse(api(["GET", "/api/command", "-H", directory])) as { data: { name: string }[] }
       // Readiness: the first successful answer, even an empty one, is the service up.
       await waitFor(readSkills, () => true)
@@ -242,9 +243,22 @@ describe("the packed tarball", () => {
       expect(repoSkills).toEqual(["colab", "colab-notebooks"])
       // OpenCode activates a location's plugins after its first session, asynchronously; wait for every repo skill.
       const skills = await waitFor(readSkills, (answer) => repoSkills.every((id) => answer.data.some((skill) => skill.id === id)))
-      const skillIds = skills?.data.map((skill) => skill.id) ?? []
-      // The project is empty, so those ids can only come from the plugin's own registration.
-      for (const id of repoSkills) expect(skillIds).toContain(id)
+      // The project is empty, so those ids can only come from the plugin's own registration. Each served
+      // description must equal what a real YAML parser reads from the committed frontmatter, not `>` or `|`.
+      for (const id of repoSkills) {
+        const text = readFileSync(join(ROOT, "skills", id, "SKILL.md"), "utf8")
+        const front = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1]
+        expect(front, id).toBeDefined()
+        const parsed = parseYaml(front!) as { name?: unknown; description?: unknown }
+        expect(parsed.name, id).toBe(id)
+        const description = typeof parsed.description === "string" ? parsed.description.trim() : ""
+        expect(description, id).not.toBe("")
+        expect(description, id).not.toBe(">")
+        expect(description, id).not.toBe("|")
+        const served = skills?.data.find((skill) => skill.id === id)
+        expect(served?.description, id).toBe(description)
+        expect(served?.description.length, id).toBeLessThanOrEqual(300)
+      }
       const commands = await waitFor(readCommands, (answer) => answer.data.some((command) => command.name === "colab"))
       const commandNames = commands?.data.map((command) => command.name) ?? []
       for (const name of ["colab", "colab-doctor", "colab-cleanup"]) expect(commandNames).toContain(name)

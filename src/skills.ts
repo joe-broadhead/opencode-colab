@@ -21,7 +21,10 @@ export function parseSkill(id: string, text: string): ParsedSkill {
   }
   const name = fields.get("name")
   const description = fields.get("description")
-  if (fields.size !== 2 || name !== id || !description) throw invalid(`skills/${id}/SKILL.md needs exactly a name equal to "${id}" and a description.`)
+  // A plain one-line scalar only: `>` or `|` would register a block scalar's indicator as the whole description.
+  if (fields.size !== 2 || name !== id || description === undefined || description === "" || description.startsWith(">") || description.startsWith("|")) {
+    throw invalid(`skills/${id}/SKILL.md needs exactly a name equal to "${id}" and a non-empty one-line description that is not a block scalar.`)
+  }
   return { name, description, content: match[2]!.trimStart() }
 }
 
