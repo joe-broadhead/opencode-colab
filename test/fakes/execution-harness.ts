@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto"
 import type { Calibration, IopubMessage, ProbeVerdict, RuntimeRecord, SessionInfo } from "../../src/provider/ports.js"
 import { cancelWatchdog, startWatchdog } from "../../src/provider/runtime/watchdog.js"
-import { runTool, type Runner } from "../support/legacy.js"
+import { runTool, type Runner } from "../support/methods.js"
 import { FakeAgentOnlyCheck, FakeKernelSession, FakeRuntimeProtocol, fakeDeps, RecordingPermission, type Fakes } from "./index.js"
 
 export { RecordingPermission } from "./index.js"
@@ -57,7 +57,7 @@ export async function prepared(input: { readonly options?: unknown; readonly rec
 /** The wrapper's runner over a fake Deps, recording every permission ask. */
 export function runnerFor(deps: ReturnType<typeof fakeDeps>["deps"]): { readonly runner: Runner; readonly permission: RecordingPermission } {
   const permission = new RecordingPermission()
-  return { runner: { deps, assert: permission.assert }, permission }
+  return { runner: { deps }, permission }
 }
 
 /** One tool call. */
@@ -71,7 +71,7 @@ export function toolWith(
   input: unknown,
   options: { readonly callId?: string; readonly signal?: AbortSignal } = {},
 ) {
-  return { result: runTool(name, input, call(options.callId, options.signal), { deps, assert: permission.assert }), permission }
+  return { result: runTool(name, input, call(options.callId, options.signal), { deps }), permission }
 }
 
 /** Runs a provider method with a recording permission that allows everything. */

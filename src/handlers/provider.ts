@@ -71,6 +71,8 @@ export function providerHandlers(deps: Deps): Record<string, MethodHandler> {
           const parsed = parse(name, contract.input, input, account.alias)
           if (WRITES.has(name)) assertWritable(account)
           const ctx = providerContext(deps, account, call)
+          // The provider handler's metadata is what a run's ask is bound to: `run` takes the exact cells it recorded.
+          if (handler.metadata !== undefined) await handler.metadata(parsed as never, ctx as never)
           const result = await handler.run(parsed as never, ctx as never)
           // Contract §4.7: every successful non-read method nudges the area it changed.
           if (WRITES.has(name)) await emitChanged(call, account.alias, name)

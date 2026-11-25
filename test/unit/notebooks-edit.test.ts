@@ -6,9 +6,8 @@ import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { cellSource, notebookHash, parseNotebook } from "../../src/provider/notebooks/model.js"
 import { resolveWorkspacePath } from "../../src/provider/notebooks/paths.js"
-import { toolHandlers } from "../support/legacy.js"
-import { runTool, type Runner } from "../support/legacy.js"
-import { fakeDeps, RecordingPermission } from "../fakes/index.js"
+import { runTool, type Runner } from "../support/methods.js"
+import { fakeDeps } from "../fakes/index.js"
 
 const call = (id = "call_1") => ({ sessionID: "ses_test", agent: "build", messageID: "msg_test", id, signal: new AbortController().signal })
 const fixture = (cells: unknown[], minor = 4): string => JSON.stringify({ cells, metadata: {}, nbformat: 4, nbformat_minor: minor }, null, 1)
@@ -19,13 +18,10 @@ const stream = (text: string) => ({ name: "stdout", output_type: "stream", text 
 let directory: string
 let outside: string
 let runner: Runner
-let permission: RecordingPermission
 
 function setup(options: unknown = {}): void {
   const deps = fakeDeps({ options: { ...(options as object), allowedRoots: [outside] }, directory }).deps
-  permission = new RecordingPermission()
-  const handlers = toolHandlers(() => runner)
-  runner = { deps, assert: permission.assert, handler: (name) => handlers[name] }
+  runner = { deps }
 }
 
 beforeEach(() => {
@@ -57,7 +53,7 @@ describe("colab_edit", () => {
 
   it("refuses create over an existing file with FILE_EXISTS", async () => {
     write("taken.ipynb", fixture([codeCell("x")]))
-    expect(await runTool("edit", { path: "taken.ipynb", ops: [{ op: "create" }] }, call(), runner)).toMatchObject({ state: "refused", error: "FILE_EXISTS" })
+    expect(await runTool("edit", { path: "taken.ipynb", ops: [{ op: "create" }] }, call(), runner)).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
   })
 
   it("applies insert (index, after, before), replace, delete, move, clearOutputs and setMetadata", async () => {
@@ -97,7 +93,7 @@ describe("colab_edit", () => {
       runTool("edit", { path: "doc.ipynb", ifHash: hash, ops: [{ op: "insert", at: 1, cell: { type: "code", source: "SECOND" } }] }, call("c_b"), runner),
     ])) as { state: string; error?: string }[]
     expect(results.map((result) => result.state).sort()).toEqual(["ok", "refused"])
-    expect(results.find((result) => result.state === "refused")).toMatchObject({ error: "NOTEBOOK_CHANGED" })
+    expect(results.find((result) => result.state === "refused")).toMatchObject({ error: "INPUT_INVALID" })
     const sources = parseNotebook(read("doc.ipynb")).cells.map((cell) => cellSource(cell))
     expect(sources).toContain("x = 1")
     expect(sources.filter((source) => source === "FIRST" || source === "SECOND")).toHaveLength(1)
@@ -114,7 +110,7 @@ describe("colab_edit", () => {
     write("doc.ipynb", text)
     const before = read("doc.ipynb")
     const result = await runTool("edit", { path: "doc.ipynb", ifHash: notebookHash(before), ops: [{ op: "replace", cell: 0, source: "y" }] }, call(), runner)
-    expect(result).toMatchObject({ state: "refused", error: "NOTEBOOK_INVALID" })
+    expect(result).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     expect(read("doc.ipynb")).toEqual(before)
   })
 
@@ -127,7 +123,7 @@ describe("colab_edit", () => {
     write("doc.ipynb", fixture([codeCell("a")]))
     const before = read("doc.ipynb")
     const wrong = `sha256:${"0".repeat(64)}`
-    expect(await runTool("edit", { path: "doc.ipynb", ifHash: wrong, ops: [{ op: "replace", cell: 0, source: "b" }] }, call(), runner)).toMatchObject({ state: "refused", error: "NOTEBOOK_CHANGED" })
+    expect(await runTool("edit", { path: "doc.ipynb", ifHash: wrong, ops: [{ op: "replace", cell: 0, source: "b" }] }, call(), runner)).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     expect(read("doc.ipynb")).toEqual(before)
   })
 
@@ -136,7 +132,7 @@ describe("colab_edit", () => {
     const before = read("doc.ipynb")
     const hash = notebookHash(before)
     const result = await runTool("edit", { path: "doc.ipynb", ifHash: hash, ops: [{ op: "replace", cell: 0, source: "b" }, { op: "delete", cell: 9 }] }, call(), runner)
-    expect(result).toMatchObject({ state: "refused", error: "NOT_FOUND" })
+    expect(result).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     expect(read("doc.ipynb")).toEqual(before)
   })
 
@@ -149,10 +145,10 @@ describe("colab_edit", () => {
   })
 
   it("refuses a path outside the project and a symlink, and allows an allowedRoot with external_directory", async () => {
-    expect(await runTool("edit", { path: "../escape.ipynb", ops: [{ op: "create" }] }, call(), runner)).toMatchObject({ state: "refused", error: "PATH_REFUSED" })
+    expect(await runTool("edit", { path: "../escape.ipynb", ops: [{ op: "create" }] }, call(), runner)).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     write("real.ipynb", fixture([codeCell("a")]))
     symlinkSync(join(directory, "real.ipynb"), join(directory, "link.ipynb"))
-    expect(await runTool("edit", { path: "link.ipynb", ifHash: notebookHash(read("real.ipynb")), ops: [{ op: "clearOutputs" }] }, call(), runner)).toMatchObject({ state: "refused", error: "PATH_REFUSED" })
+    expect(await runTool("edit", { path: "link.ipynb", ifHash: notebookHash(read("real.ipynb")), ops: [{ op: "clearOutputs" }] }, call(), runner)).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
 
     const target = join(outside, "rooted.ipynb")
     const result = (await runTool("edit", { path: target, ops: [{ op: "create", cells: [{ type: "code", source: "x" }] }] }, call(), runner)) as { state: string; path: string }

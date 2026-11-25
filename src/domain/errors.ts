@@ -30,7 +30,6 @@ export const ERRORS = {
   INPUT_INVALID: entry("refused", "The input does not fit the tool's schema. Nothing ran.", "Check the input against the tool's schema, then call it again."),
   ACCOUNT_UNKNOWN: entry("refused", "The account alias is not configured.", "Pass a configured alias; colab_status lists them."),
   ACCOUNT_REQUIRED: entry("refused", "More than one account is configured, none is named default, and the call named none.", "Pass account with one of the aliases colab_status lists."),
-  NOT_IMPLEMENTED: entry("refused", "This tool or plan action is declared but not built in this pre-release.", "Use another tool, or wait for a release that builds it."),
   NOT_RELEASED: entry("refused", "This install is not a tagged release, so the tool did not call Google.", "Install a tagged release when one exists. A source checkout does not call Google."),
   EXECUTION_UNAVAILABLE: entry("refused", "This build edits local notebooks only.", "Use colab_find, colab_notebook or colab_edit with local input."),
   EDIT_UNAVAILABLE: entry("refused", "This location cannot safely perform the requested notebook write.", "Use an existing folder on a supported local Linux filesystem, or edit the notebook in your notebook editor."),
@@ -63,11 +62,6 @@ export const ERRORS = {
     "Use a Web application client that lists the redirect, as its downloaded client JSON, or leave redirectUri unset for a Desktop app client.",
   ),
   AUTH_WRITE_UNCONFIRMED: entry("refused", "Read and write access was chosen in the sign-in form without confirming the write scopes.", "Sign in again and confirm the write scopes, or choose Read-only."),
-  ACCOUNT_READ_ONLY: entry(
-    "refused",
-    "The account's access is read, so the plugin makes no change on it: no run, upload, edit, download, pause, plan or commit (design §4). Nothing ran.",
-    "Set accounts.<alias>.access to write and sign in again.",
-  ),
   ADC_UNAVAILABLE: entry("refused", "Application Default Credentials found nothing.", "Use interactive mode, or set GOOGLE_APPLICATION_CREDENTIALS for an enterprise account."),
   ADC_REFUSED: entry("refused", "ADC in a managed host that does not set allowAdcInHost.", "Sign in interactively, or ask the operator to set allowAdcInHost: true."),
   COLAB_API_UNAVAILABLE: entry(
@@ -132,16 +126,12 @@ export const ERRORS = {
   SHARE_UNSUPPORTED: entry("refused", "Sharing is not part of this plugin.", "Share with the gws plugin."),
   ACTION_UNSUPPORTED: entry("refused", "IAM, templates, setDefault and Enterprise runtime creation are not part of this build.", "Use the Google Cloud console."),
   // ── Plans ─────────────────────────────────────────────────────────────
-  PLAN_NOT_FOUND: entry("refused", "No plan has this id.", "Run colab_plan_write or colab_plan_delete first."),
-  PLAN_ALREADY_USED: entry("refused", "This plan was already committed, or its commit is running.", "Create a new plan to repeat the change; check the earlier result first."),
-  PLAN_EXPIRED: entry("refused", "The plan is older than planTtlSeconds.", "Create a new plan."),
   PLAN_CALLER_MISMATCH: entry("refused", "A plan is bound to the session, agent and account that created it.", "Plan again from this session."),
   PLAN_CHANGED: entry(
     "refused",
     "What the plan previewed changed: eligibility, runtime state, the notebook hash, the Drive revision, or a cost estimate more than 10% higher.",
     "Plan again and show the new preview.",
   ),
-  CATEGORY_MISMATCH: entry("refused", "The plan's category is not this commit tool's.", "Commit a write plan with colab_write and a delete plan with colab_delete, passing only {planId}."),
   // ── Transport ─────────────────────────────────────────────────────────
   RATE_LIMITED: entry(
     "failed",

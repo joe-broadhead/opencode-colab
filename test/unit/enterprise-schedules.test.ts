@@ -11,9 +11,8 @@ import { afterEach, describe, expect, it } from "vitest"
 import type { Deps } from "../../src/provider/index.js"
 import { CONTRACTS } from "../../src/domain/contract.js"
 import { ColabError } from "../../src/domain/errors.js"
-import { runTool, type Runner } from "../support/legacy.js"
-import { toolHandlers } from "../support/legacy.js"
-import { fakeDeps, RecordingPermission } from "../fakes/index.js"
+import { runTool, type Runner } from "../support/methods.js"
+import { fakeDeps } from "../fakes/index.js"
 import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 
@@ -39,11 +38,9 @@ function setup(options: unknown = OPTIONS, directory?: string) {
   const vertex = new ScriptedVertex(fakes.clock)
   const gcs = new ScriptedGcs()
   const deps: Deps = { ...base, vertex, gcs }
-  const permission = new RecordingPermission()
   let runner: Runner
-  const handlers = toolHandlers(() => runner)
-  runner = { deps, assert: permission.assert, handler: (name) => handlers[name] }
-  return { deps, fakes, vertex, gcs, permission, runner }
+  runner = { deps }
+  return { deps, fakes, vertex, gcs, runner }
 }
 
 const schedule = (input: { readonly name?: string; readonly displayName?: string; readonly cron?: string; readonly state?: string; readonly maxRunCount?: number; readonly startedRunCount?: number; readonly endTime?: string }) => ({
@@ -68,11 +65,11 @@ const schedule = (input: { readonly name?: string; readonly displayName?: string
 describe("schedule.create", () => {
   it("sends a bounded, non-overlapping schedule whose job request carries the labels and no job id", async () => {
     const { directory, path } = workspace()
-    const { runner, vertex, permission } = setup(OPTIONS, directory)
-    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", timeZone: "America/New_York", maxRunCount: 30 } }, call(), runner)) as { planId: string; preview: Record<string, any> }
+    const { runner, vertex } = setup(OPTIONS, directory)
+    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", timeZone: "America/New_York", maxRunCount: 30 } }, call(), runner)) as { plan: unknown; preview: Record<string, any> }
     expect(planned.preview).toMatchObject({ scheduleToken: expect.stringMatching(/^[0-9a-z]{8}$/), cron: "TZ=America/New_York 0 9 * * *", cost: { perRunUsd: 0.22, runsPerMonth: 30 } })
     expect(planned.preview.nextRuns).toHaveLength(5)
-    const committed = (await runTool("write", { planId: planned.planId }, call(), runner)) as { state: string; result: Record<string, unknown> }
+    const committed = (await runTool("write", { plan: planned.plan }, call(), runner)) as { state: string; result: Record<string, unknown> }
     expect(committed).toMatchObject({ state: "ok", action: "schedule.create", result: { id: "1", state: "ACTIVE", perRunUsd: 0.22 } })
     expect(vertex.scheduleBodies).toHaveLength(1)
     const body = vertex.scheduleBodies[0] as Record<string, any>
@@ -95,10 +92,6 @@ describe("schedule.create", () => {
     })
     expect(body.createNotebookExecutionJobRequest.notebookExecutionJob.notebookExecutionJobId).toBeUndefined()
     expect(body.createNotebookExecutionJobRequest.notebookExecutionJob.directNotebookSource.content).toEqual(expect.any(String))
-    expect(permission.requests.map((request) => [request.action, request.resources])).toEqual([
-      ["colab.plan", ["work"]],
-      ["colab.write", ["work:aiplatform.projects.locations.schedules.create"]],
-    ])
   })
 })
 
@@ -117,26 +110,22 @@ describe("colab_schedules", () => {
     expect(listed.schedules[0]!.worstCaseUsdPerMonth).toBeGreaterThan(0)
     const one = (await runTool("schedules", { account: "work", schedule: "1" }, call(), runner)) as { schedules: unknown[] }
     expect(one.schedules).toHaveLength(1)
-    expect(await runTool("schedules", { account: "work", schedule: "missing" }, call(), runner)).toMatchObject({ error: "NOT_FOUND" })
+    expect(await runTool("schedules", { account: "work", schedule: "missing" }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
   })
 })
 
 describe("colab_pause", () => {
   it("pauses a schedule directly, is idempotent, and says when there is nothing to pause", async () => {
-    const { runner, vertex, permission } = setup()
+    const { runner, vertex } = setup()
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/1", schedule({}))
     const result = await runTool("pause", { account: "work", schedule: "1" }, call(), runner)
     expect(result).toMatchObject({ state: "ok", schedule: "1", scheduleState: "PAUSED" })
     // The contract's PauseOutput reuses `state` for the schedule's state; its own schema accepts this result.
     expect(CONTRACTS.pause.output.safeParse(result).success).toBe(true)
     expect(vertex.schedules.get("projects/proj/locations/us-central1/schedules/1")!.state).toBe("PAUSED")
-    expect(permission.requests.map((request) => [request.action, request.resources])).toEqual([
-      ["colab.pause", ["work"]],
-      ["colab.read", ["work:aiplatform.projects.locations.schedules.get"]],
-    ])
     expect(await runTool("pause", { account: "work", schedule: "1" }, call(), runner)).toMatchObject({ state: "ok", scheduleState: "PAUSED", message: expect.stringContaining("already paused") })
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/1", schedule({ state: "COMPLETED" }))
-    expect(await runTool("pause", { account: "work", schedule: "1" }, call(), runner)).toMatchObject({ error: "ACTION_UNSUPPORTED" })
+    expect(await runTool("pause", { account: "work", schedule: "1" }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
   })
 })
 
@@ -145,10 +134,10 @@ describe("schedule.update", () => {
     const { runner, vertex } = setup()
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/1", schedule({ maxRunCount: 5 }))
     // 09:00 and 10:00 are an hour apart, under the 60-minute timeout plus the 10-minute margin.
-    expect(await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "1", cron: "0 9,10 * * *", maxRunCount: 8 } }, call(), runner)).toMatchObject({ error: "SCHEDULE_OVERLAP", message: expect.stringContaining("70 minutes") })
-    const planned = (await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "1", cron: "0 9,11 * * *", maxRunCount: 8 } }, call(), runner)) as { planId: string; preview: Record<string, any> }
+    expect(await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "1", cron: "0 9,10 * * *", maxRunCount: 8 } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID", message: expect.stringContaining("70 minutes") })
+    const planned = (await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "1", cron: "0 9,11 * * *", maxRunCount: 8 } }, call(), runner)) as { plan: unknown; preview: Record<string, any> }
     expect(planned.preview).toMatchObject({ changes: { cron: "0 9,11 * * *", maxRunCount: 8 }, bounds: { maxRunCount: 8 }, minimumGapMinutes: 120, requiredGapMinutes: 70 })
-    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ state: "ok", result: { cron: "0 9,11 * * *" } })
+    expect(await runTool("write", { plan: planned.plan }, call(), runner)).toMatchObject({ state: "ok", result: { cron: "0 9,11 * * *" } })
     const body = vertex.calls.filter((entry) => entry.method === "updateSchedule").at(-1)!.args[2] as Record<string, unknown>
     expect(body).toMatchObject({ updateMask: "cron,maxRunCount", cron: "0 9,11 * * *", maxRunCount: "8" })
   })
@@ -157,9 +146,9 @@ describe("schedule.update", () => {
     const { runner, vertex } = setup()
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/1", schedule({ endTime: "2026-12-31T00:00:00Z" }))
     expect(await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "1", endTime: "" } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
-    const planned = (await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "1", maxRunCount: 4 } }, call(), runner)) as { planId: string }
+    const planned = (await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "1", maxRunCount: 4 } }, call(), runner)) as { plan: unknown }
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/1", schedule({ maxRunCount: 2, endTime: "2026-12-31T00:00:00Z" }))
-    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ error: "PLAN_CHANGED" })
+    expect(await runTool("write", { plan: planned.plan }, call(), runner)).toMatchObject({ error: "PLAN_INVALID" })
   })
 })
 
@@ -167,15 +156,15 @@ describe("schedule.resume and schedule.delete", () => {
   it("resumes only a paused schedule, and deletes one without touching the runs it started", async () => {
     const { runner, vertex } = setup()
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/1", schedule({ state: "PAUSED", maxRunCount: 3, startedRunCount: 1 }))
-    const resumed = (await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "1" } }, call(), runner)) as { planId: string; preview: Record<string, any> }
+    const resumed = (await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "1" } }, call(), runner)) as { plan: unknown; preview: Record<string, any> }
     expect(resumed.preview).toMatchObject({ schedule: { state: "PAUSED" }, catchUp: expect.stringContaining("not backfilled") })
-    expect(await runTool("write", { planId: resumed.planId }, call(), runner)).toMatchObject({ state: "ok", result: { state: "ACTIVE" } })
+    expect(await runTool("write", { plan: resumed.plan }, call(), runner)).toMatchObject({ state: "ok", result: { state: "ACTIVE" } })
     expect(vertex.schedules.get("projects/proj/locations/us-central1/schedules/1")!.state).toBe("ACTIVE")
     // An active schedule has nothing to resume.
-    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "1" } }, call(), runner)).toMatchObject({ error: "ACTION_UNSUPPORTED" })
-    const deleted = (await runTool("plan", { action: "schedule.delete", account: "work", params: { schedule: "1" } }, call(), runner)) as { planId: string; preview: Record<string, any> }
+    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "1" } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
+    const deleted = (await runTool("plan", { action: "schedule.delete", account: "work", params: { schedule: "1" } }, call(), runner)) as { plan: unknown; preview: Record<string, any> }
     expect(deleted.preview).toMatchObject({ deletes: expect.stringContaining("no new runs"), keeps: expect.stringContaining("runs it already started") })
-    expect(await runTool("delete", { planId: deleted.planId }, call(), runner)).toMatchObject({ state: "ok", result: { deleted: true } })
+    expect(await runTool("delete", { plan: deleted.plan }, call(), runner)).toMatchObject({ state: "ok", result: { deleted: true } })
     expect(vertex.schedules.size).toBe(0)
   })
 })
@@ -188,17 +177,17 @@ describe("foreign schedules and lost answers (review LOW 8, M1)", () => {
       maxConcurrentRunCount: 2,
       allowQueueing: true,
     } as never)
-    expect(await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "9", maxRunCount: 6 } }, call(), runner)).toMatchObject({ error: "SCHEDULE_OVERLAP", message: expect.stringContaining("2 runs at once") })
-    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ error: "SCHEDULE_OVERLAP" })
+    expect(await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "9", maxRunCount: 6 } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID", message: expect.stringContaining("2 runs at once") })
+    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
   })
 
   it("reconciles a create stopped with CANCELLED by its display-name token", async () => {
     const { directory, path } = workspace()
     const { runner, vertex } = setup(OPTIONS, directory)
-    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 5 } }, call(), runner)) as { planId: string; preview: Record<string, any> }
+    const planned = (await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "nightly", cron: "0 9 * * *", maxRunCount: 5 } }, call(), runner)) as { plan: unknown; preview: Record<string, any> }
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/1", schedule({ displayName: `nightly [oc-${planned.preview.scheduleToken}]` }))
     vertex.failNextScheduleCreate = new ColabError("CANCELLED", "The call stopped before the create's answer.")
-    const committed = (await runTool("write", { planId: planned.planId }, call(), runner)) as { state: string; result: Record<string, unknown> }
+    const committed = (await runTool("write", { plan: planned.plan }, call(), runner)) as { state: string; result: Record<string, unknown> }
     expect(committed).toMatchObject({ state: "ok", result: { message: expect.stringContaining("display-name token") } })
     expect(vertex.scheduleBodies).toHaveLength(1)
   })

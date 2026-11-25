@@ -203,7 +203,7 @@ describe("the package's factory", () => {
     expect(typeof ports.runtime.openSession).toBe("function")
     expect(typeof ports.check.probe).toBe("function")
     // No grant on the fake auth, so the client refuses with AUTH_REQUIRED before fetching anything: not the stub's
-    // NOT_IMPLEMENTED, and no network call.
+    // INPUT_INVALID, and no network call.
     await expect(ports.colab.listRuntimeSpecs("default", signal())).rejects.toMatchObject({ code: "AUTH_REQUIRED" })
     expect(called).toBe(false)
   })

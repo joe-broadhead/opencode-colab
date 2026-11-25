@@ -14,9 +14,8 @@ import { afterEach, describe, expect, it } from "vitest"
 import type { Deps } from "../../src/provider/index.js"
 import { CONTRACTS } from "../../src/domain/contract.js"
 import { createEnterpriseRuns, type EnterpriseRunsEnv } from "../../src/provider/enterprise/runs.js"
-import { runTool, type Runner } from "../support/legacy.js"
-import { toolHandlers } from "../support/legacy.js"
-import { fakeDeps, RecordingPermission } from "../fakes/index.js"
+import { runTool, type Runner } from "../support/methods.js"
+import { fakeDeps } from "../fakes/index.js"
 import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 
@@ -68,21 +67,19 @@ function setup() {
   const vertex = new ScriptedVertex(fakes.clock)
   const gcs = new ScriptedGcs()
   const deps: Deps = { ...base, vertex, gcs }
-  const permission = new RecordingPermission()
   let runner: Runner
-  const handlers = toolHandlers(() => runner)
-  runner = { deps, assert: permission.assert, handler: (name) => handlers[name] }
+  runner = { deps }
   const env: EnterpriseRunsEnv = { ...deps, vertex, gcs, fetch: globalThis.fetch }
   const runs = createEnterpriseRuns(env, { pollMs: 0, cancelWaitMs: 0 })
-  return { deps, fakes, vertex, gcs, permission, runner, runs, directory }
+  return { deps, fakes, vertex, gcs, runner, runs, directory }
 }
 
 async function createJob(input: { directory: string; runner: Runner }): Promise<string> {
   const path = join(input.directory, "job.ipynb")
   const { writeFileSync } = await import("node:fs")
   writeFileSync(path, JSON.stringify({ nbformat: 4, nbformat_minor: 5, metadata: {}, cells: [{ cell_type: "code", id: "c1", metadata: {}, execution_count: null, outputs: [], source: ["print(1)"] }] }))
-  const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), input.runner)) as { planId: string }
-  const committed = (await runTool("write", { planId: planned.planId }, call(), input.runner)) as { result: { id: string } }
+  const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), input.runner)) as { plan: unknown }
+  const committed = (await runTool("write", { plan: planned.plan }, call(), input.runner)) as { result: { id: string } }
   return committed.result.id
 }
 

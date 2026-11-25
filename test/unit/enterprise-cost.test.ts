@@ -13,9 +13,8 @@ import { afterEach, describe, expect, it } from "vitest"
 import type { Deps } from "../../src/provider/index.js"
 import { MACHINES, PRICES_AS_OF, createPrices, priceOf } from "../../src/provider/enterprise/prices.js"
 import { parseCron } from "../../src/provider/enterprise/cron.js"
-import { runTool, type Runner } from "../support/legacy.js"
-import { toolHandlers } from "../support/legacy.js"
-import { fakeDeps, RecordingPermission } from "../fakes/index.js"
+import { runTool, type Runner } from "../support/methods.js"
+import { fakeDeps } from "../fakes/index.js"
 import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 
@@ -53,11 +52,9 @@ function setup(options: unknown, directory?: string) {
   const vertex = new ScriptedVertex(fakes.clock)
   const gcs = new ScriptedGcs()
   const deps: Deps = { ...base, vertex, gcs }
-  const permission = new RecordingPermission()
   let runner: Runner
-  const handlers = toolHandlers(() => runner)
-  runner = { deps, assert: permission.assert, handler: (name) => handlers[name] }
-  return { deps, fakes, vertex, gcs, permission, runner }
+  runner = { deps }
+  return { deps, fakes, vertex, gcs, runner }
 }
 
 describe("the dated price table", () => {
@@ -100,7 +97,7 @@ describe("a job's estimate against the cap and the ceiling", () => {
   it("previews $/h, the worst case, the cap, the ceiling and the job id", async () => {
     const { directory, path } = notebookAt()
     const { runner } = setup(ENTERPRISE, directory)
-    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { preview: Record<string, any>; planId: string }
+    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)) as { preview: Record<string, any>; plan: unknown }
     expect(planned).toMatchObject({ state: "ok", action: "job.create", category: "write", commit: "colab_write" })
     expect(planned.preview).toMatchObject({
       action: "job.create",
@@ -120,26 +117,26 @@ describe("a job's estimate against the cap and the ceiling", () => {
     const allowed = { ...ENTERPRISE, accelerators: ["NONE", "T4", "L4", "A100"] }
     const { runner } = setup(allowed, directory)
     const over = await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "a2-highgpu-1g" } }, call(), runner)
-    expect(over).toMatchObject({ state: "refused", error: "COST_CAP", message: expect.stringContaining("5.18") })
+    expect(over).toMatchObject({ state: "refused", error: "BUDGET_EXCEEDED", message: expect.stringContaining("5.18") })
     const raised = await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "a2-highgpu-1g", maxUsd: 10 } }, call(), runner)
     expect(raised).toMatchObject({ state: "ok", preview: { cost: { maxComputeUsd: 5.18, capUsd: 10 } } })
     const tooHigh = await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, maxUsd: 60 } }, call(), runner)
-    expect(tooHigh).toMatchObject({ state: "refused", error: "COST_CAP", message: expect.stringContaining("maxJobUsdCeiling") })
+    expect(tooHigh).toMatchObject({ state: "refused", error: "BUDGET_EXCEEDED", message: expect.stringContaining("maxJobUsdCeiling") })
   })
 
   it("refuses an accelerator outside the allow-list, including a machine's own GPU", async () => {
     const { directory, path } = notebookAt()
     const { runner } = setup(ENTERPRISE, directory)
     expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n1-standard-4", accelerator: "T4" } }, call(), runner)).toMatchObject({ state: "ok" })
-    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n1-standard-4", accelerator: "V100" } }, call(), runner)).toMatchObject({ error: "ACCELERATOR_NOT_ALLOWED" })
-    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "a2-highgpu-1g" } }, call(), runner)).toMatchObject({ error: "ACCELERATOR_NOT_ALLOWED" })
-    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "e2-standard-4", accelerator: "T4" } }, call(), runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN" })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n1-standard-4", accelerator: "V100" } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "a2-highgpu-1g" } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "e2-standard-4", accelerator: "T4" } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
   })
 
   it("answers ESTIMATE_UNKNOWN for a machine the table does not price, unless rates names it", async () => {
     const { directory, path } = notebookAt()
     const plain = setup(ENTERPRISE, directory)
-    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n9-unknown" } }, call(), plain.runner)).toMatchObject({ state: "refused", error: "ESTIMATE_UNKNOWN", message: expect.stringContaining("2026-11-17") })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n9-unknown" } }, call(), plain.runner)).toMatchObject({ state: "refused", error: "INPUT_INVALID", message: expect.stringContaining("2026-11-17") })
     const priced = setup({ ...ENTERPRISE, rates: { "n9-unknown": 1.5 } }, directory)
     expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n9-unknown" } }, call(), priced.runner)).toMatchObject({ state: "ok", preview: { compute: { machine: "n9-unknown" } } })
   })
@@ -173,9 +170,9 @@ describe("a schedule's bounds, overlap and worst case", () => {
     const { directory, path } = notebookAt()
     const { runner } = setup(ENTERPRISE, directory)
     const unbounded = await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "forever", cron: "0 9 * * *" } }, call(), runner)
-    expect(unbounded).toMatchObject({ state: "refused", error: "SCHEDULE_UNBOUNDED" })
+    expect(unbounded).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     const overlap = await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "twice", cron: "0 9,10 * * *", maxRunCount: 10 } }, call(), runner)
-    expect(overlap).toMatchObject({ state: "refused", error: "SCHEDULE_OVERLAP", message: expect.stringContaining("60 minutes") })
+    expect(overlap).toMatchObject({ state: "refused", error: "INPUT_INVALID", message: expect.stringContaining("60 minutes") })
     // The same cron with a 30-minute timeout fits the 60-minute gap and the 10-minute margin.
     const fits = await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "twice", cron: "0 9,10 * * *", maxRunCount: 10, timeoutMinutes: 30 } }, call(), runner)
     expect(fits).toMatchObject({ state: "ok", preview: { minimumGapMinutes: 60, requiredGapMinutes: 40 } })
@@ -220,7 +217,7 @@ describe("the worst case is an upper bound (review M4)", () => {
     const { runner } = setup(ENTERPRISE, directory)
     expect(await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "n", cron: "0 9 * * *", maxRunCount: 3, maxUsd: 0.05 } }, call(), runner)).toMatchObject({
       state: "refused",
-      error: "COST_CAP",
+      error: "BUDGET_EXCEEDED",
       message: expect.stringContaining("0.05"),
     })
     expect(await runTool("plan", { action: "schedule.create", account: "work", params: { notebook: { path }, displayName: "n", cron: "0 9 * * *", maxRunCount: 3, maxUsd: 10 } }, call(), runner)).toMatchObject({ state: "ok", preview: { cost: { capUsd: 10 } } })
@@ -232,13 +229,13 @@ describe("the worst case is an upper bound (review M4)", () => {
     const plain = setup(regional, directory)
     expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), plain.runner)).toMatchObject({
       state: "refused",
-      error: "ESTIMATE_UNKNOWN",
+      error: "INPUT_INVALID",
       message: expect.stringContaining("europe-west4"),
     })
     // A machine-only override would still bill the disk at us-central1 rates: refuse and name the missing component.
     const partial = setup({ ...regional, rates: { "e2-standard-4": 0.3 } }, directory)
     expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), partial.runner)).toMatchObject({
-      error: "ESTIMATE_UNKNOWN",
+      error: "INPUT_INVALID",
       message: expect.stringContaining('"disk"'),
     })
     expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), partial.runner)).toMatchObject({ message: expect.stringContaining("mix regions") })
@@ -256,26 +253,26 @@ describe("the worst case is an upper bound (review M4)", () => {
     // e2-standard-4 at $0.2202/h for 24 h, not for the plugin's 1 h default.
     expect(listed.schedules[0]!.worstCaseUsdPerRun).toBeCloseTo(5.29, 1)
     // Resuming it would commit 24 h runs over the $5 per-run cap.
-    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ state: "refused", error: "COST_CAP" })
+    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ state: "refused", error: "BUDGET_EXCEEDED" })
   })
 
   it("refuses an update or resume whose machine cannot be priced", async () => {
     const { directory } = notebookAt()
     const { runner, vertex } = setup(ENTERPRISE, directory)
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/9", foreign({ jobRequest: { parent: "projects/proj/locations/us-central1", notebookExecutionJob: { customEnvironmentSpec: { machineSpec: { machineType: "n9-unknown" } } } } }) as never)
-    expect(await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "9", maxRunCount: 4 } }, call(), runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN" })
-    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN" })
+    expect(await runTool("plan", { action: "schedule.update", account: "work", params: { schedule: "9", maxRunCount: 4 } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
+    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
   })
 
   it("refuses a regional estimate unless the machine, its accelerator and the disk all have rates", async () => {
     const { directory, path } = notebookAt()
     const regional = { accounts: { work: { ...ENTERPRISE.accounts.work, region: "europe-west4" } } }
     const g2 = setup({ ...regional, accelerators: ["NONE", "T4", "L4"], rates: { "g2-standard-8": 1.1, disk: 0.0004 } }, directory)
-    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "g2-standard-8" } }, call(), g2.runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN", message: expect.stringContaining('"L4"') })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "g2-standard-8" } }, call(), g2.runner)).toMatchObject({ error: "INPUT_INVALID", message: expect.stringContaining('"L4"') })
     const complete = setup({ ...regional, accelerators: ["NONE", "T4", "L4"], rates: { "g2-standard-8": 1.1, L4: 0.8, disk: 0.0004 } }, directory)
     expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "g2-standard-8" } }, call(), complete.runner)).toMatchObject({ state: "ok" })
     const t4 = setup({ ...regional, rates: { "n1-standard-4": 0.2, disk: 0.0004 } }, directory)
-    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n1-standard-4", accelerator: "T4" } }, call(), t4.runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN", message: expect.stringContaining('"T4"') })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n1-standard-4", accelerator: "T4" } }, call(), t4.runner)).toMatchObject({ error: "INPUT_INVALID", message: expect.stringContaining('"T4"') })
     const seam = createPrices({ options: { rates: { "e2-standard-4": 0.3, disk: 0.0004 } } })
     expect(seam.usdPerHour({ machine: "e2-standard-4", region: "europe-west4" })).toBeCloseTo(0.34, 6)
     expect(createPrices({ options: { rates: { "e2-standard-4": 0.3 } } }).usdPerHour({ machine: "e2-standard-4", region: "europe-west4" })).toBeUndefined()
@@ -284,7 +281,7 @@ describe("the worst case is an upper bound (review M4)", () => {
   it("does not let an n2 machine claim a GPU it cannot carry", async () => {
     const { directory, path } = notebookAt()
     const { runner } = setup(ENTERPRISE, directory)
-    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n2-standard-4", accelerator: "T4" } }, call(), runner)).toMatchObject({ error: "ESTIMATE_UNKNOWN" })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n2-standard-4", accelerator: "T4" } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
     expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path }, machine: "n1-standard-4", accelerator: "T4" } }, call(), runner)).toMatchObject({ state: "ok" })
   })
 })
@@ -294,14 +291,14 @@ describe("the Day 0 seams package E builds (Budget, Prices) and read accounts", 
     const { directory, path } = notebookAt()
     const refusing = setup(ENTERPRISE, directory)
     refusing.fakes.budget.verdict = "refuse"
-    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), refusing.runner)).toMatchObject({ state: "refused", error: "BUDGET_REACHED" })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), refusing.runner)).toMatchObject({ state: "refused", error: "BUDGET_EXCEEDED" })
     expect(refusing.fakes.budget.checks).toMatchObject([{ account: "work", action: "job.create", usd: expect.any(Number) }])
     const warning = setup(ENTERPRISE, directory)
     warning.fakes.budget.verdict = "warn"
-    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), warning.runner)) as { planId: string; warnings?: string[] }
+    const planned = (await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), warning.runner)) as { plan: unknown; warnings?: string[] }
     expect(planned.warnings).toEqual(["BUDGET_WARN"])
     warning.fakes.budget.verdict = "ok"
-    expect(await runTool("write", { planId: planned.planId }, call(), warning.runner)).toMatchObject({ state: "ok" })
+    expect(await runTool("write", { plan: planned.plan }, call(), warning.runner)).toMatchObject({ state: "ok" })
     expect(warning.fakes.budget.checks.map((check) => check.action)).toEqual(["job.create", "job.create"])
   })
 
@@ -310,7 +307,7 @@ describe("the Day 0 seams package E builds (Budget, Prices) and read accounts", 
     const { runner, vertex, fakes } = setup(ENTERPRISE, directory)
     vertex.schedules.set("projects/proj/locations/us-central1/schedules/9", { name: "projects/proj/locations/us-central1/schedules/9", displayName: "paused", cron: "0 9 * * *", state: "PAUSED", maxRunCount: 5, startedRunCount: 0, jobRequest: { parent: "projects/proj/locations/us-central1", notebookExecutionJob: { customEnvironmentSpec: { machineSpec: { machineType: "e2-standard-4" } }, executionTimeout: "3600s" } } } as never)
     fakes.budget.verdict = "refuse"
-    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ error: "BUDGET_REACHED" })
+    expect(await runTool("plan", { action: "schedule.resume", account: "work", params: { schedule: "9" } }, call(), runner)).toMatchObject({ error: "BUDGET_EXCEEDED" })
     expect(fakes.budget.checks).toMatchObject([{ account: "work", action: "schedule.resume", usd: 0.220235 }])
   })
 
@@ -328,7 +325,7 @@ describe("the Day 0 seams package E builds (Budget, Prices) and read accounts", 
     const { directory, path } = notebookAt()
     const readOnly = { accounts: { work: { ...ENTERPRISE.accounts.work, access: "read" } } }
     const { runner } = setup(readOnly, directory)
-    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)).toMatchObject({ state: "refused", error: "ACCOUNT_READ_ONLY" })
+    expect(await runTool("plan", { action: "job.create", account: "work", params: { notebook: { path } } }, call(), runner)).toMatchObject({ state: "refused", error: "PERMISSION_DENIED" })
     // Reads still work.
     expect(await runTool("jobs", { account: "work" }, call(), runner)).toMatchObject({ state: "ok" })
   })

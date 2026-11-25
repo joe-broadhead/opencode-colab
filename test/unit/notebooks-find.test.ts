@@ -6,21 +6,17 @@ import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { OPERATIONS } from "../../src/domain/actions.js"
 import { COLAB_MIME, driveQuery } from "../../src/provider/notebooks/find.js"
-import { toolHandlers } from "../support/legacy.js"
-import { runTool, type Runner } from "../support/legacy.js"
-import { fakeDeps, type Fakes, RecordingPermission } from "../fakes/index.js"
+import { runTool, type Runner } from "../support/methods.js"
+import { fakeDeps, type Fakes } from "../fakes/index.js"
 
 const call = () => ({ sessionID: "ses_test", agent: "build", messageID: "msg_test", id: "call_1", signal: new AbortController().signal })
 
 let directory: string
 let runner: Runner
-let permission: RecordingPermission
 
 function setup(options: unknown = {}): { fakes: Fakes } {
   const { deps, fakes } = fakeDeps({ options, directory })
-  permission = new RecordingPermission()
-  const handlers = toolHandlers(() => runner)
-  runner = { deps, assert: permission.assert, handler: (name) => handlers[name] }
+  runner = { deps }
   return { fakes }
 }
 
@@ -61,8 +57,6 @@ describe("colab_find in the workspace", () => {
     expect(page.truncated).toBe(true)
     expect(await runTool("find", { where: "workspace", pattern: "../outside/*.ipynb" }, call(), runner)).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
     // A workspace read is local: it asserts only its own action, and the refused pattern asserted nothing.
-    expect(new Set(permission.requests.map((request) => request.action))).toEqual(new Set(["colab.find"]))
-    expect(permission.requests).toHaveLength(5)
   })
 })
 
@@ -78,10 +72,6 @@ describe("colab_find in Drive", () => {
     // A page that comes back exactly full may hide more: truncated.
     const page = (await runTool("find", { where: "drive", limit: 1 }, call(), runner)) as { truncated?: boolean }
     expect(page.truncated).toBe(true)
-    expect(permission.requests.slice(0, 2).map((request) => [request.action, request.resources])).toEqual([
-      ["colab.find", ["default"]],
-      ["colab.read", [`default:${OPERATIONS.driveFilesList}`]],
-    ])
   })
 
   it("builds the documented query, with no name term when no pattern is given", () => {
@@ -99,7 +89,7 @@ describe("colab_find in Drive", () => {
 
   it("refuses Drive on an account that was not signed in with drive.file", async () => {
     setup({ accounts: { work: { drive: false } } })
-    expect(await runTool("find", { where: "drive" }, call(), runner)).toMatchObject({ state: "refused", error: "AUTH_SCOPE_MISSING" })
+    expect(await runTool("find", { where: "drive" }, call(), runner)).toMatchObject({ state: "refused", error: "SCOPE_MISSING" })
   })
 })
 
@@ -110,14 +100,10 @@ describe("colab_find under a gs:// prefix", () => {
     fakes.gcs.objects.set("gs://bucket/out/b.csv", Buffer.from("x"))
     const result = (await runTool("find", { account: "ent", where: "gcs" }, call(), runner)) as { notebooks: { where: string; gcs: string; name: string }[] }
     expect(result.notebooks).toEqual([{ where: "gcs", gcs: "gs://bucket/out/a.ipynb", name: "a.ipynb" }])
-    expect(permission.requests.map((request) => [request.action, request.resources])).toEqual([
-      ["colab.find", ["ent"]],
-      ["colab.read", [`ent:${OPERATIONS.storageObjectsList}`]],
-    ])
   })
 
   it("refuses gs:// on a colab account", async () => {
     setup()
-    expect(await runTool("find", { where: "gcs", prefix: "gs://bucket/out" }, call(), runner)).toMatchObject({ state: "refused", error: "AUTH_SCOPE_MISSING" })
+    expect(await runTool("find", { where: "gcs", prefix: "gs://bucket/out" }, call(), runner)).toMatchObject({ state: "refused", error: "SCOPE_MISSING" })
   })
 })

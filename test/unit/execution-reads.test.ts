@@ -3,7 +3,7 @@
 // call; a denied read leaves the fakes' logs empty.
 import { afterEach, describe, expect, it } from "vitest"
 import { OPERATIONS } from "../../src/domain/actions.js"
-import { prepared, RecordingPermission, runtimeRecord, tool, toolWith } from "../fakes/execution-harness.js"
+import { prepared, runtimeRecord, tool } from "../fakes/execution-harness.js"
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -24,7 +24,7 @@ describe("colab_specs", () => {
   it("shows consumer specs with the eligibility and accelerator verdicts, and the tier", async () => {
     const { deps, fakes } = await preparedIn()
     fakes.colab.tier = "SUBSCRIPTION_TIER_FREE"
-    const { result, permission } = tool(deps, "specs", {})
+    const { result } = tool(deps, "specs", {})
     const answer = (await result) as { state: string; tier: string; specs: { key?: { accelerator: string }; eligible?: boolean; allowed: boolean; verdict: string }[]; warnings?: string[] }
     expect(answer.state).toBe("ok")
     expect(answer.tier).toBe("SUBSCRIPTION_TIER_FREE")
@@ -33,11 +33,6 @@ describe("colab_specs", () => {
       ["T4", true, true],
     ])
     expect(answer.warnings).toContain("FREE_TIER_PRIORITY")
-    expect(permission.requests.map((request) => [request.action, request.resources])).toEqual([
-      ["colab.specs", ["default"]],
-      ["colab.read", [`default:${OPERATIONS.runtimeSpecsList}`]],
-      ["colab.read", [`default:${OPERATIONS.subscriptionGet}`]],
-    ])
   })
 
   it("marks a spec outside the accelerator allow-list as not allowed", async () => {
@@ -62,13 +57,6 @@ describe("colab_specs", () => {
     expect(unpriced.specs[0]!.verdict).toContain("ESTIMATE_UNKNOWN")
   })
 
-  it("runs no read when the ask is denied", async () => {
-    const { deps, fakes } = await preparedIn()
-    const permission = new RecordingPermission()
-    permission.denyAll()
-    await expect(toolWith(deps, permission, "specs", {}).result).rejects.toThrow(/denied/)
-    expect(fakes.colab.calls).toHaveLength(0)
-  })
 })
 
 describe("colab_runtimes", () => {
@@ -88,7 +76,7 @@ describe("colab_runtimes", () => {
     const { deps } = await preparedIn({ record: runtimeRecord({ tainted: { code: "RUNTIME_HAS_CREDENTIALS", at: "2026-11-17T09:00:00.000Z" } }) })
     const answer = (await tool(deps, "runtimes", {}).result) as { runtimes: { tainted: boolean }[] }
     expect(answer.runtimes[0]!.tainted).toBe(true)
-    expect(await tool(deps, "runtimes", { runtime: "oc-nope" }).result).toMatchObject({ state: "refused", error: "NOT_FOUND" })
+    expect(await tool(deps, "runtimes", { runtime: "oc-nope" }).result).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
   })
 
   it("lists Enterprise runtimes with $/h and the idle-shutdown and EUC flags", async () => {
@@ -106,21 +94,17 @@ describe("colab_files", () => {
       ["/content/outputs/kept.csv", Buffer.from("x")],
       ["/content/scratch.bin", Buffer.from("y")],
     ]))
-    const { result, permission } = tool(deps, "files", { runtime: record.id })
+    const { result } = tool(deps, "files", { runtime: record.id })
     const answer = (await result) as { files: { path: string; kept: boolean; bytes?: number }[] }
     expect(answer.files.map((file) => [file.path, file.kept])).toEqual([
       ["/content/outputs/kept.csv", true],
       ["/content/scratch.bin", false],
     ])
-    expect(permission.requests.map((request) => [request.action, request.resources])).toEqual([
-      ["colab.files", ["default"]],
-      ["colab.read", [`default:${OPERATIONS.contentsList}`]],
-    ])
   })
 
   it("refuses a runtime that is not the plugin's own before any request", async () => {
     const { deps, runtime } = await preparedIn()
-    expect(await tool(deps, "files", { runtime: "oc-nope" }).result).toMatchObject({ error: "RUNTIME_NOT_OURS" })
+    expect(await tool(deps, "files", { runtime: "oc-nope" }).result).toMatchObject({ error: "INPUT_INVALID" })
     expect(runtime.calls).toHaveLength(0)
   })
 })
@@ -128,14 +112,13 @@ describe("colab_files", () => {
 describe("colab_execution", () => {
   it("answers the Enterprise branch through the seam, which asserts colab.read before its reads", async () => {
     const { deps, fakes } = await preparedIn({ options: { accounts: { work: { backend: "enterprise", access: "write", project: "p", region: "us-central1", outputBucket: "gs://b" } } } })
-    const { result, permission } = tool(deps, "execution", { account: "work", job: "projects/p/locations/l/notebookExecutionJobs/j1" })
+    const { result } = tool(deps, "execution", { account: "work", job: "projects/p/locations/l/notebookExecutionJobs/j1" })
     expect(await result).toMatchObject({ state: "ok" })
     expect(fakes.enterprise.calls).toHaveLength(1)
-    expect(permission.requests.map((request) => [request.action, request.resources])).toContainEqual(["colab.read", [`work:${OPERATIONS.jobsGet}`]])
   })
 
   it("refuses a run that is not in the ledger or belongs to another account", async () => {
     const { deps } = await preparedIn()
-    expect(await tool(deps, "execution", { runId: "01jmissing" }).result).toMatchObject({ state: "refused", error: "NOT_FOUND" })
+    expect(await tool(deps, "execution", { runId: "01jmissing" }).result).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
   })
 })

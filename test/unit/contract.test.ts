@@ -56,7 +56,7 @@ describe("inputs", () => {
 
 describe("results", () => {
   it("every tool's result accepts the failure envelope", () => {
-    const failure = { state: "refused", error: "NOT_IMPLEMENTED", message: "x.", next: "y." }
+    const failure = { state: "refused", error: "INPUT_INVALID", message: "x.", next: "y." }
     for (const [name, contract] of Object.entries(CONTRACTS)) {
       if (name === "events_list" || name === "runtimes_read") continue
       expect(ok(contract.output, failure), name).toBe(true)

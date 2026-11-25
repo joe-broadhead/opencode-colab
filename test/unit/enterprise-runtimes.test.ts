@@ -7,8 +7,7 @@
 import { describe, expect, it } from "vitest"
 import type { Deps } from "../../src/provider/index.js"
 import { STOP_WARNING } from "../../src/provider/enterprise/plans.js"
-import { runTool, type Runner } from "../support/legacy.js"
-import { toolHandlers } from "../support/legacy.js"
+import { runTool, type Runner } from "../support/methods.js"
 import { fakeDeps, RecordingPermission } from "../fakes/index.js"
 import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
@@ -23,8 +22,7 @@ function setup() {
   const deps: Deps = { ...base, vertex, gcs }
   const permission = new RecordingPermission()
   let runner: Runner
-  const handlers = toolHandlers(() => runner)
-  runner = { deps, assert: permission.assert, handler: (name) => handlers[name] }
+  runner = { deps }
   return { deps, fakes, vertex, gcs, permission, runner }
 }
 
@@ -40,7 +38,7 @@ describe("runtime.stop", () => {
   it("previews what is lost and what is kept, then stops the runtime", async () => {
     const { runner, vertex } = setup()
     vertex.putRuntime(RUNTIME)
-    const planned = (await runTool("plan", { action: "runtime.stop", account: "work", params: { runtime: "rt-1" } }, call(), runner)) as { planId: string; preview: Record<string, any>; category: string }
+    const planned = (await runTool("plan", { action: "runtime.stop", account: "work", params: { runtime: "rt-1" } }, call(), runner)) as { plan: unknown; preview: Record<string, any>; category: string }
     expect(planned.category).toBe("write")
     expect(planned.preview).toMatchObject({
       action: "runtime.stop",
@@ -51,7 +49,7 @@ describe("runtime.stop", () => {
     })
     // The exact warning the design requires, word for word.
     expect(planned.preview.warning).toBe("kernel state and running cells are lost; the disk is kept and still billed; the person may be using this runtime — there is no idle signal")
-    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ state: "ok", result: { runtime: "rt-1", state: "STOPPING" } })
+    expect(await runTool("write", { plan: planned.plan }, call(), runner)).toMatchObject({ state: "ok", result: { runtime: "rt-1", state: "STOPPING" } })
     expect(vertex.runtimes.get(RUNTIME.name)!.state).toBe("STOPPED")
   })
 
@@ -62,15 +60,15 @@ describe("runtime.stop", () => {
     const planned = (await runTool("plan", { action: "runtime.stop", account: "work", params: { runtime: "rt-2" } }, call(), runner)) as { preview: Record<string, any>; warnings?: string[] }
     expect(planned.preview.runtime).toMatchObject({ usdPerHour: 0.22, idleShutdownMinutes: null, template: "tpl-1" })
     expect(planned.warnings).toEqual(["IDLE_SHUTDOWN_OFF"])
-    expect(await runTool("plan", { action: "runtime.stop", account: "work", params: { runtime: "missing" } }, call(), runner)).toMatchObject({ error: "NOT_FOUND" })
+    expect(await runTool("plan", { action: "runtime.stop", account: "work", params: { runtime: "missing" } }, call(), runner)).toMatchObject({ error: "INPUT_INVALID" })
   })
 
   it("answers PLAN_CHANGED when the runtime moved between the preview and the commit", async () => {
     const { runner, vertex } = setup()
     vertex.putRuntime(RUNTIME)
-    const planned = (await runTool("plan", { action: "runtime.stop", account: "work", params: { runtime: "rt-1" } }, call(), runner)) as { planId: string }
+    const planned = (await runTool("plan", { action: "runtime.stop", account: "work", params: { runtime: "rt-1" } }, call(), runner)) as { plan: unknown }
     vertex.runtimes.set(RUNTIME.name, { ...RUNTIME, state: "STOPPED" })
-    expect(await runTool("write", { planId: planned.planId }, call(), runner)).toMatchObject({ error: "PLAN_CHANGED" })
+    expect(await runTool("write", { plan: planned.plan }, call(), runner)).toMatchObject({ error: "PLAN_INVALID" })
   })
 })
 
@@ -78,10 +76,10 @@ describe("runtime.delete (Enterprise)", () => {
   it("says the disk is deleted as well as the kernel, then deletes the runtime", async () => {
     const { runner, vertex } = setup()
     vertex.putRuntime(RUNTIME)
-    const planned = (await runTool("plan", { action: "runtime.delete", account: "work", params: { runtime: "rt-1" } }, call(), runner)) as { planId: string; preview: Record<string, any>; category: string }
+    const planned = (await runTool("plan", { action: "runtime.delete", account: "work", params: { runtime: "rt-1" } }, call(), runner)) as { plan: unknown; preview: Record<string, any>; category: string }
     expect(planned.category).toBe("delete")
     expect(planned.preview).toMatchObject({ action: "runtime.delete", warning: STOP_WARNING, deletes: "the disk is deleted", loses: expect.stringContaining("the disk") })
-    expect(await runTool("delete", { planId: planned.planId }, call(), runner)).toMatchObject({ state: "ok", result: { runtime: "rt-1", deleted: true } })
+    expect(await runTool("delete", { plan: planned.plan }, call(), runner)).toMatchObject({ state: "ok", result: { runtime: "rt-1", deleted: true } })
     expect(vertex.runtimes.size).toBe(0)
   })
 })

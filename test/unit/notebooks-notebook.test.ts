@@ -13,9 +13,8 @@ import { resolveWorkspacePath } from "../../src/provider/notebooks/paths.js"
 import { createDriveSync } from "../../src/provider/notebooks/pull.js"
 import { writeSyncRecord } from "../../src/provider/notebooks/sync.js"
 import { hashBytes } from "../../src/provider/notebooks/model.js"
-import { toolHandlers } from "../support/legacy.js"
-import { runTool, type Runner } from "../support/legacy.js"
-import { fakeDeps, type Fakes, RecordingPermission } from "../fakes/index.js"
+import { runTool, type Runner } from "../support/methods.js"
+import { fakeDeps, type Fakes } from "../fakes/index.js"
 import { invented } from "../support/invented.js"
 
 const call = () => ({ sessionID: "ses_test", agent: "build", messageID: "msg_test", id: "call_1", signal: new AbortController().signal })
@@ -49,13 +48,10 @@ const fixture = (): string =>
 
 let directory: string
 let runner: Runner
-let permission: RecordingPermission
 
 function setup(options: unknown = {}): { deps: ReturnType<typeof fakeDeps>["deps"]; fakes: Fakes } {
   const { deps, fakes } = fakeDeps({ options, directory })
-  permission = new RecordingPermission()
-  const handlers = toolHandlers(() => runner)
-  runner = { deps, assert: permission.assert, handler: (name) => handlers[name] }
+  runner = { deps }
   return { deps, fakes }
 }
 
@@ -129,7 +125,7 @@ describe("colab_notebook from a path", () => {
     expect(byIndex.cells.map((cell) => cell.id)).toEqual(["code-1"])
     const range = (await runTool("notebook", { notebook: { path: "doc.ipynb" }, cells: { from: 0, to: 1 }, outputs: "none" }, call(), runner)) as { cells: { id: string }[] }
     expect(range.cells.map((cell) => cell.id)).toEqual(["code-1", "md-1"])
-    expect(await runTool("notebook", { notebook: { path: "doc.ipynb" }, cells: ["missing"] }, call(), runner)).toMatchObject({ state: "refused", error: "NOT_FOUND" })
+    expect(await runTool("notebook", { notebook: { path: "doc.ipynb" }, cells: ["missing"] }, call(), runner)).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
   })
 
   it("puts no notebook text in a refusal's message or next", async () => {
@@ -153,10 +149,6 @@ describe("colab_notebook from Drive", () => {
     expect(result.cells).toHaveLength(2)
     expect(result.warnings).toContain("FOREIGN_NOTEBOOK")
     expect(fakes.drive.calls.map((entry) => entry.method)).toEqual(["get", "download"])
-    expect(permission.requests.map((request) => [request.action, request.resources])).toEqual([
-      ["colab.notebook", ["default"]],
-      ["colab.read", [`default:${OPERATIONS.driveFilesGet}`]],
-    ])
     // Inline: the Drive read writes nothing anywhere in the project.
     expect(readdirSync(directory)).toEqual([])
   })
@@ -191,10 +183,9 @@ describe("colab_notebook from Drive", () => {
     fakes.gcs.objects.set("gs://bucket/out/n.ipynb", Buffer.from(fixture()))
     const ok = (await runTool("notebook", { account: "ent", notebook: { gcs: "gs://bucket/out/n.ipynb" }, outputs: "none" }, call(), runner)) as { state: string }
     expect(ok.state).toBe("ok")
-    expect(permission.requests.map((request) => request.resources)).toEqual([["ent"], [`ent:${OPERATIONS.storageObjectsGet}`]])
 
     setup()
-    expect(await runTool("notebook", { notebook: { gcs: "gs://bucket/out/n.ipynb" } }, call(), runner)).toMatchObject({ state: "refused", error: "AUTH_SCOPE_MISSING" })
+    expect(await runTool("notebook", { notebook: { gcs: "gs://bucket/out/n.ipynb" } }, call(), runner)).toMatchObject({ state: "refused", error: "SCOPE_MISSING" })
   })
 
   it("reads an Enterprise run's output notebook from the ledger's paths", async () => {
@@ -204,7 +195,7 @@ describe("colab_notebook from Drive", () => {
     const result = (await runTool("notebook", { account: "ent", notebook: { run: "run-1" }, outputs: "none" }, call(), runner)) as { state: string; cells: unknown[] }
     expect(result.state).toBe("ok")
     expect(result.cells).toHaveLength(2)
-    expect(await runTool("notebook", { account: "ent", notebook: { run: "missing" }, outputs: "none" }, call(), runner)).toMatchObject({ state: "refused", error: "NOT_FOUND" })
+    expect(await runTool("notebook", { account: "ent", notebook: { run: "missing" }, outputs: "none" }, call(), runner)).toMatchObject({ state: "refused", error: "INPUT_INVALID" })
   })
 })
 

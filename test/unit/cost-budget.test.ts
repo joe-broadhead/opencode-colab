@@ -97,7 +97,7 @@ describe("the budget", () => {
     expect(await measured.budget.check("default", { action: "job.create", usd: 3 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 3, limit: 5, unit: "usd" })
     expect(await measured.budget.check("default", { action: "job.create", usd: 1 }, new AbortController().signal)).toEqual({ verdict: "ok" })
 
-    // A legacy run without an estimate contributes nothing: the counted spend plus the call still refuses, and the
+    // A run without an estimate contributes nothing: the counted spend plus the call still refuses, and the
     // answer says the unit it counted in.
     const floor = await world({ budget: { enterpriseUsdDaily: 5, action: "refuse" }, runs: [run({ estimatedUsd: 3 }), run({ runId: "oc-job-2" })] })
     expect(await floor.budget.check("default", { action: "job.create", usd: 2 }, new AbortController().signal)).toEqual({ verdict: "ok" })

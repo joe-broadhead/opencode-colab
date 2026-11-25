@@ -50,7 +50,6 @@ import type {
   VertexApi,
 } from "../../src/provider/ports.js"
 
-export { RecordingPermission } from "../support/legacy.js"
 
 export type Call = { readonly method: string; readonly args: readonly unknown[] }
 
@@ -657,4 +656,34 @@ export function fakeDeps(input: { readonly options?: unknown; readonly directory
     ...fakes,
   }
   return { deps, fakes, options }
+}
+
+// ── Permission asks ─────────────────────────────────────────────────────
+
+export interface PermissionRequest {
+  readonly sessionID: string
+  readonly agent: string
+  readonly action: string
+  readonly resources: readonly string[]
+  readonly save?: readonly string[]
+  readonly metadata: Readonly<Record<string, unknown>>
+  readonly source: { readonly type: "tool"; readonly messageID: string; readonly id: string }
+}
+
+/** Records every assert; `decide` throws to deny (default: allow everything). */
+export class RecordingPermission {
+  readonly requests: PermissionRequest[] = []
+  decide: (request: PermissionRequest) => void = () => undefined
+  readonly assert = async (request: PermissionRequest) => {
+    this.requests.push(request)
+    this.decide(request)
+  }
+  actions() {
+    return this.requests.map((request) => request.action)
+  }
+  denyAll(message = "denied by the test's rules") {
+    this.decide = () => {
+      throw new Error(message)
+    }
+  }
 }

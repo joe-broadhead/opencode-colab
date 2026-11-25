@@ -122,7 +122,7 @@ describe("reviewer repro, colab #10", () => {
     expect(await budget.check("default", { action: "job.create", usd: 5 }, new AbortController().signal)).toEqual({ verdict: "refuse", spent: 10, limit: 10, unit: "usd" })
   })
 
-  it("R4b: a legacy run without an estimate is uncounted, so a call within the rest of the limit answers ok", async () => {
+  it("R4b: a run without an estimate is uncounted, so a call within the rest of the limit answers ok", async () => {
     const clock = new FakeClock(NOW)
     const ledger = new MemoryLedger(clock)
     await ledger.putRun({ runId: "job-a", account: "default", backend: "enterprise", job: "projects/p/locations/us-central1/notebookExecutionJobs/job-a", startedAt: "2026-11-17T09:00:00.000Z", endedAt: "2026-11-17T10:00:00.000Z", state: "ok", cellIds: [], outputPaths: [], summary: "Colab Enterprise job" })

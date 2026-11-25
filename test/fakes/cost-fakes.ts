@@ -66,7 +66,7 @@ export class CostRuntime extends FakeRuntimeProtocol {
       })()
     }
     files.write = async () => {
-      throw new ColabError("NOT_IMPLEMENTED", "The cost tests do not write to a runtime.")
+      throw new ColabError("UNAVAILABLE", "The cost tests do not write to a runtime.")
     }
   }
 }

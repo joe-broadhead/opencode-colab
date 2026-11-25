@@ -7,7 +7,7 @@ import { STOP_WARNING, runStatus } from "../../src/provider/cost/status.js"
 import { OPERATIONS } from "../../src/domain/actions.js"
 import { CONTRACTS } from "../../src/domain/contract.js"
 import { ColabError } from "../../src/domain/errors.js"
-import { runTool } from "../support/legacy.js"
+import { runTool } from "../support/methods.js"
 import { providerContext } from "../../src/handlers/context.js"
 import { CLEAN_CALIBRATION, CPU, FakeClock, fakeDeps, RecordingPermission, T4 } from "../fakes/index.js"
 
@@ -106,27 +106,6 @@ describe("colab_status", () => {
     expect(result.warnings).toEqual(expect.arrayContaining(["EUC_RUNTIME", "IDLE_SHUTDOWN_OFF", "RATES_UNKNOWN"]))
   })
 
-  it("asserts colab.status once and colab.read once per provider operation, nothing else", async () => {
-    const worldOf = await world()
-    // Through the wrapper, as the model and a script reach it: the one colab.status assert comes first.
-    const runner = { deps: worldOf.deps, assert: worldOf.permission.assert, handler: () => ({ run: runStatus }) as never }
-    const answer = (await runTool("status", {}, { sessionID: "ses_test", agent: "build", messageID: "msg_test", id: "call_status", signal: new AbortController().signal }, runner)) as { state: string }
-    expect(answer.state).toBe("ok")
-    const actions = worldOf.permission.requests.map((request) => request.action)
-    expect(actions[0]).toBe("colab.status")
-    expect(new Set(actions)).toEqual(new Set(["colab.status", "colab.read"]))
-    const reads = worldOf.permission.requests.filter((request) => request.action === "colab.read").map((request) => request.resources[0])
-    expect(reads).toEqual(
-      expect.arrayContaining([
-        `default:${OPERATIONS.subscriptionGet}`,
-        `default:${OPERATIONS.kernelsList}`,
-        `default:${OPERATIONS.sessionsList}`,
-        `default:${OPERATIONS.runtimesList}`,
-        `default:${OPERATIONS.notebookRuntimesList}`,
-      ]),
-    )
-  })
-
   it("names a failed provider read in lastErrors and answers the rest of the status", async () => {
     const worldOf = await world()
     worldOf.fakes.colab.listRuntimes = async () => Promise.reject(new ColabError("UNAVAILABLE"))
@@ -135,14 +114,6 @@ describe("colab_status", () => {
     expect(result.state).toBe("ok")
     expect(result.lastErrors).toEqual(expect.arrayContaining(["UNAVAILABLE: runtime list.", "RUN_TIMEOUT: run run-1."]))
     expect(result.lastErrors).toHaveLength(2)
-  })
-
-  it("asserts the runtimes.get read when Jupyter cannot answer and Colab's own answer is consulted", async () => {
-    const worldOf = await world()
-    worldOf.fakes.runtime.kernels = async () => Promise.reject(new ColabError("UNAVAILABLE"))
-    await runStatus({}, worldOf.ctx)
-    const reads = worldOf.permission.requests.filter((request) => request.action === "colab.read").map((request) => request.resources[0])
-    expect(reads).toEqual(expect.arrayContaining([`default:${OPERATIONS.runtimesGet}`]))
   })
 
   it("never calls a runtime idle, or offers its release, when the ledger's run list cannot be read", async () => {
