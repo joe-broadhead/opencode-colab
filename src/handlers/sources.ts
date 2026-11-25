@@ -2,7 +2,7 @@
  * The two contract sources: `events_list` reads `colab.runs` from the local ledger, and `runtimes_read` answers the
  * `colab.runtimes` table snapshot. Both pages carry `trust: "untrusted"`.
  */
-import { PAGE_SCHEMA, parseEventsListInput } from "@we-the-rebel-alliance/plugin-contract/events"
+import { EVENTS_LIST_INPUT_SCHEMA, PAGE_SCHEMA, parseEventsListInput } from "@we-the-rebel-alliance/plugin-contract/events"
 import { refusal, RegisterError, type MethodHandler } from "@we-the-rebel-alliance/plugin-contract/register"
 import type { Deps } from "../provider/index.js"
 import { localOwner } from "../provider/owner.js"
@@ -10,17 +10,6 @@ import { listRuns, RUNS } from "../sources/runs.js"
 import { readRuntimes, RUNTIMES } from "../sources/runtimes.js"
 import { providerAccount } from "./context.js"
 import { mapped } from "./errors.js"
-
-const EVENTS_INPUT = {
-  type: "object",
-  properties: {
-    source: { type: "string", description: "The source to read: runs." },
-    cursor: { type: "string", description: "The cursor a previous page answered." },
-    since: { type: "string", description: "An ISO date or date-time; a cursor wins over it." },
-    limit: { type: "integer", minimum: 1, maximum: 500, description: "At most this many events, 100 by default." },
-  },
-  additionalProperties: false,
-}
 
 const RUNTIMES_INPUT = {
   type: "object",
@@ -53,7 +42,7 @@ const unknownSource = (asked: unknown, known: string): RegisterError =>
 export function eventsListHandler(deps: Deps): MethodHandler {
   return {
     description: "List finished Colab runs and Enterprise jobs as contract events, oldest first, with a cursor bound to the account.",
-    input: EVENTS_INPUT,
+    input: EVENTS_LIST_INPUT_SCHEMA,
     output: PAGE_SCHEMA,
     async run(input, call) {
       return mapped(async () => {

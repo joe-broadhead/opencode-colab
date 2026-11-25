@@ -50,6 +50,8 @@ import type {
   VertexApi,
 } from "../../src/provider/ports.js"
 
+export { RecordingPermission } from "../support/legacy.js"
+
 export type Call = { readonly method: string; readonly args: readonly unknown[] }
 
 /** A clock a test moves by hand. */

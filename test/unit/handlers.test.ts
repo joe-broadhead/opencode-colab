@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, test } from "vitest"
 import type { MethodCall } from "@we-the-rebel-alliance/plugin-contract/register"
@@ -7,7 +8,7 @@ import { createHandlers } from "../../src/handlers/index.js"
 import { manifest, version } from "../../src/manifest.js"
 import { fakeDeps } from "../fakes/index.js"
 
-const directory = mkdtempSync("/tmp/opencode/colab-handlers-")
+const directory = mkdtempSync(join(tmpdir(), "colab-handlers-"))
 afterAll(() => rmSync(directory, { recursive: true, force: true }))
 
 const call = (account: string): MethodCall =>
@@ -21,7 +22,7 @@ const call = (account: string): MethodCall =>
     account,
     bus: { emit: async () => ({ ok: true }) },
     access: { rules: [] },
-    unguardedAgents: async () => [],
+    unguardedAgents: async () => ({ ok: true, agents: [] }),
     door: "rpc",
   }) as unknown as MethodCall
 

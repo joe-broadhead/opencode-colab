@@ -20,7 +20,7 @@ import { PRICES_AS_OF, PRICES_REGION, acceleratorShort, priceOf, usd } from "./p
 import { runIdentity, type RunIdentity } from "./account.js"
 import { budgetCheck, checkCost, checkScheduleCost, chooseCompute, describeNotebook, labelsFor, notebookForJob, notebookParam, payloadOf, scheduleCompute, scheduleCost, scheduleNameOf, runsUntil, settingsFor } from "./common.js"
 import { cronWithZone, minimumGap, nextRuns, occurrencesBetween, parseCron } from "./cron.js"
-import { lastSegment, scheduleSuffix } from "./ids.js"
+import { lastSegment, scheduleToken } from "./ids.js"
 import { nextRunsOf } from "./common.js"
 import { jobBody } from "./plans.js"
 import { overlapOf } from "./detail.js"
@@ -42,8 +42,8 @@ function refuseOverlapping(schedule: EnterpriseSchedule) {
 
 const identityKey = (identity: RunIdentity) => `${identity.as}:${identity.serviceAccount ?? identity.executionUser ?? ""}`
 
-const uniqueName = (base: string, marker: string): string => {
-  const suffix = ` [oc-${marker}]`
+const uniqueName = (base: string, token: string): string => {
+  const suffix = ` [oc-${token}]`
   const clean = base.replace(/[\r\n]+/g, " ").trim() || "Colab schedule"
   return `${clean.length + suffix.length > 128 ? clean.slice(0, 128 - suffix.length) : clean}${suffix}`
 }
@@ -91,7 +91,7 @@ async function costOf(ctx: HandlerContext, schedule: EnterpriseSchedule) {
 }
 
 interface SchedulePayload {
-  readonly marker: string
+  readonly token: string
   readonly displayName: string
   readonly cron: string
   readonly maxRunCount?: number
@@ -158,7 +158,7 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
     requireBound(params.maxRunCount, params.endTime, ctx.deps.clock.now())
     const cronText = cronWithZone(params.cron, params.timeZone)
     const overlap = checkOverlap(cronText, choice.timeoutMinutes, params.maxRunCount, ctx)
-    const token = scheduleSuffix()
+    const token = scheduleToken()
     const displayName = uniqueName(params.displayName, token)
     // Every run of this schedule writes into its own folder under the account's bucket (review M2).
     const outputUri = `${settings.outputBase!}${token}/`
@@ -166,7 +166,7 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
     const allowedRuns = params.maxRunCount ?? runsUntil(cronText, ctx, params.endTime)
     const runsPerMonth = monthlyRuns(cronText, ctx, { ...(params.maxRunCount !== undefined ? { maxRunCount: params.maxRunCount } : {}), ...(params.endTime !== undefined ? { endTime: params.endTime } : {}) })
     const payload: SchedulePayload = {
-      marker: token,
+      token,
       displayName,
       cron: cronText,
       ...(params.maxRunCount !== undefined ? { maxRunCount: params.maxRunCount } : {}),
@@ -200,7 +200,7 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
       preview: {
         action: "schedule.create",
         displayName,
-        marker: token,
+        scheduleToken: token,
         cron: cronText,
         timeZone: cron.timeZone,
         nextRuns: nextRuns(cron, ctx.deps.clock.now(), 5).map((date) => date.toISOString()),
@@ -284,7 +284,7 @@ const scheduleCreate: PlanHandler<"schedule.create"> = {
       if (!uncertain && !aborted) throw error
       await ctx.providerRead(OPERATIONS.schedulesList)
       const schedules = await ctx.deps.vertex.listSchedules(ctx.account.alias, { filter: `display_name="${payload.displayName}"` }, AbortSignal.timeout(5_000))
-      const found = schedules.find((schedule) => schedule.displayName.includes(payload.marker))
+      const found = schedules.find((schedule) => schedule.displayName.includes(payload.token))
       if (!found) {
         throw new ColabError("UNCERTAIN", "The create's answer was lost, and no schedule with this plan's token was found.", { next: "colab_schedules lists the account's schedules before planning again." })
       }

@@ -33,24 +33,6 @@ export async function accountSignal(deps: Deps, account: ResolvedAccount): Promi
   }
 }
 
-/** The unguarded agent list from the call, tolerating the pin's array and the freeze PR's `{ ok, agents }`. */
-async function agentsOf(call: { unguardedAgents(): Promise<unknown> }, problems: string[]): Promise<readonly string[]> {
-  try {
-    const list: unknown = await call.unguardedAgents()
-    if (Array.isArray(list)) return list.filter((agent): agent is string => typeof agent === "string")
-    if (list !== null && typeof list === "object" && (list as { ok?: unknown }).ok === true) {
-      const agents = (list as { agents?: unknown }).agents
-      return Array.isArray(agents) ? agents.filter((agent): agent is string => typeof agent === "string") : []
-    }
-    const error = (list as { error?: unknown } | undefined)?.error
-    problems.push(redactReason(error instanceof Error ? error.message : String(error ?? "The agent list could not be read")))
-    return []
-  } catch (error) {
-    problems.push(redactReason(error instanceof Error ? error.message : String(error)))
-    return []
-  }
-}
-
 export interface StatusHandlerInput {
   readonly manifest: Manifest
   readonly version: string
@@ -80,7 +62,7 @@ export function statusHandler(input: StatusHandlerInput): MethodHandler {
         hostVersion: input.hostVersion,
         accounts,
         problems,
-        unguardedAgents: await agentsOf(call, problems),
+        unguardedAgents: await call.unguardedAgents(),
       })
     },
   }

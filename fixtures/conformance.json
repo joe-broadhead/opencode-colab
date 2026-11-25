@@ -217,7 +217,7 @@
           "2.4.1"
         ]
       },
-      "state": "ready",
+      "state": "error",
       "accounts": [
         {
           "alias": "work",
@@ -237,7 +237,7 @@
         }
       ],
       "unguardedAgents": [],
-      "nextStep": null
+      "nextStep": "No reason was given."
     }
   },
   "rpc": {

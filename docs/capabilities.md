@@ -71,6 +71,7 @@ None.
 
 ## The bus
 
-`changed` is emitted after a runtime is created, released, stopped or cleaned up. It carries the capability
-`colab.runtimes`, the account and a short reason; an app re-reads the snapshot. Jobs and schedules have no source to
-re-read, so no event is emitted for them.
+`changed` is emitted after a runtime is created, released, stopped or cleaned up (`colab.runtimes`) and after a run
+starts or is cancelled (`colab.runs`). It carries the capability, the account and a short reason; an app re-reads the
+source. Jobs and schedules have no source to re-read, so no event is emitted for them; neither do notebook and file
+writes.

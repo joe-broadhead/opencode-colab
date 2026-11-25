@@ -40,7 +40,7 @@ describe("accounts", () => {
       hostVersion: "2.4.1",
       accounts: statuses,
       problems: [],
-      unguardedAgents: [],
+      unguardedAgents: { ok: true, agents: [] },
     })
     expect(answer).toMatchObject({
       name: "colab",

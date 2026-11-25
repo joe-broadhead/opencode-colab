@@ -70,7 +70,11 @@ export function providerHandlers(deps: Deps): Record<string, MethodHandler> {
           const parsed = parse(name, contract.input, input, account.alias)
           if (WRITES.has(name)) assertWritable(account)
           const ctx = providerContext(deps, account, call)
-          return handler.run(parsed as never, ctx as never)
+          const result = await handler.run(parsed as never, ctx as never)
+          if (name === "run" || name === "cancel") {
+            await call.bus.emit("changed", { capability: "colab.runs", account: account.alias, reason: name })
+          }
+          return result
         })
       },
     }
