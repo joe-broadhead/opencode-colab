@@ -30,7 +30,7 @@ The plugin holds one OpenCode integration per account alias: `colab` for `defaul
    `opencode auth login colab-work`. Enter a Google Desktop OAuth client, or set `oauthClient` in the account's profile.
 3. Read `/colab` for the account states and the plugin's cost.
 
-A profile can be empty (`{}`). Its fields are documented in [docs/accounts.md](docs/accounts.md).
+A profile can be empty (`{}`). Its fields are documented in [docs/accounts.md](https://github.com/we-the-rebel-alliance/colab-plugin/blob/master/docs/accounts.md).
 
 ## Access levels
 
@@ -49,7 +49,7 @@ OpenCode ask or a host-signed action grant.
 
 Options live under the plugin entry in `opencode.json`: `access`, `accounts`, the runtime caps, budgets, work
 directory and the Enterprise defaults. Every option, its type and its default are in
-[docs/configuration.md](docs/configuration.md); an unknown option is refused with `OPTIONS_INVALID`.
+[docs/configuration.md](https://github.com/we-the-rebel-alliance/colab-plugin/blob/master/docs/configuration.md); an unknown option is refused with `OPTIONS_INVALID`.
 
 ## Capabilities
 
@@ -145,10 +145,10 @@ None.
 
 - [plugin-contract](https://github.com/we-the-rebel-alliance/plugin-contract) — the manifest, methods, sources, errors and
   conformance kit this plugin implements
-- [Capabilities](docs/capabilities.md)
-- [Accounts](docs/accounts.md)
-- [Configuration](docs/configuration.md)
-- [Architecture](docs/architecture.md)
-- [Security](docs/security.md)
-- [Automations](docs/automations.md)
+- [Capabilities](https://github.com/we-the-rebel-alliance/colab-plugin/blob/master/docs/capabilities.md)
+- [Accounts](https://github.com/we-the-rebel-alliance/colab-plugin/blob/master/docs/accounts.md)
+- [Configuration](https://github.com/we-the-rebel-alliance/colab-plugin/blob/master/docs/configuration.md)
+- [Architecture](https://github.com/we-the-rebel-alliance/colab-plugin/blob/master/docs/architecture.md)
+- [Security](https://github.com/we-the-rebel-alliance/colab-plugin/blob/master/docs/security.md)
+- [Automations](https://github.com/we-the-rebel-alliance/colab-plugin/blob/master/docs/automations.md)
 - [Contributing](CONTRIBUTING.md)
