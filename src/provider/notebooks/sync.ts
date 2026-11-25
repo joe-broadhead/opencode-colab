@@ -70,7 +70,7 @@ export async function findSyncRecordByFileId(fileId: string, directory: string, 
   const root = join(workDirectory(directory, workDir), "sync")
   const files: string[] = []
   const walk = async (folder: string) => {
-    let entries
+    let entries: import("node:fs").Dirent[]
     try {
       entries = await readdir(folder, { withFileTypes: true })
     } catch {

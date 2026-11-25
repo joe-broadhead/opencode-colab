@@ -12,7 +12,7 @@ import type { Deps } from "../../src/provider/index.js"
 import { budgetCheck } from "../../src/provider/enterprise/common.js"
 import { abandonJobCreate, confirmJobCreate, createEnterpriseRuns, openJobCreate, type EnterpriseRunsEnv } from "../../src/provider/enterprise/runs.js"
 import type { HandlerContext } from "../../src/provider/types.js"
-import { FakeClock, fakeDeps } from "../fakes/index.js"
+import { type FakeClock, fakeDeps } from "../fakes/index.js"
 import { ScriptedGcs } from "../fakes/enterprise-gcs.js"
 import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 

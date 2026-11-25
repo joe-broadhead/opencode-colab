@@ -139,10 +139,12 @@ describe("the Colab API client", () => {
       await fixture.ports.colab.listRuntimeSpecs("work", signal())
       await fixture.ports.colab.listRuntimeSpecs("default", signal())
       const tokenCalls = fixture.auth.calls.filter((call) => call.method === "token").map((call) => call.args as [string, readonly string[]])
-      expect(tokenCalls[0]?.[0]).toBe("work")
-      expect(tokenCalls[0]?.[1][0]).toBe("https://www.googleapis.com/auth/colaboratory.readonly")
-      expect(fixture.auth.calls.at(-1)?.args[0]).toBe("default")
-      expect((fixture.auth.calls.at(-1)?.args[1] as string[])[0]).toBe("https://www.googleapis.com/auth/colaboratory")
+      const [workArgs] = tokenCalls
+      expect(workArgs?.[0]).toBe("work")
+      expect(workArgs?.[1]).toEqual(["https://www.googleapis.com/auth/colaboratory.readonly"])
+      const last = fixture.auth.calls.at(-1)
+      expect(last?.args[0]).toBe("default")
+      expect(last?.args[1]).toEqual(["https://www.googleapis.com/auth/colaboratory"])
     } finally {
       await fixture.close()
     }

@@ -151,7 +151,9 @@ describe("/colab-doctor (design §14)", () => {
     const http = new FakeHttp()
     http.on("colaboratory.googleapis.com", "/v1beta/runtimespecs", 200, {})
     let printed = 0
-    const probe: DoctorRuntimeProbe = { runtimes: async () => ["oc-runtime-1"], print: async () => void (printed += 1) }
+    const probe: DoctorRuntimeProbe = { runtimes: async () => ["oc-runtime-1"], print: async () => {
+      printed += 1
+    } }
     const denied = setup(consumer, { http, probe, decide: (request) => request.action !== "colab.run" })
     const checks = await denied.doctor.checks("ses_1")
     expect(checks.find((check) => check.check === "runtime print(1)")!.status).toBe("DENIED")

@@ -118,27 +118,39 @@ export function createAutomationLock(dir: string | undefined, options: Automatio
       return owned
     },
     claim() {
-      if (dir === undefined) return (owned = true)
+      if (dir === undefined) {
+        owned = true
+        return true
+      }
       // The parent is created once; the lock itself is taken with a plain `mkdir`, which is atomic across processes.
       mkdirSync(join(dir, "automation"), { recursive: true, mode: 0o700 })
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           mkdirSync(path!, { recursive: false, mode: 0o700 })
           writeState()
-          return (owned = true)
+          owned = true
+          return true
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST") return (owned = false)
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+            owned = false
+            return false
+          }
           const state = read()
           if (state?.pid === pid) {
             writeState()
-            return (owned = true)
+            owned = true
+            return true
           }
           const held = state === undefined ? fresh() : state.pid === pid || (processAlive(state.pid) && now() - state.at < staleMs)
-          if (held) return (owned = false)
+          if (held) {
+            owned = false
+            return false
+          }
           rmSync(path!, { recursive: true, force: true })
         }
       }
-      return (owned = false)
+      owned = false
+      return false
     },
     heartbeat() {
       if (!owned || dir === undefined) return

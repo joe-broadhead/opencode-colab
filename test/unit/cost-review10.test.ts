@@ -173,7 +173,13 @@ describe("M1's ledger-state matrix, through B's real transport", () => {
     const ledger = new MemoryLedger(clock)
     const runtime = { id: "oc-01jreadaccount000000000", account: "default", backend: "colab" as const, spec: T4, createdAt: "2026-11-17T09:00:00.000Z", nonce: "n1", keep: [], lease: { releaseAfterIdleMinutes: 20, maxHours: 4 }, state: "ready" as const }
     await ledger.putRuntime(runtime)
-    const release = { calls: 0, release: async () => ((release.calls += 1), { harvested: [], released: true, warnings: [] }) }
+    const release = {
+      calls: 0,
+      release: async () => {
+        release.calls += 1
+        return { harvested: [], released: true, warnings: [] }
+      },
+    }
     const outcome = await runAutomationOnce({
       options: await loadOptions({ accounts: { default: { access: "read" } } }),
       ledger,

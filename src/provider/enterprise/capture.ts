@@ -9,7 +9,7 @@
 import { join } from "node:path"
 import type * as z from "zod"
 import type { Options } from "../../options.js"
-import { CellResult, RichOutput } from "../../domain/contract.js"
+import type { CellResult, RichOutput } from "../../domain/contract.js"
 import { cut } from "../../redact.js"
 import type { Notebook, NotebookCell } from "./notebook.js"
 import { projectPath, resolveLocal, writeOnce } from "./paths.js"

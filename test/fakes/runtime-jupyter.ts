@@ -185,7 +185,7 @@ export async function createFakeJupyter(options: FakeJupyterOptions = {}): Promi
   const token = options.token ?? invented("proxy-token-", "1")
   const accepted = new Set([token])
   let valid = true
-  let allowHidden = options.allowHidden ?? false
+  const allowHidden = options.allowHidden ?? false
   const contents = new Map<string, Uint8Array>()
   /** The folders that exist, starting with the server root and Colab's /content; a write needs its parent. */
   const directories = new Set<string>(["", "content"])

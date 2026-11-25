@@ -34,7 +34,7 @@ export const download: ToolHandler<"download"> = {
     const path = runtimePath(input.path!)
     const destination = input.to ?? downloadDefault(ctx.deps.options.workDir, baseName(path))
     const local = await resolveLocal(destination, { directory: ctx.deps.directory, allowedRoots: ctx.deps.options.allowedRoots })
-    let written
+    let written: Awaited<ReturnType<typeof writeStream>>
     try {
       const chunks = await ctx.deps.runtime.files.read(found.target, path, ctx.call.signal)
       written = await writeStream(local.absolute, chunks, { maxBytes: ctx.deps.options.maxDownloadBytes, overwrite: input.overwrite === true })

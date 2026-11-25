@@ -86,7 +86,7 @@ section.
 
 ## Forbidden
 
-- Editing `dist/` by hand, or committing it outside a release.
+- Editing `dist/` by hand. Build it with `npm run bundle` and commit it with the source change.
 - Adding runtime dependencies, peer dependencies or lifecycle scripts.
 - Naming any app in code, manifest or docs, except in an `x-<app>` key.
 - Copying contract code into this repository.

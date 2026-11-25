@@ -80,7 +80,7 @@ export async function runStatus(_input: unknown, ctx: HandlerContext): Promise<O
   const idle: { readonly record: RuntimeRecord; readonly verdict: Extract<IdleVerdict, { state: "idle" }> }[] = []
   for (const record of records.filter((entry) => entry.state === "ready" || entry.state === "creating")) {
     const rule = { autoReleaseMinutes: record.lease?.releaseAfterIdleMinutes ?? deps.options.autoReleaseMinutes, maxHours: record.lease?.maxHours ?? deps.options.maxRuntimeHours }
-    let row: RuntimeRow = { id: record.id, account: alias, backend: "colab", spec: specLabel(record.spec), state: record.state, ours: true, tainted: record.tainted !== undefined, createdAt: record.createdAt, lease: { releaseAfterIdleMinutes: rule.autoReleaseMinutes, maxHours: rule.maxHours }, keep: [...record.keep] }
+    const row: RuntimeRow = { id: record.id, account: alias, backend: "colab", spec: specLabel(record.spec), state: record.state, ours: true, tainted: record.tainted !== undefined, createdAt: record.createdAt, lease: { releaseAfterIdleMinutes: rule.autoReleaseMinutes, maxHours: rule.maxHours }, keep: [...record.keep] }
     runtimes.push(row)
     if (record.tainted) continue
     if (record.state !== "ready") continue

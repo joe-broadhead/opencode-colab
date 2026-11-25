@@ -12,7 +12,7 @@ import * as z from "zod"
 import { ERROR_CODES } from "./errors.js"
 import { CellSelector, CellView, EditOp, Hash, result } from "./notebook-contract.js"
 export { CellSelector, CellView, EditOp, Failure, Hash, OutputPreview, Warning } from "./notebook-contract.js"
-import { PLAN_ACTION_NAMES } from "./actions.js"
+import type { PLAN_ACTION_NAMES } from "./actions.js"
 
 // ── Shared pieces ───────────────────────────────────────────────────────
 

@@ -43,7 +43,7 @@ export default Plugin.define({
     problems.push(...accounts.registration.problems)
     const profiles = accountsFor(manifest, rawOptions)
     const handlers = createHandlers({ deps, manifest, version, hostVersion: ctx.app.version, profiles, problems })
-    let registration
+    let registration: Awaited<ReturnType<typeof register>>
     try {
       registration = await register(ctx, manifest, handlers)
     } catch (error) {

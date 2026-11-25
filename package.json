@@ -33,14 +33,16 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "check": "npm run typecheck && npm run bundle && npm run test && npx plugin-kit check && npm run test:pack",
+    "check": "npm run lint && npm run typecheck && npm run bundle && npm run test && npx plugin-kit check && npm run test:pack",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run test/unit test/conformance test/host",
     "test:pack": "vitest run test/pack",
     "docs": "plugin-kit docs",
-    "bundle": "node scripts/build.mjs"
+    "bundle": "node scripts/build.mjs",
+    "lint": "biome check ."
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.9",
     "@opencode/client": "2.4.1",
     "@opencode/plugin": "2.4.1",
     "@opencode/sdk": "2.4.1",

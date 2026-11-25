@@ -237,7 +237,7 @@ async function commitCreate(plan: StoredPlan, ctx: HandlerContext): Promise<Read
   const name = String(plan.fingerprint.name ?? pushName(undefined, target))
   const driveId = typeof plan.fingerprint.driveId === "string" ? plan.fingerprint.driveId : undefined
   const bytes = pushBytes(notebook, payload.outputs)
-  let created
+  let created: Awaited<ReturnType<typeof ctx.deps.drive.create>>
   let joined = false
   try {
     created = await ctx.deps.drive.create(ctx.account.alias, { ...(driveId !== undefined ? { id: driveId } : {}), name, ...(typeof plan.fingerprint.folder === "string" ? { folder: plan.fingerprint.folder } : {}), bytes, mimeType: COLAB_MIME }, ctx.call.signal)

@@ -75,7 +75,7 @@ async function walkWorkspace(root: string, pattern: string, limit: number, downl
       truncated = true
       return
     }
-    let entries
+    let entries: import("node:fs").Dirent[]
     try {
       entries = await readdir(folder, { withFileTypes: true })
     } catch {

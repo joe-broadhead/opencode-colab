@@ -2,7 +2,7 @@
 // unchanged, ids are derived in memory and never written by a read, every edit operation, and a run's outputs merge by
 // cell id or answer NOTEBOOK_CHANGED.
 import { describe, expect, it } from "vitest"
-import { ColabError } from "../../src/domain/errors.js"
+import type { ColabError } from "../../src/domain/errors.js"
 import {
   cellExecutionCount,
   cellOutputs,

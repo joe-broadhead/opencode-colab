@@ -4,13 +4,15 @@
  * 1. `npm pack` holds the package whitelist, no runtime dependencies and the server export.
  * 2. A temp git checkout of the tarball's contents is installed with the real `opencode` 2.4.1 CLI
  *    (`opencode plugin add git+file://…#v0.0.0`) in an isolated HOME, and `opencode plugin list` shows it.
- * 3. The installed package in the CLI's cache is loaded by the contract's real embedded host, which answers `status`.
- *
- * The stock `opencode service` in 2.4.1 does not activate global plugins in this build (even a minimal plugin yields no
- * `/api/plugin` entry), so the load half uses the contract's real host on the same installed cache package.
+ * 3. The installed package in the CLI's cache is loaded by the contract's real embedded host, which answers `status`
+ *    and lists the registered tools.
+ * 4. The real 2.4.1 CLI service starts on a free port in the same isolated HOME and, after one session activates the
+ *    plugin for an empty git project, `/api/skill` and `/api/command` answer with what the plugin registered. The
+ *    project has no `skills/` folder of its own, so the ids can only come from the plugin.
  */
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL, fileURLToPath } from "node:url"
@@ -56,6 +58,86 @@ function isolated(base: string): NodeJS.ProcessEnv {
 
 const PACKAGE = "@we-the-rebel-alliance/colab-plugin"
 
+/** The 24 effective tool ids of the v0.0.0 surface. */
+const TOOL_IDS = [
+  "colab_status",
+  "colab_probe",
+  "colab_usage",
+  "colab_specs",
+  "colab_runtimes",
+  "colab_find",
+  "colab_notebook",
+  "colab_files",
+  "colab_execution",
+  "colab_jobs",
+  "colab_schedules",
+  "colab_events_list",
+  "colab_runtimes_read",
+  "colab_plan_write",
+  "colab_plan_delete",
+  "colab_edit",
+  "colab_run",
+  "colab_cancel",
+  "colab_upload",
+  "colab_download",
+  "colab_pause",
+  "colab_write",
+  "colab_delete",
+  "colab_cleanup",
+]
+
+/** The pre-4a surface's 20 tools; `colab_plan` is the one the contract split in two. */
+const OLD_TOOL_IDS = [
+  "colab_status",
+  "colab_specs",
+  "colab_runtimes",
+  "colab_find",
+  "colab_notebook",
+  "colab_files",
+  "colab_execution",
+  "colab_jobs",
+  "colab_schedules",
+  "colab_plan",
+  "colab_events_list",
+  "colab_runtimes_read",
+  "colab_edit",
+  "colab_run",
+  "colab_cancel",
+  "colab_upload",
+  "colab_download",
+  "colab_pause",
+  "colab_write",
+  "colab_delete",
+]
+
+/** A free loopback port: the service binds it, the test reads it from the CLI's own answer. */
+async function freePort(): Promise<number> {
+  const server = createServer()
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", resolve)
+  })
+  const address = server.address()
+  const port = typeof address === "object" && address !== null ? address.port : 0
+  await new Promise<void>((resolve) => server.close(() => resolve()))
+  return port
+}
+
+/** Read until `done` says so: the service answers before it has loaded the location's plugins. */
+async function waitFor<T>(read: () => T, done: (value: T) => boolean, attempts = 240): Promise<T | undefined> {
+  let value: T | undefined
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      value = read()
+    } catch {
+      value = undefined
+    }
+    if (value !== undefined && done(value)) return value
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  return value
+}
+
 function installedPackage(cache: string): string {
   for (const entry of readdirSync(cache, { recursive: true, withFileTypes: true })) {
     if (!entry.isDirectory()) continue
@@ -66,7 +148,7 @@ function installedPackage(cache: string): string {
 }
 
 describe("the packed tarball", () => {
-  test("installs with the real opencode CLI and the installed package answers status in the real host", () => {
+  test("installs with the real opencode CLI, answers status and registers its tools, skills and commands", async () => {
     run("npm", ["run", "bundle"])
     const [packed] = JSON.parse(run("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", WORK])) as [{ filename: string }]
     const tarball = join(WORK, packed.filename)
@@ -123,10 +205,56 @@ describe("the packed tarball", () => {
       probe,
       `import { createHost } from ${JSON.stringify(kit)}\n` +
         `const run = await createHost({ directory: ${JSON.stringify(installed)}, version: "2.4.1", pluginId: "colab", options: { access: "all" } })\n` +
-        `try { const answer = await run.call("status", {}); console.log(JSON.stringify({ ok: answer.ok, output: answer.ok ? answer.output : answer })) } finally { await run.close() }\n`,
+        `try { const answer = await run.call("status", {}); console.log(JSON.stringify({ ok: answer.ok, output: answer.ok ? answer.output : answer, tools: run.tools.map((tool) => tool.id), rpc: run.rpc })) } finally { await run.close() }\n`,
     )
-    const output = JSON.parse(run(process.execPath, [probe], base, home).trim().split("\n").at(-1)!) as { ok: boolean; output: Record<string, unknown> }
+    const output = JSON.parse(run(process.execPath, [probe], base, home).trim().split("\n").at(-1)!) as {
+      ok: boolean
+      output: Record<string, unknown>
+      tools: string[]
+      rpc: { id: string; methods: string[] }
+    }
     expect(output.ok).toBe(true)
     expect(output.output).toMatchObject({ name: "colab", version: "0.0.0", state: "needs_sign_in" })
+    expect([...output.tools].sort()).toEqual([...TOOL_IDS].sort())
+    // Parity: every tool the pre-4a surface exposed survives, except the one the contract split into two plans.
+    for (const id of OLD_TOOL_IDS.filter((tool) => tool !== "colab_plan")) expect(output.tools).toContain(id)
+    expect(output.tools).not.toContain("colab_plan")
+    expect(output.tools).toEqual(expect.arrayContaining(["colab_plan_write", "colab_plan_delete"]))
+    expect(output.rpc.id).toBe("colab")
+
+    // The real service, on a free port, in the same isolated HOME. A fresh service answers `/api/skill` with only the
+    // built-ins; one session for the empty project makes OpenCode activate the location's plugins.
+    const port = await freePort()
+    run(binary, ["service", "set", "port", String(port)], project, cliHome)
+    run(binary, ["service", "start"], project, cliHome)
+    try {
+      const api = (args: readonly string[]) => run(binary, ["api", ...args], project, cliHome)
+      const directory = `x-opencode-directory:${project}`
+      const readSkills = () => JSON.parse(api(["GET", "/api/skill", "-H", directory])) as { data: { id: string }[] }
+      const readCommands = () => JSON.parse(api(["GET", "/api/command", "-H", directory])) as { data: { name: string }[] }
+      // Readiness: the first successful answer, even an empty one, is the service up.
+      await waitFor(readSkills, () => true)
+      api(["POST", "/api/session", "-d", JSON.stringify({ location: { directory: project }, title: "pack skill probe" }), "-H", directory])
+      const repoSkills = readdirSync(join(ROOT, "skills"), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && existsSync(join(ROOT, "skills", entry.name, "SKILL.md")))
+        .map((entry) => entry.name)
+        .sort()
+      expect(repoSkills).toEqual(["colab", "colab-notebooks"])
+      // OpenCode activates a location's plugins after its first session, asynchronously; wait for every repo skill.
+      const skills = await waitFor(readSkills, (answer) => repoSkills.every((id) => answer.data.some((skill) => skill.id === id)))
+      const skillIds = skills?.data.map((skill) => skill.id) ?? []
+      // The project is empty, so those ids can only come from the plugin's own registration.
+      for (const id of repoSkills) expect(skillIds).toContain(id)
+      const commands = await waitFor(readCommands, (answer) => answer.data.some((command) => command.name === "colab"))
+      const commandNames = commands?.data.map((command) => command.name) ?? []
+      for (const name of ["colab", "colab-doctor", "colab-cleanup"]) expect(commandNames).toContain(name)
+      expect(commandNames).not.toContain("colab-status")
+    } finally {
+      try {
+        run(binary, ["service", "stop"], project, cliHome)
+      } catch {
+        // the service may have failed to start; the skill assertion above reports that
+      }
+    }
   }, 600_000)
 })
