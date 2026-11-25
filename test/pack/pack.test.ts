@@ -38,8 +38,11 @@ function opencodeBinary(): string {
 
 function isolated(base: string): NodeJS.ProcessEnv {
   const home = join(base, "home")
+  // The test process runs inside an OpenCode session; its OPENCODE* variables would point the stock CLI at that
+  // session's service instead of the isolated HOME. Keep only the base environment a runner needs.
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => ["PATH", "LANG", "TZ", "TERM", "SystemRoot", "ComSpec", "PATHEXT", "WINDIR"].includes(key)))
   const env = {
-    ...process.env,
+    ...baseEnv,
     HOME: home,
     XDG_CONFIG_HOME: join(home, ".config"),
     XDG_DATA_HOME: join(home, ".local", "share"),
@@ -97,13 +100,20 @@ describe("the packed tarball", () => {
 
     const base = join(WORK, "install")
     const home = isolated(base)
+    // The stock CLI's `plugin add` writes `$HOME/.config` and `plugin list` reads it; its XDG overrides in 2.4.1 point
+    // the two at different stores. HOME is already isolated, so the CLI calls use HOME alone; the host probe keeps XDG.
+    const cliHome = { ...home }
+    delete cliHome.XDG_CONFIG_HOME
+    delete cliHome.XDG_DATA_HOME
+    delete cliHome.XDG_CACHE_HOME
+    delete cliHome.XDG_STATE_HOME
     const project = join(base, "project")
     mkdirSync(project, { recursive: true })
     run("git", ["init", "-q"], project)
     const binary = opencodeBinary()
-    expect(run(binary, ["--version"], project, home).trim()).toBe("opencode v2.4.1")
+    expect(run(binary, ["--version"], project, cliHome).trim()).toBe("opencode v2.4.1")
     const ref = `git+file://${source}#v0.0.0`
-    const added = run(binary, ["plugin", "add", ref], project, home)
+    const added = run(binary, ["plugin", "add", ref], project, cliHome)
     expect(added).toContain("installed")
 
     const installed = installedPackage(join(home.XDG_CACHE_HOME!, "opencode", "npm"))

@@ -54,6 +54,24 @@ describe("colab.runs", () => {
     expect(typeof page.cursor).toBe("string")
   })
 
+  test("two runs that share endedAt cross a limit-1 page boundary once each", async () => {
+    const clock = new FakeClock(new Date("2026-11-21T09:00:00.000Z"))
+    const ledger = new MemoryLedger(clock)
+    await ledger.putRuntime(runtime("oc-work", "work"))
+    // Put them in ledger order; both finish at the same instant, so a timestamp-only cursor would skip run-2.
+    await ledger.putRun(run("run-1", "work", "oc-work"))
+    await ledger.putRun(run("run-2", "work", "oc-work"))
+    const first = await listRuns({ ledger, clock, ledgerDays: 90 }, "work", OWNER, { limit: 1 })
+    expect(first.events.map((event) => event.external_id)).toEqual(["run-1"])
+    expect(first.more).toBe(true)
+    const second = await listRuns({ ledger, clock, ledgerDays: 90 }, "work", OWNER, { limit: 1, cursor: first.cursor })
+    expect(second.events.map((event) => event.external_id)).toEqual(["run-2"])
+    const ids = [...first.events, ...second.events].map((event) => event.external_id)
+    expect(ids).toEqual(["run-1", "run-2"])
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(first.events.some((event) => second.events.some((other) => other.external_id === event.external_id))).toBe(false)
+  })
+
   test("a cursor from another account is CURSOR_INVALID, and a reset ledger answers one gap", async () => {
     const clock = new FakeClock(new Date("2026-11-21T09:00:00.000Z"))
     const ledger = new MemoryLedger(clock)
