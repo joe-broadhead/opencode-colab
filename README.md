@@ -6,6 +6,20 @@ schedules, and preview every change before committing it.
 
 Notebook and runtime content is untrusted data. It is never followed as instructions and never used to choose a tool.
 
+Google publishes two MCP servers that touch Colab, and this plugin builds on neither. Google's
+[Colab MCP server](https://github.com/googlecolab/colab-mcp), checked 28 November 2026, bridges a local agent to a
+notebook open in a Colab browser tab: it offers one tool of its own, `open_colab_browser_connection`, and proxies the
+rest from the page over a local WebSocket, so its tools are neither fixed nor documented; it holds no credentials of
+its own, and the tools it can offer are whatever the page exposes, not the Colab API, Drive, Jupyter or Enterprise
+calls this plugin makes. Google Cloud's [Agent Platform MCP
+server](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/mcp), also checked 28 November 2026,
+adds 24 Colab Enterprise tools for runtime templates, runtimes, execution jobs and schedules under `/mcp/notebook`, but
+it covers only the Enterprise half of this plugin's job, its create, update and delete tools act at once where this
+plugin plans those Enterprise changes and previews them before they commit, and the contract's `mcp` account mechanism
+needs an OAuth sign-in for each alias, which this plugin's headless `adc` and `token` accounts do not have. There is
+therefore no server to build on for this plugin's job: the plugin keeps its own provider, its own sign-in and no
+`mcp:` row.
+
 ## Install
 
 OpenCode `>=2.4.1 <2.5.0`; the tested release is 2.4.1.
