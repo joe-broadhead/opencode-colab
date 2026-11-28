@@ -23,6 +23,14 @@ Code Mode and over RPC under the id `colab`.
 | `runtimes_read` | read | optional | `colaboratory.runtimes.list`, `aiplatform.projects.locations.notebookRuntimes.list`, `colab.ledger.list` |
 | `plan_write` | read | optional | `colaboratory.runtimes.list`, `colaboratory.runtimes.get`, `colaboratory.runtimespecs.list`, `colaboratory.getSubscription`, `aiplatform.projects.locations.notebookExecutionJobs.list`, `aiplatform.projects.locations.notebookExecutionJobs.get`, `aiplatform.projects.locations.notebookRuntimeTemplates.list`, `aiplatform.projects.locations.schedules.get`, `jupyter.kernels.list`, `jupyter.sessions.list`, `jupyter.contents.list`, `drive.files.list`, `drive.files.get`, `drive.revisions.list`, `storage.objects.list`, `aiplatform.projects.locations.notebookRuntimes.get` |
 | `plan_delete` | read | optional | `colaboratory.runtimes.list`, `colaboratory.runtimes.get`, `colaboratory.runtimespecs.list`, `colaboratory.getSubscription`, `aiplatform.projects.locations.notebookExecutionJobs.list`, `aiplatform.projects.locations.notebookExecutionJobs.get`, `aiplatform.projects.locations.notebookRuntimeTemplates.list`, `aiplatform.projects.locations.schedules.get`, `jupyter.kernels.list`, `jupyter.sessions.list`, `jupyter.contents.list`, `drive.files.list`, `drive.files.get`, `drive.revisions.list`, `storage.objects.list`, `aiplatform.projects.locations.notebookRuntimes.get` |
+| `mcp:colab_enterprise_get_notebook_runtime` | read | optional | — |
+| `mcp:colab_enterprise_list_notebook_runtime_templates` | read | optional | — |
+| `mcp:colab_enterprise_list_notebook_runtimes` | read | optional | — |
+| `mcp:get_notebook_execution_schedule` | read | optional | — |
+| `mcp:get_operation` | read | optional | — |
+| `mcp:list_notebook_execution_schedules` | read | optional | — |
+| `mcp:notebook_execution_get_job` | read | optional | — |
+| `mcp:notebook_execution_list_jobs` | read | optional | — |
 | `edit` | write | optional | `notebook.local.edit` |
 | `run` | write | optional | `jupyter.kernels.execute`, `colaboratory.runtimes.get`, `jupyter.kernels.list`, `jupyter.sessions.list`, `jupyter.contents.list` |
 | `cancel` | write | optional | `jupyter.kernels.interrupt`, `aiplatform.projects.locations.notebookExecutionJobs.operations.cancel`, `aiplatform.projects.locations.notebookExecutionJobs.operations.list` |

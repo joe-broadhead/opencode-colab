@@ -177,7 +177,8 @@ describe("the packed tarball", () => {
     expect([...pkg.files].sort()).toEqual(["LICENSE", "NOTICE", "README.md", "assets", "dist", "skills"].sort())
     expect(pkg.dependencies).toBeUndefined()
     expect(pkg.peerDependencies).toBeUndefined()
-    expect(Object.keys(pkg.capabilities.methods)).toHaveLength(24)
+    expect(Object.keys(pkg.capabilities.methods)).toHaveLength(32)
+    expect(Object.keys(pkg.capabilities.methods).filter((method) => method.startsWith("mcp:"))).toHaveLength(8)
 
     // The temp checkout is an install fixture: the host module must resolve from its cache, and a git dependency's
     // preparation runs npm install, so the fixture declares it as a dependency rather than a devDependency.

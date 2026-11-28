@@ -14,6 +14,7 @@ import * as notebooks from "../provider/notebooks/index.js"
 import { CONTRACTS, type ToolName } from "../domain/contract.js"
 import type { Deps } from "../provider/index.js"
 import type { ToolHandler } from "../provider/types.js"
+import { refuseMcpRead } from "../domain/mcp.js"
 import { emitChanged } from "./changed.js"
 import { assertWritable, providerAccount, providerContext } from "./context.js"
 import { mapped } from "./errors.js"
@@ -69,6 +70,7 @@ export function providerHandlers(deps: Deps): Record<string, MethodHandler> {
         return mapped(async () => {
           const account = providerAccount(deps, call.account)
           const parsed = parse(name, contract.input, input, account.alias)
+          refuseMcpRead(name, parsed as { schedule?: string; runtime?: string; job?: string }, account)
           if (WRITES.has(name)) assertWritable(account)
           const ctx = providerContext(deps, account, call)
           // The provider handler's metadata is what a run's ask is bound to: `run` takes the exact cells it recorded.

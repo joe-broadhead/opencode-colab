@@ -41,8 +41,7 @@ describe("the integrations (H10, design §4, §14)", () => {
       expect(fields.find((field) => field.key === "access")!.options!.map((option) => option.value)).toEqual(["read", "write"])
       expect(fields.find((field) => field.key === "access")!.options![1]!.description).toContain(SCOPES.colaboratory)
     } finally {
-      await result.registration.problems
-      result.detach()
+      await result.detach()
     }
   })
 
@@ -54,7 +53,7 @@ describe("the integrations (H10, design §4, §14)", () => {
       expect(ctx.integrations.get("colab-work")!.name).toBe("Colab (work)")
       expect(ctx.integrations.get("colab-ci")!.method).toBeUndefined()
     } finally {
-      result.detach()
+      await result.detach()
     }
   })
 
@@ -65,7 +64,7 @@ describe("the integrations (H10, design §4, §14)", () => {
       await expect(authorize({ access: "write", confirmWrite: true })).rejects.toMatchObject({ code: "AUTH_CLIENT_REQUIRED" })
       await expect(authorize({ access: "write" })).rejects.toMatchObject({ code: "INPUT_INVALID" })
     } finally {
-      result.detach()
+      await result.detach()
     }
   })
 
@@ -81,7 +80,7 @@ describe("the integrations (H10, design §4, §14)", () => {
       expect(authorization.url).not.toContain(clientSecret)
       await abandon(authorization.url)
     } finally {
-      result.detach()
+      await result.detach()
     }
   })
 
@@ -95,7 +94,7 @@ describe("the integrations (H10, design §4, §14)", () => {
       expect(new URL(authorization.url).searchParams.get("client_id")).toBe("123456789012-colabtest.apps.googleusercontent.com")
       await abandon(authorization.url)
     } finally {
-      result.detach()
+      await result.detach()
     }
   })
 
@@ -103,7 +102,7 @@ describe("the integrations (H10, design §4, §14)", () => {
     const host = new FakeAuthHost()
     const { options, result } = await registered({}, host)
     expect(hostFor(options)).toBeDefined()
-    result.detach()
+    await result.detach()
     expect(hostFor(options)).toBeUndefined()
   })
 })

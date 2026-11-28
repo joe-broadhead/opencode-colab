@@ -65,11 +65,11 @@ export interface PortEnv {
 }
 
 /** Build the provider. `fetch` is injectable so tests route every request to a loopback fake. */
-export function createProvider(input: { readonly options: Options; readonly directory: string; readonly env?: NodeJS.ProcessEnv; readonly fetch?: typeof fetch }): Deps {
+export function createProvider(input: { readonly options: Options; readonly directory: string; readonly env?: NodeJS.ProcessEnv; readonly fetch?: typeof fetch; readonly integrationIDs?: ReadonlyMap<string, string> }): Deps {
   const clock: Clock = { now: () => new Date() }
   const ledger = new FileLedger(ledgerDir(input.env), { ledgerDays: input.options.ledgerDays, clock })
   const fetch = input.fetch ?? globalThis.fetch
-  const auth = createAuth({ options: input.options, clock, fetch })
+  const auth = createAuth({ options: input.options, clock, fetch, ...(input.integrationIDs !== undefined ? { integrationIDs: input.integrationIDs } : {}) })
   const env: PortEnv = { options: input.options, directory: input.directory, clock, auth, ledger, fetch }
   const runtimePorts = createRuntimePorts(env)
   const enterprisePorts = createEnterprisePorts(env)

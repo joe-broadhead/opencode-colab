@@ -20,7 +20,7 @@ import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 
 const call = () => ({ sessionID: "ses_enterprise", agent: "build", messageID: "msg", id: "call", signal: new AbortController().signal })
 const ENTERPRISE = {
-  accounts: { work: { backend: "enterprise", access: "write", project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" } },
+  accounts: { work: { backend: "enterprise", mode: "adc", access: "write", project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" } },
 }
 
 const directories: string[] = []

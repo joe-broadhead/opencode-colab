@@ -6,19 +6,21 @@ schedules, and preview every change before committing it.
 
 Notebook and runtime content is untrusted data. It is never followed as instructions and never used to choose a tool.
 
-Google publishes two MCP servers that touch Colab, and this plugin builds on neither. Google's
-[Colab MCP server](https://github.com/googlecolab/colab-mcp), checked 28 November 2026, bridges a local agent to a
-notebook open in a Colab browser tab: it offers one tool of its own, `open_colab_browser_connection`, and proxies the
-rest from the page over a local WebSocket, so its tools are neither fixed nor documented; it holds no credentials of
-its own, and the tools it can offer are whatever the page exposes, not the Colab API, Drive, Jupyter or Enterprise
-calls this plugin makes. Google Cloud's [Agent Platform MCP
-server](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/mcp), also checked 28 November 2026,
-adds 24 Colab Enterprise tools for runtime templates, runtimes, execution jobs and schedules under `/mcp/notebook`, but
-it covers only the Enterprise half of this plugin's job, its create, update and delete tools act at once where this
-plugin plans those Enterprise changes and previews them before they commit, and the contract's `mcp` account mechanism
-needs an OAuth sign-in for each alias, which this plugin's headless `adc` and `token` accounts do not have. There is
-therefore no server to build on for this plugin's job: the plugin keeps its own provider, its own sign-in and no
-`mcp:` row.
+Google publishes two MCP servers that touch Colab. Google's [Colab
+MCP server](https://github.com/googlecolab/colab-mcp), checked 28 November 2026, bridges a local agent to a notebook
+open in a Colab browser tab: it offers one tool of its own, `open_colab_browser_connection`, and proxies the rest from
+the page over a local WebSocket, so its tools are neither fixed nor documented; it holds no credentials of its own, and
+the tools it can offer are whatever the page exposes, not the Colab API, Drive, Jupyter or Enterprise calls this plugin
+makes. Google Cloud's [Agent Platform MCP
+server](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/mcp), checked the same day, carries
+the Colab Enterprise reads under `/mcp/notebook`, and this plugin builds on it: it registers the server once per alias,
+puts its Google sign-in on the server's integration, passes `notebook_execution_list_jobs`, `notebook_execution_get_job`,
+`list_notebook_execution_schedules`, `get_notebook_execution_schedule`,
+`colab_enterprise_list_notebook_runtime_templates`, `colab_enterprise_list_notebook_runtimes`,
+`colab_enterprise_get_notebook_runtime` and `get_operation` through as `mcp:` tools, and refuses its own copies of the
+Enterprise reads for an interactive account, naming the tool. A headless `adc` or `token` account has no MCP sign-in and
+keeps the plugin's own reads; the plugin's plans, cost view and source keep theirs because the server offers no
+preview, cost or cursor, and its create, update and delete methods stay the plugin's plan-then-commit.
 
 ## Install
 
@@ -32,7 +34,8 @@ opencode plugin add github:we-the-rebel-alliance/colab-plugin#v0.0.0
 
 ## Sign in
 
-The plugin holds one OpenCode integration per account alias: `colab` for `default`, `colab-<alias>` for any other.
+The plugin registers one Agent Platform MCP server per account alias, `colab` for `default` and `colab-<alias>` for
+any other, and puts its Google sign-in on the integration OpenCode gives that server.
 
 1. Configure the accounts you want in `opencode.json`:
 
@@ -87,6 +90,14 @@ directory and the Enterprise defaults. Every option, its type and its default ar
 | `runtimes_read` | read | optional | `colaboratory.runtimes.list`, `aiplatform.projects.locations.notebookRuntimes.list`, `colab.ledger.list` |
 | `plan_write` | read | optional | `colaboratory.runtimes.list`, `colaboratory.runtimes.get`, `colaboratory.runtimespecs.list`, `colaboratory.getSubscription`, `aiplatform.projects.locations.notebookExecutionJobs.list`, `aiplatform.projects.locations.notebookExecutionJobs.get`, `aiplatform.projects.locations.notebookRuntimeTemplates.list`, `aiplatform.projects.locations.schedules.get`, `jupyter.kernels.list`, `jupyter.sessions.list`, `jupyter.contents.list`, `drive.files.list`, `drive.files.get`, `drive.revisions.list`, `storage.objects.list`, `aiplatform.projects.locations.notebookRuntimes.get` |
 | `plan_delete` | read | optional | `colaboratory.runtimes.list`, `colaboratory.runtimes.get`, `colaboratory.runtimespecs.list`, `colaboratory.getSubscription`, `aiplatform.projects.locations.notebookExecutionJobs.list`, `aiplatform.projects.locations.notebookExecutionJobs.get`, `aiplatform.projects.locations.notebookRuntimeTemplates.list`, `aiplatform.projects.locations.schedules.get`, `jupyter.kernels.list`, `jupyter.sessions.list`, `jupyter.contents.list`, `drive.files.list`, `drive.files.get`, `drive.revisions.list`, `storage.objects.list`, `aiplatform.projects.locations.notebookRuntimes.get` |
+| `mcp:colab_enterprise_get_notebook_runtime` | read | optional | — |
+| `mcp:colab_enterprise_list_notebook_runtime_templates` | read | optional | — |
+| `mcp:colab_enterprise_list_notebook_runtimes` | read | optional | — |
+| `mcp:get_notebook_execution_schedule` | read | optional | — |
+| `mcp:get_operation` | read | optional | — |
+| `mcp:list_notebook_execution_schedules` | read | optional | — |
+| `mcp:notebook_execution_get_job` | read | optional | — |
+| `mcp:notebook_execution_list_jobs` | read | optional | — |
 | `edit` | write | optional | `notebook.local.edit` |
 | `run` | write | optional | `jupyter.kernels.execute`, `colaboratory.runtimes.get`, `jupyter.kernels.list`, `jupyter.sessions.list`, `jupyter.contents.list` |
 | `cancel` | write | optional | `jupyter.kernels.interrupt`, `aiplatform.projects.locations.notebookExecutionJobs.operations.cancel`, `aiplatform.projects.locations.notebookExecutionJobs.operations.list` |
@@ -143,7 +154,7 @@ None.
 
 ## Troubleshooting
 
-- **`status` says `needs_sign_in`.** Run `/connect` and choose the Colab integration for that alias, or
+- **`status` says `needs_sign_in`.** Run `/connect` and choose the Colab server's integration for that alias, or
   `opencode auth login colab` for `default` and `opencode auth login colab-<alias>` for another alias.
   `/colab-doctor` prints one small check per account.
 - **`HOST_UNTESTED`.** The running OpenCode is outside `>=2.4.1 <2.5.0`. Install a tested release, or set

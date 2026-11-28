@@ -25,6 +25,8 @@ export interface GoogleAuthEnvironment extends AdcEnvironment {
   readonly clock: Clock
   /** A test's host; production attaches it in `registerAuth` (`host.ts`). */
   readonly host?: AuthHost
+  /** alias → the integration that holds its sign-in: the Agent Platform server's integration, once the host has made it. */
+  readonly integrationIDs?: ReadonlyMap<string, string>
 }
 
 /** A token is refreshed this long before it expires, so a call cannot start with one that dies in flight. */
@@ -46,6 +48,11 @@ export class GoogleAuth implements Auth {
 
   private account(alias: string): ResolvedAccount {
     return resolveAccount(this.environment.options, alias)
+  }
+
+  /** The integration that holds this alias's sign-in: its Agent Platform server's, or the derived name before then. */
+  private integrationID(alias: string): string {
+    return this.environment.integrationIDs?.get(alias) ?? integrationIdFor(alias)
   }
 
   private get name(): (alias: string) => string {
@@ -85,7 +92,7 @@ export class GoogleAuth implements Auth {
     const host = this.environment.host ?? hostFor(this.environment.options)
     const name = this.name(account.alias)
     if (!host) throw signInRequired(account.alias, name)
-    const integrationID = integrationIdFor(account.alias)
+    const integrationID = this.integrationID(account.alias)
     const active = await activeCredential(host, integrationID)
     if (!active) throw signInRequired(account.alias, name)
     let credential: OAuthCredential = toOAuth(active.credential)
@@ -177,7 +184,7 @@ export class GoogleAuth implements Auth {
     }
     const host = this.environment.host ?? hostFor(this.environment.options)
     if (!host) return undefined
-    const active = await activeCredential(host, integrationIdFor(account))
+    const active = await activeCredential(host, this.integrationID(account))
     if (!active) return undefined
     const signIn = readSignIn(active.credential.metadata)
     return signIn?.identity ? { email: signIn.identity.email, verified: signIn.identity.verified } : undefined
@@ -188,7 +195,7 @@ export class GoogleAuth implements Auth {
     if (config.mode !== "interactive") return []
     const host = this.environment.host ?? hostFor(this.environment.options)
     if (!host) return []
-    const active = await activeCredential(host, integrationIdFor(account))
+    const active = await activeCredential(host, this.integrationID(account))
     const signIn = active ? readSignIn(active.credential.metadata) : undefined
     return signIn?.grantedScopes ?? []
   }

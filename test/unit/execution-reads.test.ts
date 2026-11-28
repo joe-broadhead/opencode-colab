@@ -44,7 +44,7 @@ describe("colab_specs", () => {
   })
 
   it("shows Enterprise templates and the bundled machine rate, and says when nothing is priced", async () => {
-    const { deps, fakes } = await preparedIn({ options: { accounts: { work: { backend: "enterprise", access: "write", project: "p", region: "us-central1", outputBucket: "gs://b" } } } })
+    const { deps, fakes } = await preparedIn({ options: { accounts: { work: { backend: "enterprise", mode: "adc", access: "write", project: "p", region: "us-central1", outputBucket: "gs://b" } } } })
     fakes.vertex.templates = [{ name: "projects/p/locations/l/notebookRuntimeTemplates/t1", machineType: "e2-standard-4", acceleratorType: "NONE" }]
     const answer = (await tool(deps, "specs", { account: "work" }).result) as { state: string; pricesAsOf: string; specs: { template?: string; usdPerHour?: number; verdict: string }[] }
     expect(answer.state).toBe("ok")
@@ -80,7 +80,7 @@ describe("colab_runtimes", () => {
   })
 
   it("lists Enterprise runtimes with $/h and the idle-shutdown and EUC flags", async () => {
-    const { deps, fakes } = await preparedIn({ options: { accounts: { work: { backend: "enterprise", access: "write", project: "p", region: "us-central1", outputBucket: "gs://b" } } } })
+    const { deps, fakes } = await preparedIn({ options: { accounts: { work: { backend: "enterprise", mode: "adc", access: "write", project: "p", region: "us-central1", outputBucket: "gs://b" } } } })
     fakes.vertex.runtimes.set("projects/p/locations/l/notebookRuntimes/r1", { name: "projects/p/locations/l/notebookRuntimes/r1", state: "RUNNING", machineType: "e2-standard-4", accelerator: "NONE", idleShutdownMinutes: 180, euc: true })
     const answer = (await tool(deps, "runtimes", { account: "work" }).result) as { runtimes: { id: string; usdPerHour?: number; idleShutdownMinutes?: number | null; euc?: boolean }[] }
     expect(answer.runtimes[0]).toMatchObject({ usdPerHour: 0.19, idleShutdownMinutes: 180, euc: true })
@@ -111,7 +111,7 @@ describe("colab_files", () => {
 
 describe("colab_execution", () => {
   it("answers the Enterprise branch through the seam, which asserts colab.read before its reads", async () => {
-    const { deps, fakes } = await preparedIn({ options: { accounts: { work: { backend: "enterprise", access: "write", project: "p", region: "us-central1", outputBucket: "gs://b" } } } })
+    const { deps, fakes } = await preparedIn({ options: { accounts: { work: { backend: "enterprise", mode: "adc", access: "write", project: "p", region: "us-central1", outputBucket: "gs://b" } } } })
     const { result } = tool(deps, "execution", { account: "work", job: "projects/p/locations/l/notebookExecutionJobs/j1" })
     expect(await result).toMatchObject({ state: "ok" })
     expect(fakes.enterprise.calls).toHaveLength(1)

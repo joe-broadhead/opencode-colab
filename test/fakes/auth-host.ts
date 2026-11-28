@@ -51,9 +51,10 @@ export interface RecordedAssert {
   readonly metadata: Readonly<Record<string, unknown>>
 }
 
-/** The plugin context `registerAuth` uses, with what a test needs to inspect: integrations, commands, asserts, messages. */
+/** The plugin context `registerAuth` uses, with what a test needs to inspect: integrations, servers, commands, asserts, messages. */
 export class FakeAuthContext {
   readonly integrations = new Map<string, { name: string; method?: RecordedMethod }>()
+  readonly servers = new Map<string, { name: string; integrationID: string; config: Record<string, unknown> }>()
   readonly commands = new Map<string, RecordedCommand>()
   readonly asserts: RecordedAssert[] = []
   readonly messages: { readonly sessionID: string; readonly delivery: string; readonly text: string; readonly description: string }[] = []
@@ -63,6 +64,43 @@ export class FakeAuthContext {
 
   constructor(host: FakeAuthHost = new FakeAuthHost()) {
     this.host = host
+  }
+
+  readonly mcp = {
+    transform: async (callback: (draft: unknown) => void) => {
+      const draft = {
+        list: () => [...this.servers.entries()].map(([name, server]) => [name, server.config] as const),
+        get: (name: string) => this.servers.get(name)?.config,
+        set: (name: string, config: Record<string, unknown>) => {
+          this.servers.set(name, { name, integrationID: name, config })
+          if (!this.integrations.has(name)) this.integrations.set(name, { name: "" })
+        },
+        update: (name: string, update: (config: Record<string, unknown>) => void) => {
+          const server = this.servers.get(name)
+          if (server) update(server.config)
+        },
+        remove: (name: string) => void this.servers.delete(name),
+      }
+      callback(draft)
+      return { dispose: async () => undefined }
+    },
+    list: async () => ({ data: [...this.servers.values()].map((server) => ({ name: server.name, integrationID: server.integrationID, status: { status: "pending" } })) }),
+  }
+
+  readonly event = {
+    subscribe: (input: { readonly signal?: AbortSignal }) => ({
+      [Symbol.asyncIterator]() {
+        return {
+          next: () =>
+            new Promise<IteratorResult<never>>((resolve) => {
+              const done = () => resolve({ done: true, value: undefined as never })
+              if (input.signal?.aborted) return done()
+              input.signal?.addEventListener("abort", done, { once: true })
+            }),
+          return: async () => ({ done: true, value: undefined as never }),
+        }
+      },
+    }),
   }
 
   readonly integration = {
@@ -80,6 +118,14 @@ export class FakeAuthContext {
           this.integrations.set(id, { ...entry, name: ref.name })
         },
         method: {
+          list: (id: string) => {
+            const entry = this.integrations.get(id)
+            return entry?.method ? [{ id: entry.method.method.id, type: entry.method.method.type }] : []
+          },
+          remove: (id: string, method: { readonly id: string }) => {
+            const entry = this.integrations.get(id)
+            if (entry?.method?.method.id === method.id) this.integrations.set(id, { name: entry.name })
+          },
           update: (input: RecordedMethod) => {
             const entry = this.integrations.get(input.integrationID) ?? { id: input.integrationID, name: "" }
             this.integrations.set(input.integrationID, { ...entry, method: input })

@@ -16,7 +16,7 @@ import { ScriptedVertex } from "../fakes/enterprise-vertex.js"
 import { invented } from "../support/invented.js"
 
 const call = (sessionID = "ses_enterprise") => ({ sessionID, agent: "build", messageID: "msg", id: "call", signal: new AbortController().signal })
-const WORK = { backend: "enterprise" as const, access: "write" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" }
+const WORK = { backend: "enterprise" as const, mode: "adc" as const, access: "write" as const, project: "proj", region: "us-central1", outputBucket: "gs://results", serviceAccount: "runner@proj.iam.gserviceaccount.com" }
 const OPTIONS = { accounts: { work: WORK } }
 
 const directories: string[] = []

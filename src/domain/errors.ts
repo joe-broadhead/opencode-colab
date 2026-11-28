@@ -45,6 +45,11 @@ export const ERRORS = {
   ),
   AUTH_SCOPE_MISSING: entry("refused", "The sign-in lacks the scope this call needs; Google was not called.", "Sign in again at Read and write, or approve the scope."),
   AUTH_CLIENT_REQUIRED: entry("refused", "No OAuth client is configured.", "Enter a Desktop client in /connect, or set oauthClient."),
+  MCP_HANDOFF: entry(
+    "refused",
+    "The Enterprise read is served by Google's Agent Platform MCP server, so the plugin's own copy does not run it.",
+    "Call the MCP tool the message names; it returns the same data.",
+  ),
   // The four sign-in form codes, with gws's meaning and next step.
   AUTH_CLIENT_INVALID: entry(
     "refused",
