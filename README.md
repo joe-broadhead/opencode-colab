@@ -43,8 +43,8 @@ any other, and puts its Google sign-in on the integration OpenCode gives that se
    { "plugins": [{ "package": "github:we-the-rebel-alliance/colab-plugin#v0.0.0", "options": { "accounts": { "work": {}, "personal": {} } } }] }
    ```
 
-2. Sign each alias in with `/connect` and choose Colab (work), or run
-   `opencode auth login colab-work`. Enter a Google Desktop OAuth client, or set `oauthClient` in the account's profile.
+2. Sign each alias in with `/connect` and choose Colab (work). Enter a Google Desktop OAuth client, or set
+   `oauthClient` in the account's profile.
 3. Read `/colab` for the account states and the plugin's cost.
 
 A profile can be empty (`{}`). Its fields are documented in [docs/accounts.md](https://github.com/we-the-rebel-alliance/colab-plugin/blob/master/docs/accounts.md).
@@ -154,8 +154,7 @@ None.
 
 ## Troubleshooting
 
-- **`status` says `needs_sign_in`.** Run `/connect` and choose the Colab server's integration for that alias, or
-  `opencode auth login colab` for `default` and `opencode auth login colab-<alias>` for another alias.
+- **`status` says `needs_sign_in`.** Run `/connect` and choose the Colab server's integration for that alias.
   `/colab-doctor` prints one small check per account.
 - **`HOST_UNTESTED`.** The running OpenCode is outside `>=2.4.1 <2.5.0`. Install a tested release, or set
   `allowUntestedHost: true` for an untested one.

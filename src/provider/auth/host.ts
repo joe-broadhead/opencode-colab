@@ -82,6 +82,6 @@ export async function reportNeedsSignIn(host: AuthHost, integrationID: string, c
 export function signInRequired(alias: string, name: string, reason?: string): ColabError {
   return new ColabError("AUTH_REQUIRED", `No usable Google sign-in for ${alias}.`, {
     ...(reason !== undefined ? { reason } : {}),
-    next: `Run /connect and choose ${name}, or opencode auth login ${alias === "default" ? "colab" : `colab-${alias}`}.`,
+    next: `Run /connect and choose ${name}.`,
   })
 }
