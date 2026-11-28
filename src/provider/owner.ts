@@ -42,7 +42,7 @@ export function localOwner(): EventsOwner {
 
 function notSignedIn(alias: string): RegisterError {
   return new RegisterError(
-    refusal("NEEDS_SIGN_IN", `The Colab account "${alias}" is not signed in`, `Sign in with /connect and choose Colab, or run opencode auth login ${alias === "default" ? "colab" : `colab-${alias}`}, then call it again.`),
+    refusal("NEEDS_SIGN_IN", `The Colab account "${alias}" is not signed in`, `Sign in with /connect and choose Colab, then call it again.`),
   )
 }
 

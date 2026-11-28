@@ -63,7 +63,7 @@ export function integrationIdFor(alias: string): string {
 
 /**
  * The name `/connect` shows: "Colab", plus the alias when more than one interactive account can sign in. Headless
- * accounts (adc, token) have no sign-in and no integration.
+ * accounts (adc, token) have no sign-in and no method.
  */
 export function integrationNames(accounts: readonly Pick<ResolvedAccount, "alias" | "mode">[]): Map<string, string> {
   const interactive = accounts.filter((account) => account.mode === "interactive")

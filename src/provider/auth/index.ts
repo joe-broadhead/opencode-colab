@@ -2,8 +2,9 @@
  * Package A, Auth: the Google credential behind every provider call, the sign-in form each integration offers, ADC,
  * impersonation and token mode, the local scope check, the session-control mapping, and `/colab-doctor`.
  *
- * `createAuth` builds the port `Deps` hands to every handler. The contract's `accounts` module registers one
- * integration per alias and calls `authMethodsFor` for its methods, so this module never registers an integration.
+ * `createAuth` builds the port `Deps` hands to every handler. The contract's `accounts` module registers one Agent
+ * Platform MCP server per alias and `src/accounts.ts` attaches `authMethodsFor` to the integration the host gives it,
+ * so this module never registers an integration.
  */
 import { DISPLAY_NAME } from "../../constants.js"
 import { ColabError } from "../../domain/errors.js"

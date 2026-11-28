@@ -1,6 +1,6 @@
 /**
  * The plugin entry: one `register` call wires all 24 methods through the contract's doors, the accounts module holds
- * one integration per alias, and the commands and skills stay outside the manifest.
+ * one Agent Platform MCP server per alias, and the commands and skills stay outside the manifest.
  */
 import { realpath } from "node:fs/promises"
 import { Plugin } from "@opencode/plugin"
@@ -36,18 +36,18 @@ export default Plugin.define({
     const rawOptions = (ctx.options ?? {}) as Readonly<Record<string, unknown>>
     const options = loadOptions(rawOptions)
     const directory = await realpath(ctx.location.directory)
-    const deps = createProvider({ options, directory })
+    const integrationIDs = new Map<string, string>()
+    const deps = createProvider({ options, directory, integrationIDs })
     const host = authHostOf(ctx)
     const problems: string[] = []
-    const accounts = await registerColabAccounts(ctx, { manifest, rawOptions, options, host })
-    problems.push(...accounts.registration.problems)
+    const accounts = await registerColabAccounts(ctx, { manifest, rawOptions, options, host, integrationIDs, problems })
     const profiles = accountsFor(manifest, rawOptions)
     const handlers = createHandlers({ deps, manifest, version, hostVersion: ctx.app.version, profiles, problems })
     let registration: Awaited<ReturnType<typeof register>>
     try {
       registration = await register(ctx, manifest, handlers)
     } catch (error) {
-      accounts.detach()
+      await accounts.detach()
       throw error
     }
     let automation: { dispose(): Promise<void> } | undefined
@@ -59,12 +59,12 @@ export default Plugin.define({
         await automation?.dispose().catch(() => undefined)
         await commands.dispose().catch(() => undefined)
         await skills.dispose().catch(() => undefined)
-        accounts.detach()
+        await accounts.detach()
         await registration.dispose().catch(() => undefined)
       }
     } catch (error) {
       await automation?.dispose().catch(() => undefined)
-      accounts.detach()
+      await accounts.detach()
       await registration.dispose().catch(() => undefined)
       throw error
     }

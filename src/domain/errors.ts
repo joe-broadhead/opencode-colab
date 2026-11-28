@@ -41,10 +41,15 @@ export const ERRORS = {
   AUTH_REQUIRED: entry(
     "refused",
     "No usable credential; reason session-control when a Workspace reauthentication policy expired a cloud-platform grant.",
-    "Run /connect and choose Colab (or opencode auth login colab for default, opencode auth login colab-<alias> for another alias); for session control, sign in again, and the admin may exempt the client as a trusted app.",
+    "Run /connect and choose the Colab server's integration; for session control, sign in again, and the admin may exempt the client as a trusted app.",
   ),
   AUTH_SCOPE_MISSING: entry("refused", "The sign-in lacks the scope this call needs; Google was not called.", "Sign in again at Read and write, or approve the scope."),
   AUTH_CLIENT_REQUIRED: entry("refused", "No OAuth client is configured.", "Enter a Desktop client in /connect, or set oauthClient."),
+  MCP_HANDOFF: entry(
+    "refused",
+    "The Enterprise read is served by Google's Agent Platform MCP server, so the plugin's own copy does not run it.",
+    "Call the MCP tool the message names; it returns the same data.",
+  ),
   // The four sign-in form codes, with gws's meaning and next step.
   AUTH_CLIENT_INVALID: entry(
     "refused",

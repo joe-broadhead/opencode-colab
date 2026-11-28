@@ -15,7 +15,7 @@ describe("the built plugin in the real host", () => {
     await host.close()
   })
 
-  test("loads as colab, registers 24 tools and the one RPC id", async () => {
+  test("loads as colab, registers 24 tools, the pass-through rows and the one RPC id", async () => {
     const host = await run
     expect(host.refusal).toBeUndefined()
     expect(host.failure).toBeUndefined()
@@ -23,8 +23,9 @@ describe("the built plugin in the real host", () => {
     expect(host.namespace?.name).toBe("colab")
     expect(host.namespace?.description).toBe(manifest.plugin.summary)
     expect(host.rpc?.id).toBe("colab")
-    expect([...(host.rpc?.methods ?? [])].sort()).toEqual(Object.keys(manifest.methods).sort())
-    expect(host.tools.map((tool) => tool.permission).sort()).toEqual(Object.keys(manifest.methods).map((method) => `colab.${method}`).sort())
+    const registerMethods = Object.keys(manifest.methods).filter((method) => !method.startsWith("mcp:"))
+    expect([...(host.rpc?.methods ?? [])].sort()).toEqual(registerMethods.sort())
+    expect(host.tools.map((tool) => tool.permission).sort()).toEqual(registerMethods.map((method) => `colab.${method}`).sort())
     expect(host.rpc?.events).toEqual(["changed"])
   })
 
